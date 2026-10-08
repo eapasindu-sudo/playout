@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playout</title>
+<style>
+  :root {
+    --bg:#0c0d0f; --panel:#1a1c1f; --panel2:#232529; --line:#33363b; --text:#e9eaec; --dim:#8d9299;
+    --btn:#3a3d42; --btn2:#2b2e32; --green:#2fbf3a; --red:#e0261b; --orange:#ff8a1c; --blue:#3b82f6; --yellow:#e8c21e;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.35 "Segoe UI", system-ui, sans-serif; user-select:none; }
+  .app { display:grid; grid-template-columns: minmax(0, 1fr) 440px; gap:10px; padding:10px; min-height:100%; }
+  @media (max-width: 1150px) { .app { grid-template-columns: 1fr; } }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:4px; }
+  .mono { font-family: "Consolas", "Cascadia Mono", ui-monospace, monospace; }
+  button { font:inherit; color:var(--text); background:linear-gradient(#45484e, #2f3236); border:1px solid #0006; border-radius:3px;
+           padding:6px 10px; cursor:pointer; box-shadow: inset 0 1px 0 #ffffff1a; white-space:nowrap; }
+  button:hover { filter:brightness(1.2); }
+  button:active { filter:brightness(.9); }
+  button.on { box-shadow: inset 0 -3px 0 var(--green), inset 0 1px 0 #ffffff1a; }
+  button.red { background:linear-gradient(#f0362a, #b5170e); }
+  button.green { background:linear-gradient(#36c843, #1f8f29); }
+  button.blue { background:linear-gradient(#4b8ff7, #2462c9); }
+  button.sm { padding:2px 7px; font-size:11px; }
+  button:disabled { opacity:.4; cursor:default; filter:none; }
+  input, select { font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:6px 8px; }
+  .lbl { color:var(--dim); font-size:11px; text-align:center; }
+  .val { background:#050506; border:1px solid #2a2c30; border-radius:3px; padding:3px 8px; font:600 17px Consolas, ui-monospace, monospace; text-align:center; min-width:120px; }
+
+  /* header */
+  .top { display:flex; align-items:center; gap:14px; padding:8px 12px; }
+  .logo { font:700 26px "Segoe UI", sans-serif; letter-spacing:.5px; }
+  .clockbox { background:#000; border:1px solid #444; border-radius:3px; padding:2px 14px; font:600 30px Consolas, monospace; }
+  .date { margin-left:auto; font-size:18px; }
+  .fmt { color:var(--dim); font-size:11px; line-height:1.3; }
+
+  /* on air */
+  .onair { display:grid; grid-template-columns: 96px 112px minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px 12px; border-top:1px solid var(--line); }
+  .bigbtn { height:60px; font-size:26px; padding:0; width:96px; }
+  .thumb { width:112px; height:63px; background:#000 center/cover no-repeat; border:1px solid #444; border-radius:2px; position:relative; display:flex; align-items:center; justify-content:center; font-weight:700; }
+  .thumb .idx { position:absolute; left:3px; bottom:1px; font-size:11px; text-shadow:0 0 3px #000; }
+  .title { display:inline-block; background:var(--green); color:#000; font-weight:700; font-size:16px; padding:1px 6px; border-radius:2px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .title.live { background:var(--red); color:#fff; }
+  .sub { color:#ddd; font-size:12px; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tally { display:inline-flex; align-items:center; justify-content:center; height:46px; min-width:110px; font-weight:800; font-size:17px; border-radius:3px; background:#3a1210; color:#7a3b37; border:1px solid #000; }
+  .tally.air { background:var(--red); color:#fff; }
+  .tally.live { background:var(--green); color:#04140a; }
+  .tally.pause { background:var(--yellow); color:#000; }
+  .ctl { display:flex; gap:8px; align-items:center; }
+  .ctl button { height:60px; width:80px; font-size:22px; }
+
+  .counters { display:flex; gap:14px; align-items:end; padding:8px 12px; border-top:1px solid var(--line); flex-wrap:wrap; }
+  .counters .sp { flex:1; }
+  .fnrow { display:flex; gap:8px; padding:8px 12px 10px; flex-wrap:wrap; border-top:1px solid var(--line); }
+  .msg { padding:0 12px 8px; color:var(--dim); min-height:18px; }
+
+  /* playlist */
+  .plhead { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--line); }
+  .plhead .tab { background:var(--panel2); padding:4px 12px; border-radius:3px 3px 0 0; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  .pl { max-height: calc(100vh - 380px); min-height:300px; overflow:auto; }
+  .row { display:grid; grid-template-columns: 54px 112px minmax(0,1fr) 170px; gap:12px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--line); }
+  /* row colours: played = grey, on air = red, next = green, cued = blue, live card = purple stripe */
+  .row { border-left:6px solid transparent; }
+  .row.live { border-left-color:#a855f7; background:#1c1526; }
+  .row.played { background:#141414; }
+  .row.played .name, .row.played .path, .row.played .metrics, .row.played .thumb { opacity:.4; }
+  .row.played .status { color:#777; }
+  .row.onair { background:#4a1410; border-left-color:var(--red); box-shadow: inset 0 0 0 2px #e0261b88; }
+  .row.onair .name { color:#ffb199; }
+  .row.next { background:#0f2e17; border-left-color:var(--green); }
+  .row.cued { background:#10223d; border-left-color:var(--blue); }
+  .row.live.onair { border-left-color:#a855f7; }
+  .badge.b-live { background:#a855f7; }
+  .legend { display:flex; gap:10px; font-size:11px; color:var(--dim); }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  .row .name { font-size:15px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row.next .name { color:#7ee787; } .row.cued .name { color:#93c5fd; }
+  .row .path { color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .metrics { display:grid; grid-template-columns: repeat(6, minmax(70px, 1fr)); gap:6px; margin-top:6px; }
+  .metrics div { text-align:center; }
+  .metrics .v { background:#050506; border-radius:2px; padding:1px 4px; font:13px Consolas, monospace; margin-top:1px; white-space:nowrap; }
+  .acts { display:grid; grid-template-columns: 1fr 1fr; gap:4px; }
+  .status { grid-column: span 2; text-align:right; font-weight:700; font-size:12px; }
+  .status.ON\ AIR { color:#ff5a4d; } .status.NEXT { color:#7ee787; } .status.CUED { color:#93c5fd; } .status.MISSING { color:var(--red); }
+  .badge { font-size:10px; padding:1px 5px; border-radius:2px; font-weight:700; }
+  .b-live { background:var(--red); color:#fff; } .b-clip { background:#444; }
+  .empty { padding:40px; text-align:center; color:var(--dim); }
+
+  /* right column */
+  .mon { padding:8px; display:grid; grid-template-columns: 26px minmax(0,1fr); gap:6px; }
+  .meters { display:flex; gap:3px; height:100%; }
+  .meter { flex:1; background:#050506; position:relative; border:1px solid #222; }
+  .meter > div { position:absolute; bottom:0; left:0; right:0; background:linear-gradient(to top, #1fae2c 0%, #1fae2c 70%, #e8c21e 85%, #e0261b 100%); background-size:100% 100%; }
+  .screen { position:relative; aspect-ratio:16/9; background:#000; border:1px solid #333; }
+  .screen img { width:100%; height:100%; display:block; object-fit:contain; }
+  .screen .tag { position:absolute; top:6px; right:6px; font-weight:800; font-size:11px; padding:2px 6px; border-radius:2px; }
+  .prog { grid-column: 2; height:5px; background:#050506; }
+  .prog > div { height:100%; background:var(--orange); width:0; }
+  .section-t { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); padding:8px 10px 4px; border-top:1px solid var(--line); }
+  .fn { display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; padding:6px 10px 10px; }
+  .fn button { padding:8px 4px; }
+  .dest { display:grid; grid-template-columns: 12px minmax(0,1fr) auto auto; gap:8px; align-items:center; padding:6px 10px; border-top:1px solid #26292d; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#555; }
+  .dot.live { background:var(--green); box-shadow:0 0 6px var(--green); } .dot.connecting, .dot.reconnecting { background:var(--yellow); } .dot.error { background:var(--red); }
+  .dest .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dest .st { color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .srcrow { display:grid; grid-template-columns: 12px auto minmax(0,1fr) auto; gap:8px; align-items:center; padding:2px 10px 6px; }
+  .srcrow select { min-width:0; width:100%; }
+  .dot.ok { background:var(--green); box-shadow:0 0 6px var(--green); } .dot.bad { background:var(--red); }
+  .clockwrap { display:flex; justify-content:center; padding:10px; }
+
+  /* dialogs */
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:0; width:min(760px, 94vw); }
+  dialog::backdrop { background:#000a; }
+  dialog header { display:flex; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); font-weight:700; }
+  dialog header button { margin-left:auto; }
+  dialog .body { padding:12px 14px; max-height:70vh; overflow:auto; }
+  dialog .foot { display:flex; gap:8px; justify-content:flex-end; padding:10px 14px; border-top:1px solid var(--line); }
+  table { width:100%; border-collapse:collapse; }
+  td, th { padding:5px 6px; border-bottom:1px solid var(--line); text-align:left; }
+  th { color:var(--dim); font-weight:500; font-size:11px; }
+  .lib-thumb { width:80px; height:45px; object-fit:cover; background:#000; display:block; }
+  .form { display:grid; grid-template-columns: 130px 1fr; gap:8px 10px; align-items:center; }
+  .hint { color:var(--dim); font-size:11px; }
+  .locked .lockable { pointer-events:none; opacity:.45; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <!-- LEFT -->
+  <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
+    <div class="box">
+      <div class="top">
+        <div class="logo">Playout</div>
+        <div class="clockbox mono" id="clock">--:--:--</div>
+        <div class="fmt" id="fmt"></div>
+        <div class="date" id="date"></div>
+      </div>
+      <div class="onair">
+        <button class="bigbtn lockable" title="Play / Resume" onclick="T('play')">&#9654;</button>
+        <div class="thumb" id="oaThumb"></div>
+        <div style="min-width:0">
+          <div><span class="title live" id="oaTitle">LIVE</span></div>
+          <div class="sub" id="oaSub"></div>
+        </div>
+        <div class="ctl">
+          <span class="tally" id="tally">LIVE</span>
+          <button class="lockable" title="Pause" onclick="T('pause')">&#10074;&#10074;</button>
+          <button class="lockable" title="Stop playlist and take live" onclick="T('stop')">&#9632;</button>
+        </div>
+      </div>
+      <div class="counters">
+        <div><div class="lbl">Type</div><div class="val" id="cType" style="min-width:90px">LIVE</div></div>
+        <div><div class="lbl">Duration</div><div class="val" id="cDur">--:--:--.--</div></div>
+        <div><div class="lbl">Position</div><div class="val" id="cPos">--:--:--.--</div></div>
+        <div><div class="lbl">Remain</div><div class="val" id="cRem" style="color:var(--orange)">--:--:--.--</div></div>
+        <div class="sp"></div>
+        <div><div class="lbl">Playlist Remain</div><div class="val" id="cPl">--:--:--.--</div></div>
+        <div><div class="lbl">Mode</div><div class="val" id="cMode" style="min-width:110px">Automatic</div></div>
+      </div>
+      <div class="fnrow lockable">
+        <button class="blue" onclick="T('next')" title="Take the next item now">Next &#9654;&#9654;</button>
+        <button onclick="openLive()">+ Live Card</button>
+        <button onclick="openLib()">+ Commercials</button>
+        <span style="flex:1"></span>
+        <button id="bLoop" onclick="setMode({loop: !S.loop})">Loop &#10227;</button>
+        <button id="bAuto" onclick="setMode({auto: true})">Automatic</button>
+        <button id="bMan" onclick="setMode({auto: false})">Manual</button>
+        <button class="red" onclick="T('stop')" title="Stop everything and go to the vMix live feed">TAKE LIVE</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="box">
+      <div class="plhead">
+        <span class="tab">Playlist</span>
+        <span class="hint" id="plCount"></span>
+        <span class="legend"><span><i style="background:var(--red)"></i>On air</span><span><i style="background:var(--green)"></i>Next</span><span><i style="background:var(--blue)"></i>Cued</span><span><i style="background:#a855f7"></i>Live card</span><span><i style="background:#555"></i>Played</span></span>
+        <span style="flex:1"></span>
+        <span class="lockable" style="display:flex; gap:6px">
+          <button class="sm" onclick="openPM()">Save / Load</button>
+          <button class="sm" onclick="clearPlaylist()">Clear</button>
+        </span>
+      </div>
+      <div class="pl" id="pl"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
+    <div class="box">
+      <div class="mon">
+        <div class="meters"><div class="meter"><div id="mL"></div></div><div class="meter"><div id="mR"></div></div></div>
+        <div class="screen"><img id="pv" alt="Program output"><span class="tag" id="pvTag"></span></div>
+        <div class="prog"><div id="pvProg"></div></div>
+      </div>
+      <div class="srcrow lockable">
+        <span class="dot" id="srcDot"></span>
+        <span class="lbl" style="text-align:left">vMix NDI input</span>
+        <select id="mainSrc" onchange="pickSource(this.value)"></select>
+        <button class="sm" title="Search the network again" onclick="refreshSources()">&#10227;</button>
+      </div>
+      <div class="hint" style="padding:0 10px 8px" id="liveInfo"></div>
+    </div>
+
+    <div class="box">
+      <div class="section-t" style="border-top:0">Functions</div>
+      <div class="fn">
+        <button class="lockable" onclick="openLib()">Commercials</button>
+        <button class="lockable" onclick="openPM()">Playlist Manager</button>
+        <button onclick="openLogs()">Air Logs</button>
+        <button class="lockable" onclick="openSrc()">Live Source</button>
+        <button class="lockable" onclick="$('upFile').click()">Upload Clips</button>
+        <button id="bLock" onclick="toggleLock()">Lock</button>
+      </div>
+      <input type="file" id="upFile" multiple accept="video/*,.mxf,.ts" style="display:none" onchange="upload(this)">
+
+      <div class="section-t">Live stream <span id="stFmt" style="text-transform:none; letter-spacing:0"></span></div>
+      <div id="dests"></div>
+      <div style="display:flex; gap:8px; padding:8px 10px 10px" class="lockable">
+        <button class="red" style="flex:1" onclick="streamAll('start')">GO LIVE (all set)</button>
+        <button style="flex:1" onclick="streamAll('stop')">STOP ALL</button>
+      </div>
+    </div>
+
+    <div class="box clockwrap"><svg id="bigclock" viewBox="0 0 300 300" width="270" height="270"></svg></div>
+  </div>
+</div>
+
+<!-- Commercial library -->
+<dialog id="dLib">
+  <header>Commercials <button class="sm" onclick="dLib.close()">Close</button></header>
+  <div class="body">
+    <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center">
+      <button class="sm" onclick="$('upFile').click()">Upload clips</button>
+      <span class="hint">Tick clips, then add them as a commercial break. Files live in the media folder.</span>
+    </div>
+    <table id="libT"></table>
+  </div>
+  <div class="foot">
+    <button onclick="addClips('next')">Insert after on-air</button>
+    <button class="blue" onclick="addClips('end')">Add to end</button>
+  </div>
+</dialog>
+
+<!-- Live card -->
+<dialog id="dLive">
+  <header>Live card <button class="sm" onclick="dLive.close()">Close</button></header>
+  <div class="body form">
+    <span>Name</span><input id="lvName" value="LIVE">
+    <span>Duration</span><input id="lvDur" placeholder="mm:ss  (empty = until Next is pressed)">
+    <span>Fixed start</span><input id="lvFixed" type="time" step="1">
+    <span></span><span class="hint">A live card puts the vMix NDI feed on air. With a duration it moves on by itself; without one it stays live until you press Next. A fixed start jumps it on air at that time.</span>
+  </div>
+  <div class="foot">
+    <button onclick="addLive('next')">Insert after on-air</button>
+    <button class="blue" onclick="addLive('end')">Add to end</button>
+  </div>
+</dialog>
+
+<!-- Edit item -->
+<dialog id="dEdit">
+  <header>Edit item <button class="sm" onclick="dEdit.close()">Close</button></header>
+  <div class="body form">
+    <span>Name</span><input id="edName">
+    <span id="edDurL">Duration</span><input id="edDur" placeholder="mm:ss (empty = until Next)">
+    <span>Fixed start</span><span style="display:flex; gap:6px"><input id="edFixed" type="time" step="1"><button class="sm" onclick="$('edFixed').value=''">Clear</button></span>
+    <span></span><span class="hint">Fixed start = "exact time": the item goes on air at that time even if something else is playing.</span>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveEdit()">Save</button></div>
+</dialog>
+
+<!-- Playlist manager -->
+<dialog id="dPM">
+  <header>Playlist Manager <button class="sm" onclick="dPM.close()">Close</button></header>
+  <div class="body">
+    <div style="display:flex; gap:8px; margin-bottom:10px">
+      <input id="pmName" placeholder="Playlist name, e.g. Evening news" style="flex:1"><button class="blue" onclick="savePL()">Save current</button>
+    </div>
+    <table id="pmT"></table>
+  </div>
+</dialog>
+
+<!-- Air logs -->
+<dialog id="dLogs">
+  <header>Air Logs <button class="sm" onclick="dLogs.close()">Close</button></header>
+  <div class="body">
+    <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center">
+      <input type="date" id="logDate" onchange="loadLogs()"><a id="logCsv" style="color:var(--blue)" href="/api/asrun.csv">Download CSV</a>
+    </div>
+    <table id="logT"></table>
+  </div>
+</dialog>
+
+<!-- Live source -->
+<dialog id="dSrc">
+  <header>Live source (vMix NDI output) <button class="sm" onclick="dSrc.close()">Close</button></header>
+  <div class="body">
+    <div style="display:flex; gap:8px"><select id="srcSel" style="flex:1"></select><button onclick="loadSources()">Refresh</button></div>
+    <p class="hint">In vMix: Settings &gt; Outputs / NDI / SRT, turn on NDI for an output. It shows up here as "PC-NAME (vMix - Output 1)".</p>
+  </div>
+  <div class="foot"><button class="blue" onclick="setSource()">Use this source</button></div>
+</dialog>
+
+<!-- Stream destination -->
+<dialog id="dDest">
+  <header>Stream destination <button class="sm" onclick="dDest.close()">Close</button></header>
+  <div class="body form">
+    <span>Preset</span>
+    <select id="dsPreset" onchange="presetChanged()">
+      <option value="">Custom</option>
+      <option value="rtmps://live-api-s.facebook.com:443/rtmp/">Facebook Live</option>
+      <option value="rtmp://a.rtmp.youtube.com/live2">YouTube</option>
+    </select>
+    <span>Name</span><input id="dsName">
+    <span>Server URL</span><input id="dsUrl" placeholder="rtmps://live-api-s.facebook.com:443/rtmp/">
+    <span>Stream key</span><input id="dsKey" type="password" placeholder="paste the stream key">
+    <span></span><span class="hint" id="dsKeyHint">Facebook: Live Producer &gt; Streaming software &gt; copy Server URL and Stream key. The key is saved on this PC only.</span>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveDest()">Save</button></div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let S = {playlist:[], fps:25}, PL = [], media = [], streamInfo = null, renderedVersion = -1, locked = false, editId = null, destSlot = 0;
+
+async function api(url, body) {
+  const opt = body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
+  const r = await fetch(url, opt);
+  return r.headers.get('content-type')?.includes('json') ? r.json() : r.text();
+}
+const T = (a, body) => api('/api/transport/' + a, body || {}).then(poll);
+const setMode = m => api('/api/modes', m).then(poll);
+
+// time formats
+function tc(sec) {
+  if (sec == null || isNaN(sec)) return '--:--:--.--';
+  const neg = sec < 0; sec = Math.abs(sec);
+  const fps = Math.round(S.fps || 25);
+  let f = Math.floor(sec * fps + 1e-6), ff = f % fps, s = Math.floor(f / fps);
+  const p = n => String(n).padStart(2, '0');
+  return (neg ? '-' : '') + `${p(Math.floor(s/3600))}:${p(Math.floor(s/60)%60)}:${p(s%60)}.${p(ff)}`;
+}
+const hms = ts => ts == null ? '--:--:--' : new Date(ts * 1000).toTimeString().slice(0, 8);
+const short = sec => sec == null ? 'until Next' : tc(sec).slice(0, 8);
+function parseDur(s) {
+  s = (s || '').trim(); if (!s) return null;
+  const p = s.split(':').map(Number); if (p.some(isNaN)) return null;
+  return p.reduce((a, b) => a * 60 + b, 0) || null;
+}
+const durText = d => d ? `${String(Math.floor(d/60)).padStart(2,'0')}:${String(Math.round(d%60)).padStart(2,'0')}` : '';
+
+// ---------------------------------------------------------------- polling
+async function poll() {
+  try { S = await api('/api/state'); } catch (e) { $('clock').textContent = 'OFFLINE'; return; }
+  const now = new Date(S.now * 1000);
+  $('clock').textContent = now.toTimeString().slice(0, 8);
+  $('date').textContent = now.toLocaleDateString(undefined, {weekday:'short', day:'numeric', month:'short', year:'numeric'});
+  $('fmt').innerHTML = `${esc(S.format)}<br>NDI out: ${esc(S.output)}`;
+  const it = S.on_air;
+  const isClip = it && it.type === 'clip';
+  $('oaTitle').textContent = it ? it.name : 'LIVE';
+  $('oaTitle').className = 'title' + (isClip ? '' : ' live');
+  $('oaSub').textContent = isClip ? `media\\${it.file}` : `vMix NDI: ${S.live_source || 'no source selected'}${S.live_source ? (S.live_connected ? ' (connected)' : ' (not connected)') : ''}`;
+  setThumb($('oaThumb'), it);
+  const tally = $('tally');
+  if (S.state === 'PAUSED') { tally.textContent = 'PAUSED'; tally.className = 'tally pause'; }
+  else if (isClip) { tally.textContent = 'ON-AIR'; tally.className = 'tally air'; }
+  else { tally.textContent = 'LIVE'; tally.className = 'tally live'; }
+  $('cType').textContent = isClip ? 'CLIP' : 'LIVE';
+  $('cDur').textContent = it ? (it.duration ? tc(it.duration) : 'until Next') : '--:--:--.--';
+  $('cPos').textContent = it ? tc(S.position) : '--:--:--.--';
+  $('cRem').textContent = it && it.duration ? tc(S.remaining) : '--:--:--.--';
+  $('cPl').textContent = S.playlist_remaining != null ? tc(S.playlist_remaining) : '--:--:--.--';
+  $('cMode').textContent = S.auto ? 'Automatic' : 'Manual';
+  $('bAuto').classList.toggle('on', S.auto); $('bMan').classList.toggle('on', !S.auto); $('bLoop').classList.toggle('on', S.loop);
+  $('msg').textContent = S.message || '';
+  $('pvProg').style.width = it && it.duration ? Math.min(100, 100 * S.position / it.duration) + '%' : '0';
+  const tag = $('pvTag'); tag.textContent = isClip ? 'ON-AIR' : 'LIVE'; tag.style.background = isClip ? 'var(--red)' : 'var(--green)';
+  $('liveInfo').textContent = S.live_source ? (S.live_connected ? 'Live input connected' : 'Live input NOT connected: check vMix NDI output is on') : 'Pick the vMix NDI output above';
+  $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
+  if (S.live_source !== shownSource) fillSources();
+  meters(S.meters);
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed}) => ({id, type, name, file, duration, fixed})); renderPlaylist(); renderedVersion = S.version; }
+  updateRows();
+  drawClock(now);
+}
+function meters(m) {
+  [['mL', m[0]], ['mR', m[1]]].forEach(([id, db]) => { const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100)); $(id).style.height = pct + '%'; });
+}
+function setThumb(el, it, idx) {
+  const key = (it && it.type === 'clip' ? it.file : 'LIVE') + '|' + (idx || '');
+  if (el.dataset.k === key) return;
+  el.dataset.k = key;
+  const clip = it && it.type === 'clip';
+  el.style.backgroundImage = clip ? `url('/api/thumb/${encodeURIComponent(it.file)}')` : '';
+  el.innerHTML = (clip ? '' : '<span class="badge b-live" style="font-size:14px">LIVE</span>') + (idx ? `<span class="idx">${idx}</span>` : '');
+}
+
+// ---------------------------------------------------------------- playlist
+function renderPlaylist() {
+  $('plCount').textContent = `${PL.length} items`;
+  if (!PL.length) { $('pl').innerHTML = '<div class="empty">Playlist is empty. Add a <b>Live Card</b> and some <b>Commercials</b>.</div>'; return; }
+  $('pl').innerHTML = PL.map((it, i) => `
+    <div class="row" id="r_${it.id}">
+      <button class="lockable" style="height:44px" title="Play this item now" onclick="T('play', {id:'${it.id}'})">&#9654;|</button>
+      <div class="thumb" id="t_${it.id}"></div>
+      <div style="min-width:0">
+        <div style="display:flex; gap:8px; align-items:center; min-width:0">
+          <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}">${it.type === 'live' ? 'LIVE' : 'AD'}</span>
+          <span class="name">${esc(it.name)}</span>
+        </div>
+        <div class="path">${it.type === 'clip' ? 'media\\' + esc(it.file) : 'vMix NDI live feed'}</div>
+        <div class="metrics">
+          <div><div class="lbl">Duration</div><div class="v">${it.duration ? tc(it.duration).slice(0, 11) : 'until Next'}</div></div>
+          <div><div class="lbl">Start</div><div class="v" data-f="start">--:--:--</div></div>
+          <div><div class="lbl">End</div><div class="v" data-f="end">--:--:--</div></div>
+          <div><div class="lbl">Time to start</div><div class="v" data-f="ttg">--:--:--</div></div>
+          <div><div class="lbl">Scheduler</div><div class="v">${it.fixed ? 'Fixed ' + esc(it.fixed) : 'Sequential'}</div></div>
+          <div><div class="lbl">Type</div><div class="v">${it.type === 'live' ? 'Live card' : 'Commercial'}</div></div>
+        </div>
+      </div>
+      <div class="acts lockable">
+        <button class="sm" onclick="T('cue', {id:'${it.id}'})">Cue</button>
+        <button class="sm" onclick="openEdit('${it.id}')">Edit</button>
+        <button class="sm" onclick="move(${i}, -1)">&#9650; Up</button>
+        <button class="sm" onclick="move(${i}, 1)">&#9660; Down</button>
+        <button class="sm" onclick="dup(${i})">Copy</button>
+        <button class="sm" onclick="del(${i})">Delete</button>
+        <div class="status" data-f="status"></div>
+      </div>
+    </div>`).join('');
+  PL.forEach((it, i) => setThumb($('t_' + it.id), it, i + 1));
+}
+function updateRows() {
+  for (const r of S.playlist) {
+    const el = $('r_' + r.id); if (!el) continue;
+    el.className = 'row' + (r.type === 'live' ? ' live' : '') +
+      (r.status === 'ON AIR' ? ' onair' : r.status === 'NEXT' ? ' next' : r.status === 'CUED' ? ' cued' : r.played ? ' played' : '');
+    el.querySelector('[data-f=start]').textContent = hms(r.start);
+    el.querySelector('[data-f=end]').textContent = hms(r.end);
+    const ttg = r.status === 'ON AIR' ? 'on air' : (r.start != null ? short(r.start - S.now) : '--:--:--');
+    el.querySelector('[data-f=ttg]').textContent = ttg;
+    const st = el.querySelector('[data-f=status]');
+    const missing = r.type === 'clip' && !r.duration;
+    st.textContent = r.status || (missing ? 'MISSING' : r.played ? 'PLAYED' : 'Ready');
+    st.className = 'status ' + (r.status || (missing ? 'MISSING' : ''));
+  }
+}
+async function savePlaylist() { await api('/api/playlist', PL); await poll(); }
+function insertAt(items, where) {
+  let idx = PL.length;
+  if (where === 'next') { const i = PL.findIndex(x => x.id === (S.on_air?.id || S.cued)); idx = i >= 0 ? i + 1 : 0; }
+  PL.splice(idx, 0, ...items);
+  return savePlaylist();
+}
+function move(i, d) { const j = i + d; if (j < 0 || j >= PL.length) return; [PL[i], PL[j]] = [PL[j], PL[i]]; savePlaylist(); }
+function del(i) { if (PL[i].id === S.on_air?.id && !confirm('This item is on air. Delete it anyway?')) return; PL.splice(i, 1); savePlaylist(); }
+function dup(i) { const c = {...PL[i]}; delete c.id; PL.splice(i + 1, 0, c); savePlaylist(); }
+function clearPlaylist() { if (confirm('Clear the whole playlist? (On-air item keeps playing)')) { PL = []; savePlaylist(); } }
+
+function openEdit(id) {
+  const it = PL.find(x => x.id === id); if (!it) return;
+  editId = id; $('edName').value = it.name; $('edFixed').value = it.fixed || '';
+  $('edDur').value = durText(it.duration); $('edDur').disabled = it.type === 'clip';
+  $('edDurL').textContent = it.type === 'clip' ? 'Duration (from file)' : 'Duration';
+  dEdit.showModal();
+}
+function saveEdit() {
+  const it = PL.find(x => x.id === editId); if (!it) return;
+  it.name = $('edName').value.trim() || it.name;
+  let f = $('edFixed').value; if (f && f.length === 5) f += ':00'; it.fixed = f;
+  if (it.type === 'live') it.duration = parseDur($('edDur').value);
+  dEdit.close(); savePlaylist();
+}
+
+// live card
+function openLive() { $('lvName').value = 'LIVE'; $('lvDur').value = ''; $('lvFixed').value = ''; dLive.showModal(); }
+function addLive(where) {
+  let f = $('lvFixed').value; if (f && f.length === 5) f += ':00';
+  dLive.close();
+  insertAt([{type:'live', name:$('lvName').value.trim() || 'LIVE', duration:parseDur($('lvDur').value), fixed:f}], where);
+}
+
+// commercials
+async function loadMedia() { media = await api('/api/media'); }
+async function openLib() {
+  await loadMedia();
+  $('libT').innerHTML = '<tr><th></th><th></th><th>Clip</th><th>Length</th><th></th></tr>' + (media.map((m, i) => `
+    <tr><td><input type="checkbox" data-i="${i}"></td>
+      <td><img class="lib-thumb" loading="lazy" src="/api/thumb/${encodeURIComponent(m.name)}"></td>
+      <td>${esc(m.name)}</td><td class="mono">${m.duration ? tc(m.duration).slice(0, 8) : '?'}</td>
+      <td><button class="sm" onclick="addClipsList([${i}], 'end')">Add</button></td></tr>`).join('') ||
+    '<tr><td colspan="5" class="hint">No clips yet. Upload some or copy files into the media folder.</td></tr>');
+  dLib.showModal();
+}
+function addClipsList(idxs, where) {
+  if (!idxs.length) return;
+  dLib.close();
+  insertAt(idxs.map(i => ({type:'clip', file:media[i].name, name:media[i].name.replace(/\.[^.]+$/, ''), fixed:''})), where);
+}
+function addClips(where) { addClipsList([...document.querySelectorAll('#libT input:checked')].map(x => +x.dataset.i), where); }
+async function upload(input) {
+  const fd = new FormData(); for (const f of input.files) fd.append('files', f);
+  $('msg').textContent = 'Uploading...';
+  await fetch('/api/media', {method:'POST', body:fd}); input.value = '';
+  $('msg').textContent = 'Upload done';
+  if (dLib.open) { dLib.close(); openLib(); }
+}
+
+// playlist manager
+async function openPM() {
+  const names = await api('/api/playlists');
+  $('pmT').innerHTML = '<tr><th>Saved playlists</th><th></th></tr>' + (names.map(n => `<tr><td>${esc(n)}</td><td style="text-align:right">
+    <button class="sm" onclick='loadPL(${JSON.stringify(n)}, false)'>Load</button>
+    <button class="sm" onclick='loadPL(${JSON.stringify(n)}, true)'>Append</button>
+    <button class="sm" onclick='delPL(${JSON.stringify(n)})'>Delete</button></td></tr>`).join('') || '<tr><td class="hint">None saved yet</td><td></td></tr>');
+  if (!dPM.open) dPM.showModal();
+}
+async function savePL() { const n = $('pmName').value.trim(); if (!n) return; await api('/api/playlists/save', {name:n}); $('pmName').value = ''; openPM(); }
+async function loadPL(n, append) { if (!append && !confirm(`Replace the playlist with "${n}"?`)) return; await api('/api/playlists/load', {name:n, append}); dPM.close(); poll(); }
+async function delPL(n) { if (confirm(`Delete saved playlist "${n}"?`)) { await api('/api/playlists/delete', {name:n}); openPM(); } }
+
+// logs
+async function openLogs() { $('logDate').valueAsDate = new Date(); await loadLogs(); dLogs.showModal(); }
+async function loadLogs() {
+  const d = $('logDate').value; const q = d ? '?date=' + d : '';
+  $('logCsv').href = '/api/asrun.csv' + q;
+  const rows = await api('/api/asrun' + q);
+  $('logT').innerHTML = '<tr><th>Start</th><th>End</th><th>Type</th><th>Item</th><th>Played</th><th>Status</th></tr>' +
+    (rows.slice().reverse().map(r => `<tr><td class="mono">${r.start}</td><td class="mono">${r.end}</td><td>${esc(r.type)}</td><td>${esc(r.item)}</td>
+      <td class="mono">${r.played_sec}s</td><td style="color:${r.status === 'played' ? 'var(--green)' : 'var(--orange)'}">${esc(r.status)}</td></tr>`).join('') ||
+     '<tr><td colspan="6" class="hint">Nothing played on this day</td></tr>');
+}
+
+// live source
+async function loadSources() {
+  const list = await api('/api/sources');
+  $('srcSel').innerHTML = '<option value="">(none)</option>' + list.map(n => `<option ${n === S.live_source ? 'selected' : ''}>${esc(n)}</option>`).join('');
+}
+async function openSrc() { await loadSources(); dSrc.showModal(); }
+async function setSource() { await api('/api/live_source', {name:$('srcSel').value}); dSrc.close(); poll(); }
+
+// main-screen NDI input picker (vMix outputs listed first)
+let sourceList = [], shownSource = null;
+function fillSources() {
+  const sel = $('mainSrc'); if (document.activeElement === sel) return;
+  const cur = S.live_source || '';
+  const names = [...sourceList];
+  if (cur && !names.includes(cur)) names.unshift(cur);
+  names.sort((a, b) => (/vmix/i.test(b) - /vmix/i.test(a)) || a.localeCompare(b));
+  sel.innerHTML = '<option value="">(none - pick vMix output)</option>' + names.map(n =>
+    `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}${sourceList.includes(n) ? '' : '  (offline)'}</option>`).join('');
+  shownSource = S.live_source;
+}
+async function refreshSources() { try { sourceList = await api('/api/sources'); } catch (e) {} fillSources(); }
+async function pickSource(name) { await api('/api/live_source', {name}); await poll(); fillSources(); }
+
+// streaming
+async function pollStream() {
+  try { streamInfo = await api('/api/stream'); } catch (e) { return; }
+  $('stFmt').textContent = '- ' + streamInfo.format;
+  $('dests').innerHTML = streamInfo.destinations.map(d => {
+    const st = d.enabled ? d.status : (d.status === 'error' ? 'error' : 'off');
+    const detail = st === 'live' ? `LIVE ${fmtUp(d.uptime)} - ${d.kbps} kbps` : st === 'error' || st === 'reconnecting' ? (d.error || st) : st === 'connecting' ? 'connecting...' : (d.url ? shortUrl(d.url) + (d.key_set ? '' : ' (no key)') : 'not set up');
+    return `<div class="dest">
+      <span class="dot ${st}"></span>
+      <div style="min-width:0"><div class="nm">${esc(d.name)}</div><div class="st" title="${esc(d.error)}">${esc(detail)}</div></div>
+      <button class="sm lockable" onclick="openDest(${d.slot})">Setup</button>
+      ${d.enabled ? `<button class="sm red lockable" onclick="streamToggle(${d.slot}, 'stop')">Stop</button>`
+                  : `<button class="sm green lockable" onclick="streamToggle(${d.slot}, 'start')" ${d.url ? '' : 'disabled'}>Go live</button>`}
+    </div>`;
+  }).join('');
+}
+const fmtUp = s => tc(s).slice(0, 8);
+const shortUrl = u => u.replace(/^rtmps?:\/\//, '').split('/')[0];
+async function streamToggle(slot, a) { await api(`/api/stream/${slot}/${a}`, {}); pollStream(); }
+async function streamAll(a) { if (a === 'stop' && !confirm('Stop all live streams?')) return; await api('/api/stream/all/' + a, {}); pollStream(); }
+function openDest(slot) {
+  destSlot = slot; const d = streamInfo.destinations[slot];
+  $('dsName').value = d.name; $('dsUrl').value = d.url; $('dsKey').value = '';
+  $('dsKey').placeholder = d.key_set ? 'saved (leave empty to keep)' : 'paste the stream key';
+  $('dsPreset').value = [...$('dsPreset').options].some(o => o.value === d.url) ? d.url : '';
+  dDest.showModal();
+}
+function presetChanged() {
+  const sel = $('dsPreset'); if (!sel.value) return;
+  $('dsUrl').value = sel.value;
+  if (/^Destination \d$/.test($('dsName').value) || !$('dsName').value) $('dsName').value = sel.options[sel.selectedIndex].text;
+}
+async function saveDest() {
+  await api(`/api/stream/${destSlot}`, {name:$('dsName').value.trim(), url:$('dsUrl').value.trim(), key:$('dsKey').value.trim()});
+  dDest.close(); pollStream();
+}
+
+// lock
+function toggleLock() { locked = !locked; $('app').classList.toggle('locked', locked); $('bLock').textContent = locked ? 'Unlock' : 'Lock'; $('bLock').classList.toggle('red', locked); }
+
+// big clock: 60 dots around, lit up to the current second
+(function buildClock() {
+  const svg = $('bigclock'); let h = '';
+  for (let i = 0; i < 60; i++) {
+    const a = (i / 60) * 2 * Math.PI - Math.PI / 2, big = i % 5 === 0;
+    h += `<circle id="cd${i}" cx="${150 + 132 * Math.cos(a)}" cy="${150 + 132 * Math.sin(a)}" r="${big ? 5 : 3}" fill="#3a2410"/>`;
+  }
+  h += `<text id="chm" x="150" y="150" text-anchor="middle" font-family="Consolas, monospace" font-size="70" font-weight="700" fill="#ff8a1c">--:--</text>`;
+  h += `<text id="cs" x="150" y="222" text-anchor="middle" font-family="Consolas, monospace" font-size="54" font-weight="700" fill="#ff8a1c">--</text>`;
+  svg.innerHTML = h;
+})();
+let lastSec = -1;
+function drawClock(d) {
+  const s = d.getSeconds(); if (s === lastSec) return; lastSec = s;
+  $('chm').textContent = d.toTimeString().slice(0, 5); $('cs').textContent = String(s).padStart(2, '0');
+  for (let i = 0; i < 60; i++) $('cd' + i).setAttribute('fill', i <= s ? '#ff8a1c' : '#3a2410');
+}
+
+// keyboard: Space = Next, F1 = Play, F2 = Pause, Esc-hold avoided; F12 = Take live
+document.addEventListener('keydown', e => {
+  if (locked || e.target.closest('input, select, dialog')) return;
+  if (e.code === 'Space') { e.preventDefault(); T('next'); }
+  if (e.key === 'F1') { e.preventDefault(); T('play'); }
+  if (e.key === 'F2') { e.preventDefault(); T('pause'); }
+  if (e.key === 'F12') { e.preventDefault(); T('stop'); }
+});
+
+$('pv').src = '/api/preview.mjpg';
+$('pv').onerror = () => setTimeout(() => { $('pv').src = '/api/preview.mjpg?' + Date.now(); }, 2000);
+poll(); setInterval(poll, 200);
+pollStream(); setInterval(pollStream, 1000);
+refreshSources(); setInterval(refreshSources, 5000);
+</script>
+</body>
+</html>
