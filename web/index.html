@@ -110,7 +110,39 @@
   .srcrow { display:grid; grid-template-columns: 12px auto minmax(0,1fr) auto; gap:8px; align-items:center; padding:2px 10px 6px; }
   .srcrow select { min-width:0; width:100%; }
   .dot.ok { background:var(--green); box-shadow:0 0 6px var(--green); } .dot.bad { background:var(--red); }
-  .clockwrap { display:flex; justify-content:center; padding:10px; }
+  /* system meters (header) */
+  .sys { display:flex; gap:10px; align-items:center; }
+  .sys .m { width:92px; }
+  .sys .m .t { display:flex; justify-content:space-between; font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
+  .sys .m .t b { color:var(--text); font:600 12px Consolas, monospace; }
+  .sys .bar { height:6px; background:#050506; border:1px solid #2a2c30; border-radius:2px; overflow:hidden; margin-top:2px; }
+  .sys .bar > div { height:100%; width:0; background:var(--green); transition:width .4s; }
+  .sys .bar > div.warn { background:var(--yellow); } .sys .bar > div.hot { background:var(--red); }
+
+  /* CG panel */
+  .cgtabs { display:flex; gap:4px; padding:8px 10px 0; border-bottom:1px solid var(--line); }
+  .cgtabs button { border-radius:3px 3px 0 0; padding:4px 12px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; background:var(--btn2); }
+  .cgtabs button.sel { background:var(--panel2); box-shadow:inset 0 2px 0 var(--orange); }
+  .cglist { max-height:300px; overflow:auto; }
+  .cgrow { display:grid; grid-template-columns: 64px minmax(0,1fr) auto; gap:8px; align-items:center; padding:6px 10px; border-bottom:1px solid #26292d; border-left:4px solid transparent; }
+  .cgrow.on { background:#3a1410; border-left-color:var(--red); }
+  .cgrow.out, .cgrow.wait { background:#2d2410; border-left-color:var(--yellow); }
+  .cgrow .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cgrow .st { color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cgrow .bt { display:flex; gap:4px; }
+  .cgrow .bt button.in { min-width:44px; }
+  .cgthumb { width:64px; height:36px; object-fit:contain; display:block;
+    background: #222 repeating-conic-gradient(#2c2c2c 0 25%, #1a1a1a 0 50%) 0 0/10px 10px; border:1px solid #333; }
+  .cgbar { display:flex; gap:6px; padding:8px 10px 10px; flex-wrap:wrap; }
+  .b-cg { background:var(--orange); color:#000; }
+
+  /* CG position editor */
+  .pos { position:relative; width:100%; aspect-ratio:16/9; background:#000 center/100% 100% no-repeat; border:1px solid #444; overflow:hidden; touch-action:none; }
+  .pos img { position:absolute; left:0; top:0; cursor:move; outline:1px dashed #ff8a1c; image-rendering:auto; }
+  .pos .safe { position:absolute; inset:5%; border:1px dashed #ffffff30; pointer-events:none; }
+  .presets { display:flex; gap:4px; flex-wrap:wrap; }
+  .num { width:90px; }
+  .cardcg td { font-size:12px; }
 
   /* dialogs */
   dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:0; width:min(760px, 94vw); }
@@ -137,6 +169,12 @@
         <div class="logo">Playout</div>
         <div class="clockbox mono" id="clock">--:--:--</div>
         <div class="fmt" id="fmt"></div>
+        <div class="sys" id="sys" title="Usage of this PC">
+          <div class="m"><div class="t">CPU <b id="sCpu">--</b></div><div class="bar"><div id="bCpu"></div></div></div>
+          <div class="m"><div class="t">GPU <b id="sGpu">--</b></div><div class="bar"><div id="bGpu"></div></div></div>
+          <div class="m"><div class="t">RAM <b id="sRam">--</b></div><div class="bar"><div id="bRam"></div></div></div>
+          <div class="fmt" id="sApp"></div>
+        </div>
         <div class="date" id="date"></div>
       </div>
       <div class="onair">
@@ -203,6 +241,12 @@
         <select id="mainSrc" onchange="pickSource(this.value)"></select>
         <button class="sm" title="Search the network again" onclick="refreshSources()">&#10227;</button>
       </div>
+      <div class="srcrow" title="Program sound on this PC's speakers / headphones">
+        <span class="dot" id="aoDot"></span>
+        <button class="sm" id="aoBtn" onclick="setAO({enabled: !AO.enabled})">&#128264; PC sound</button>
+        <select id="aoDev" onchange="setAO({device: this.value})"></select>
+        <input type="range" id="aoVol" min="0" max="150" style="width:80px" title="Volume" onchange="setAO({volume: this.value / 100})">
+      </div>
       <div class="hint" style="padding:0 10px 8px" id="liveInfo"></div>
     </div>
 
@@ -219,7 +263,8 @@
       </div>
       <input type="file" id="upFile" multiple accept="video/*,.mxf,.ts" style="display:none" onchange="upload(this)">
 
-      <div class="section-t">Live stream <span id="stFmt" style="text-transform:none; letter-spacing:0"></span></div>
+      <div class="section-t" style="display:flex; align-items:center; gap:6px">Live stream <span id="stFmt" style="text-transform:none; letter-spacing:0"></span>
+        <span style="flex:1"></span><button class="sm lockable" onclick="openStreamSet()">Quality</button></div>
       <div id="dests"></div>
       <div style="display:flex; gap:8px; padding:8px 10px 10px" class="lockable">
         <button class="red" style="flex:1" onclick="streamAll('start')">GO LIVE (all set)</button>
@@ -227,7 +272,31 @@
       </div>
     </div>
 
-    <div class="box clockwrap"><svg id="bigclock" viewBox="0 0 300 300" width="270" height="270"></svg></div>
+    <div class="box" id="cgPanel">
+      <div class="cgtabs">
+        <button id="tabMan" class="sel" onclick="cgTab('man')">Manual CG</button>
+        <button id="tabLib" onclick="cgTab('lib')">CG Library</button>
+        <span style="flex:1"></span>
+        <span class="hint" id="cgCard" style="align-self:center"></span>
+      </div>
+      <div id="cgMan">
+        <div class="cglist" id="cgList"></div>
+        <div class="cgbar">
+          <button class="lockable" onclick="addManualCG()">+ Add CG</button>
+          <span style="flex:1"></span>
+          <button class="red" onclick="api('/api/cg/all_out', {}).then(pollCG)" title="Take every CG off air">ALL OUT</button>
+        </div>
+      </div>
+      <div id="cgLib" style="display:none">
+        <div class="cglist" id="cgFiles"></div>
+        <div class="cgbar lockable">
+          <button onclick="$('upCG').click()">Upload CG</button>
+          <button onclick="openCGFolder()">CG Folder</button>
+          <span class="hint" style="align-self:center">PNG / JPEG / QuickTime MOV (alpha)</span>
+        </div>
+      </div>
+      <input type="file" id="upCG" multiple accept=".png,.jpg,.jpeg,.tga,.bmp,.gif,.webp,.mov,.mp4,.webm,.avi,.mkv,.mxf" style="display:none" onchange="uploadCG(this)">
+    </div>
   </div>
 </div>
 
@@ -247,19 +316,86 @@
   </div>
 </dialog>
 
-<!-- Live card -->
-<dialog id="dLive">
-  <header>Live card <button class="sm" onclick="dLive.close()">Close</button></header>
-  <div class="body form">
-    <span>Name</span><input id="lvName" value="LIVE">
-    <span>Duration</span><input id="lvDur" placeholder="mm:ss  (empty = until Next is pressed)">
-    <span>Fixed start</span><input id="lvFixed" type="time" step="1">
-    <span></span><span class="hint">A live card puts the vMix NDI feed on air. With a duration it moves on by itself; without one it stays live until you press Next. A fixed start jumps it on air at that time.</span>
+<!-- Live card (add and edit) -->
+<dialog id="dLive" style="width:min(820px, 96vw)">
+  <header><span id="lvTitle">Live card</span> <button class="sm" onclick="dLive.close()">Close</button></header>
+  <div class="body">
+    <div class="form">
+      <span>Name</span><input id="lvName" value="LIVE">
+      <span>Duration</span><input id="lvDur" placeholder="mm:ss  (empty = until Next is pressed)">
+      <span>Fixed start</span><span style="display:flex; gap:6px"><input id="lvFixed" type="time" step="1"><button class="sm" onclick="$('lvFixed').value=''">Clear</button></span>
+      <span>Live source</span>
+      <span style="display:flex; gap:6px"><select id="lvSrc" style="flex:1" onchange="lvSrcChanged()"></select><button class="sm" onclick="loadInputs(true)" title="Search again">&#10227;</button></span>
+      <span class="lvDev">Video device</span><select class="lvDev" id="lvVid"></select>
+      <span class="lvDev">Audio device</span><select class="lvDev" id="lvAud"></select>
+      <span></span><span class="hint" id="lvHint">Main vMix input = the NDI source picked on the main screen. Plug in a USB / HDMI capture device (AverMedia, Elgato, Magewell...), press &#10227; and pick it here.</span>
+    </div>
+    <div class="section-t" style="margin:12px -14px 6px; display:flex; align-items:center">CGs on this live card
+      <span style="flex:1"></span><button class="sm" onclick="addCardCG()">+ Add CG</button></div>
+    <table class="cardcg" id="lvCG"></table>
+    <div class="hint" style="margin-top:6px">These CGs go on air with this card only, and come off when the card ends. Delay = seconds after the card starts; On for = seconds on screen (empty = whole card).</div>
   </div>
-  <div class="foot">
+  <div class="foot" id="lvFootAdd">
     <button onclick="addLive('next')">Insert after on-air</button>
     <button class="blue" onclick="addLive('end')">Add to end</button>
   </div>
+  <div class="foot" id="lvFootEdit"><button class="blue" onclick="saveLive()">Save</button></div>
+</dialog>
+
+<!-- CG editor: file, position, zoom -->
+<dialog id="dCG" style="width:min(900px, 96vw)">
+  <header><span id="cgTitle">CG</span> <button class="sm" onclick="dCG.close()">Close</button></header>
+  <div class="body">
+    <div class="pos" id="cgPos"><div class="safe"></div><img id="cgImg" alt="" draggable="false"></div>
+    <div class="hint" style="margin:4px 0 10px">Drag the graphic to place it. The dashed box is the title-safe area. Background = current program.</div>
+    <div class="form">
+      <span>CG file</span><select id="cgFile" onchange="cgFileChanged()"></select>
+      <span>Name</span><input id="cgName" placeholder="e.g. Lower third - guest">
+      <span>Position</span>
+      <span style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        X <input class="num" id="cgX" type="number" oninput="cgDraw()">
+        Y <input class="num" id="cgY" type="number" oninput="cgDraw()">
+        Zoom % <input class="num" id="cgZ" type="number" min="1" max="800" step="1" oninput="cgDraw()">
+        <input id="cgZr" type="range" min="10" max="300" style="flex:1; min-width:120px" oninput="$('cgZ').value=this.value; cgDraw()">
+      </span>
+      <span>Quick place</span>
+      <span class="presets">
+        <button class="sm" onclick="cgPreset('full')">Full screen</button>
+        <button class="sm" onclick="cgPreset('center')">Centre</button>
+        <button class="sm" onclick="cgPreset('tl')">Top left</button>
+        <button class="sm" onclick="cgPreset('tr')">Top right</button>
+        <button class="sm" onclick="cgPreset('bl')">Bottom left</button>
+        <button class="sm" onclick="cgPreset('br')">Bottom right</button>
+        <button class="sm" onclick="cgPreset('lt')">Lower third</button>
+        <button class="sm" onclick="$('cgZ').value=100; cgDraw()">100%</button>
+      </span>
+      <span>Fade</span><span><input class="num" id="cgFade" type="number" min="0" max="100"> frames (0 = cut)</span>
+      <span class="cgVid">Video CG</span><label class="cgVid"><input type="checkbox" id="cgLoop"> Loop (otherwise it takes itself out at the end)</label>
+      <span class="cgMan">Show</span><label class="cgMan"><input type="checkbox" id="cgLiveOnly"> Only on live (hide while a commercial plays)</label>
+      <span class="cgCard">Delay</span><span class="cgCard"><input class="num" id="cgDelay" type="number" min="0" step="0.5"> seconds after the card starts</span>
+      <span class="cgCard">On for</span><span class="cgCard"><input class="num" id="cgDur" type="number" min="0" step="0.5"> seconds (empty = whole card)</span>
+    </div>
+  </div>
+  <div class="foot"><button class="red" id="cgDel" onclick="cgDelete()">Delete</button><span style="flex:1"></span><button class="blue" onclick="cgSave()">Save</button></div>
+</dialog>
+
+<!-- Stream quality -->
+<dialog id="dStream" style="width:min(520px, 94vw)">
+  <header>Stream quality <button class="sm" onclick="dStream.close()">Close</button></header>
+  <div class="body form">
+    <span>Resolution</span><select id="ssRes"><option value="720p">720p (1280x720)</option><option value="1080p">1080p (1920x1080)</option></select>
+    <span>Video bitrate</span>
+    <span style="display:flex; gap:6px; align-items:center"><input class="num" id="ssV" type="number" min="300" max="50000" step="100"> kbps
+      <select id="ssVp" onchange="if(this.value) $('ssV').value=this.value; this.value=''">
+        <option value="">presets</option><option value="2500">2500 (720p low)</option><option value="3500">3500 (720p)</option>
+        <option value="4500">4500 (1080p)</option><option value="6000">6000 (1080p high)</option><option value="8000">8000</option></select></span>
+    <span>Audio bitrate</span><select id="ssA"><option>96</option><option>128</option><option>160</option><option>192</option><option>256</option><option>320</option></select>
+    <span>Encoder</span><select id="ssE">
+      <option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA GPU (NVENC)</option>
+      <option value="h264_qsv">Intel GPU (Quick Sync)</option><option value="h264_amf">AMD GPU (AMF)</option></select>
+    <span></span><span class="hint">Facebook: 720p 3000-4000 kbps, 1080p 4500-6000 kbps. Use a GPU encoder to save CPU. Destinations that are live restart with the new settings (a few seconds).</span>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveStreamSet()">Apply</button></div>
 </dialog>
 
 <!-- Edit item -->
@@ -366,7 +502,7 @@ async function poll() {
   const isClip = it && it.type === 'clip';
   $('oaTitle').textContent = it ? it.name : 'LIVE';
   $('oaTitle').className = 'title' + (isClip ? '' : ' live');
-  $('oaSub').textContent = isClip ? `media\\${it.file}` : `vMix NDI: ${S.live_source || 'no source selected'}${S.live_source ? (S.live_connected ? ' (connected)' : ' (not connected)') : ''}`;
+  $('oaSub').textContent = isClip ? `media\\${it.file}` : srcStatus(it && it.source);
   setThumb($('oaThumb'), it);
   const tally = $('tally');
   if (S.state === 'PAUSED') { tally.textContent = 'PAUSED'; tally.className = 'tally pause'; }
@@ -386,9 +522,19 @@ async function poll() {
   $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
   if (S.live_source !== shownSource) fillSources();
   meters(S.meters);
-  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed}) => ({id, type, name, file, duration, fixed})); renderPlaylist(); renderedVersion = S.version; }
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || []})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
-  drawClock(now);
+}
+function srcLabel(k) {
+  if (!k) return 'vMix NDI: ' + (S.live_source || 'no source selected');
+  if (k === 'bars') return 'Colour bars + tone';
+  if (k.startsWith('ndi:')) return 'NDI: ' + k.slice(4);
+  if (k.startsWith('dev:')) { const [v, a] = k.slice(4).split('|'); return 'USB: ' + v + (a ? ' + ' + a : ''); }
+  return k;
+}
+function srcStatus(k) {
+  const ok = !k ? (S.live_source ? S.live_connected : null) : S.inputs?.[k];
+  return srcLabel(k) + (ok == null ? '' : ok ? ' (connected)' : ' (not connected)');
 }
 function meters(m) {
   [['mL', m[0]], ['mR', m[1]]].forEach(([id, db]) => { const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100)); $(id).style.height = pct + '%'; });
@@ -415,7 +561,7 @@ function renderPlaylist() {
           <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}">${it.type === 'live' ? 'LIVE' : 'AD'}</span>
           <span class="name">${esc(it.name)}</span>
         </div>
-        <div class="path">${it.type === 'clip' ? 'media\\' + esc(it.file) : 'vMix NDI live feed'}</div>
+        <div class="path">${it.type === 'clip' ? 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}</div>
         <div class="metrics">
           <div><div class="lbl">Duration</div><div class="v">${it.duration ? tc(it.duration).slice(0, 11) : 'until Next'}</div></div>
           <div><div class="lbl">Start</div><div class="v" data-f="start">--:--:--</div></div>
@@ -466,6 +612,7 @@ function clearPlaylist() { if (confirm('Clear the whole playlist? (On-air item k
 
 function openEdit(id) {
   const it = PL.find(x => x.id === id); if (!it) return;
+  if (it.type === 'live') return openLive(it);
   editId = id; $('edName').value = it.name; $('edFixed').value = it.fixed || '';
   $('edDur').value = durText(it.duration); $('edDur').disabled = it.type === 'clip';
   $('edDurL').textContent = it.type === 'clip' ? 'Duration (from file)' : 'Duration';
@@ -479,13 +626,59 @@ function saveEdit() {
   dEdit.close(); savePlaylist();
 }
 
-// live card
-function openLive() { $('lvName').value = 'LIVE'; $('lvDur').value = ''; $('lvFixed').value = ''; dLive.showModal(); }
-function addLive(where) {
-  let f = $('lvFixed').value; if (f && f.length === 5) f += ':00';
-  dLive.close();
-  insertAt([{type:'live', name:$('lvName').value.trim() || 'LIVE', duration:parseDur($('lvDur').value), fixed:f}], where);
+// live card (add / edit): source + its own CGs
+let lvCGs = [], inputs = {ndi:[], devices:[]};
+async function loadInputs(force) {
+  if (force || !inputs.loaded) { try { inputs = await api('/api/inputs'); inputs.loaded = true; } catch (e) {} }
+  const cur = $('lvSrc').dataset.want || '';
+  const opts = [['', `Main vMix input (${S.live_source || 'none picked'})`]];
+  inputs.ndi.filter(n => n !== S.live_source).forEach(n => opts.push(['ndi:' + n, 'NDI: ' + n]));
+  if (cur.startsWith('ndi:') && !opts.some(o => o[0] === cur)) opts.push([cur, srcLabel(cur) + ' (offline)']);
+  opts.push(['dev', 'USB / HDMI capture device'], ['bars', 'Colour bars + tone (test)']);
+  $('lvSrc').innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('');
+  $('lvSrc').value = cur.startsWith('dev:') ? 'dev' : cur;
+  const [wv, wa] = cur.startsWith('dev:') ? cur.slice(4).split('|') : ['', ''];
+  const vids = inputs.devices.filter(d => d.kind === 'video').map(d => d.name);
+  const auds = inputs.devices.filter(d => d.kind === 'audio').map(d => d.name);
+  if (wv && !vids.includes(wv)) vids.push(wv);
+  if (wa && !auds.includes(wa)) auds.push(wa);
+  $('lvVid').innerHTML = (vids.length ? '' : '<option value="">(no capture device found - plug it in and press &#10227;)</option>') +
+    vids.map(n => `<option ${n === wv ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  $('lvAud').innerHTML = '<option value="">(no audio)</option>' + auds.map(n => `<option ${n === wa ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  if (!wa && wv) { const guess = auds.find(a => a.toLowerCase().includes(wv.toLowerCase().split(' ')[0])); if (guess) $('lvAud').value = guess; }
+  lvSrcChanged();
 }
+function lvSrcChanged() { document.querySelectorAll('.lvDev').forEach(e => e.style.display = $('lvSrc').value === 'dev' ? '' : 'none'); }
+function lvSource() {
+  const v = $('lvSrc').value;
+  if (v !== 'dev') return v;
+  return $('lvVid').value ? 'dev:' + $('lvVid').value + ($('lvAud').value ? '|' + $('lvAud').value : '') : '';
+}
+function openLive(it) {
+  editId = it ? it.id : null;
+  $('lvTitle').textContent = it ? 'Edit live card' : 'New live card';
+  $('lvName').value = it ? it.name : 'LIVE'; $('lvDur').value = it ? durText(it.duration) : ''; $('lvFixed').value = it ? it.fixed || '' : '';
+  $('lvSrc').dataset.want = it ? it.source || '' : '';
+  lvCGs = it ? JSON.parse(JSON.stringify(it.cgs || [])) : [];
+  $('lvFootAdd').style.display = it ? 'none' : ''; $('lvFootEdit').style.display = it ? '' : 'none';
+  renderCardCG(); loadInputs(false); loadCGFiles();
+  dLive.showModal();
+}
+function liveFields() {
+  let f = $('lvFixed').value; if (f && f.length === 5) f += ':00';
+  return {name:$('lvName').value.trim() || 'LIVE', duration:parseDur($('lvDur').value), fixed:f, source:lvSource(), cgs:lvCGs};
+}
+function addLive(where) { const f = liveFields(); dLive.close(); insertAt([{type:'live', ...f}], where); }
+function saveLive() { const it = PL.find(x => x.id === editId); if (it) Object.assign(it, liveFields()); dLive.close(); savePlaylist(); }
+function renderCardCG() {
+  $('lvCG').innerHTML = '<tr><th></th><th>CG</th><th>X, Y</th><th>Zoom</th><th>Delay</th><th>On for</th><th></th></tr>' + (lvCGs.map((c, i) => `<tr>
+    <td><img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}"></td><td>${esc(c.name || c.file)}</td>
+    <td class="mono">${c.x}, ${c.y}</td><td class="mono">${c.zoom}%</td><td class="mono">${c.delay || 0}s</td><td class="mono">${c.duration ? c.duration + 's' : 'whole card'}</td>
+    <td style="text-align:right"><button class="sm" onclick="editCardCG(${i})">Edit</button> <button class="sm" onclick="lvCGs.splice(${i},1); renderCardCG()">Remove</button></td></tr>`).join('')
+    || '<tr><td colspan="7" class="hint">No CGs on this card. Add a logo, lower third or bug.</td></tr>');
+}
+function addCardCG() { openCG('card', null, cfg => { lvCGs.push(cfg); renderCardCG(); }); }
+function editCardCG(i) { openCG('card', lvCGs[i], cfg => { lvCGs[i] = cfg; renderCardCG(); }, () => { lvCGs.splice(i, 1); renderCardCG(); }); }
 
 // commercials
 async function loadMedia() { media = await api('/api/media'); }
@@ -606,22 +799,167 @@ async function openMediaFolder() {
 // lock
 function toggleLock() { locked = !locked; $('app').classList.toggle('locked', locked); $('bLock').textContent = locked ? 'Unlock' : 'Lock'; $('bLock').classList.toggle('red', locked); }
 
-// big clock: 60 dots around, lit up to the current second
-(function buildClock() {
-  const svg = $('bigclock'); let h = '';
-  for (let i = 0; i < 60; i++) {
-    const a = (i / 60) * 2 * Math.PI - Math.PI / 2, big = i % 5 === 0;
-    h += `<circle id="cd${i}" cx="${150 + 132 * Math.cos(a)}" cy="${150 + 132 * Math.sin(a)}" r="${big ? 5 : 3}" fill="#3a2410"/>`;
+// program sound on this PC (Windows default output unless a device is picked)
+let AO = {};
+async function pollAO(r) {
+  try { AO = r || await api('/api/audio_out'); } catch (e) { return; }
+  $('aoBtn').classList.toggle('on', AO.enabled);
+  $('aoBtn').innerHTML = (AO.enabled ? '&#128266;' : '&#128263;') + ' PC sound';
+  $('aoDot').className = 'dot ' + (AO.enabled ? (AO.running ? 'ok' : 'bad') : '');
+  $('aoDot').title = AO.error || (AO.running ? 'Playing' : 'Off');
+  if (document.activeElement !== $('aoDev'))
+    $('aoDev').innerHTML = '<option value="">Windows default output</option>' + AO.devices.map(n => `<option ${n === AO.device ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  if (document.activeElement !== $('aoVol')) $('aoVol').value = Math.round(AO.volume * 100);
+}
+const setAO = b => api('/api/audio_out', b).then(pollAO);
+
+// system meters (header)
+async function pollSys() {
+  let m; try { m = await api('/api/system'); } catch (e) { return; }
+  const set = (id, bar, v, txt) => { $(id).textContent = v == null ? 'n/a' : txt; const b = $(bar); b.style.width = (v || 0) + '%'; b.className = v > 85 ? 'hot' : v > 65 ? 'warn' : ''; };
+  set('sCpu', 'bCpu', m.cpu, m.cpu + '%');
+  set('sGpu', 'bGpu', m.gpu, m.gpu + '%');
+  set('sRam', 'bRam', m.ram, m.ram + '%');
+  $('sys').title = `CPU ${m.cpu ?? '?'}%  |  GPU ${m.gpu ?? 'n/a'}%${m.gpu_name ? ' ' + m.gpu_name : ''}${m.gpu_mem_mb ? ', ' + m.gpu_mem_mb + ' MB' : ''}  |  RAM ${m.ram_used_gb ?? '?'} / ${m.ram_total_gb ?? '?'} GB`;
+  $('sApp').innerHTML = m.app_cpu != null ? `Playout<br>${m.app_cpu}% CPU, ${m.app_ram_mb} MB` : '';
+}
+
+// ---------------------------------------------------------------- CG
+let cgFiles = [], cgManual = [], cgStatus = {manual_on:{}}, cgShown = '', cgCtx = null;
+function cgTab(t) {
+  $('tabMan').classList.toggle('sel', t === 'man'); $('tabLib').classList.toggle('sel', t === 'lib');
+  $('cgMan').style.display = t === 'man' ? '' : 'none'; $('cgLib').style.display = t === 'lib' ? '' : 'none';
+  if (t === 'lib') loadCGFiles().then(renderCGFiles);
+}
+async function loadCGFiles() { try { cgFiles = await api('/api/cg/files'); } catch (e) {} return cgFiles; }
+function renderCGFiles() {
+  $('cgFiles').innerHTML = cgFiles.map((f, i) => `<div class="cgrow">
+    <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(f.name)}">
+    <div style="min-width:0"><div class="nm">${esc(f.name)}</div>
+      <div class="st">${f.kind === 'video' ? 'QuickTime / video' : 'Image'} ${f.w}x${f.h}${f.duration ? ', ' + f.duration.toFixed(1) + 's' : ''} - ${f.alpha ? 'alpha' : 'no alpha (opaque)'}</div></div>
+    <div class="bt lockable"><button class="sm" onclick="addManualCG(cgFiles[${i}].name)">+ Manual</button></div></div>`).join('')
+    || '<div class="empty" style="padding:20px">No CG files yet. Upload PNG / JPEG / QuickTime MOV, or copy them into the CG folder.</div>';
+}
+async function uploadCG(input) {
+  const fd = new FormData(); for (const f of input.files) fd.append('files', f);
+  $('msg').textContent = 'Uploading CG...';
+  await fetch('/api/cg/files', {method:'POST', body:fd}); input.value = '';
+  $('msg').textContent = 'CG upload done';
+  await loadCGFiles(); renderCGFiles();
+}
+async function openCGFolder() {
+  try { const r = await api('/api/open_media_folder?cg=1', {}); $('msg').textContent = 'CG folder: ' + r.path; }
+  catch (e) { $('msg').textContent = 'The CG folder can only be opened on the playout PC'; }
+}
+async function pollCG() {
+  let r; try { r = await api('/api/cg/manual'); } catch (e) { return; }
+  cgStatus = r; const key = JSON.stringify(r.list);
+  if (key !== cgShown) { cgManual = r.list; cgShown = key; renderManual(); }
+  for (const c of cgManual) {
+    const el = $('mc_' + c.id); if (!el) continue;
+    const st = r.manual_on[c.id] || '';
+    el.className = 'cgrow ' + st;
+    const live = st === 'on' || st === 'in';
+    el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
+      (c.live_only ? ' - live only' : '') + ` - ${c.x}, ${c.y}, ${c.zoom}%`;
+    el.querySelector('.in').classList.toggle('red', live);
   }
-  h += `<text id="chm" x="150" y="150" text-anchor="middle" font-family="Consolas, monospace" font-size="70" font-weight="700" fill="#ff8a1c">--:--</text>`;
-  h += `<text id="cs" x="150" y="222" text-anchor="middle" font-family="Consolas, monospace" font-size="54" font-weight="700" fill="#ff8a1c">--</text>`;
-  svg.innerHTML = h;
+  const card = r.card || [];
+  $('cgCard').textContent = card.length ? `Live card CG: ${card.filter(c => c.state === 'on').length}/${card.length} on` : '';
+}
+function renderManual() {
+  $('cgList').innerHTML = cgManual.map(c => `<div class="cgrow" id="mc_${c.id}">
+    <img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}">
+    <div style="min-width:0"><div class="nm">${esc(c.name || c.file)}</div><div class="st" data-f="st"></div></div>
+    <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
+      <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button></div></div>`).join('')
+    || '<div class="empty" style="padding:20px">No manual CGs. Press <b>+ Add CG</b>. They go on air with IN, even while a commercial plays.</div>';
+}
+const cgTake = (id, a) => api(`/api/cg/manual/${id}/${a}`, {}).then(pollCG);
+const saveManual = () => api('/api/cg/manual', cgManual).then(() => { cgShown = ''; pollCG(); });
+function addManualCG(file) { openCG('manual', file ? {file} : null, cfg => { cgManual.push(cfg); saveManual(); }); }
+function editManualCG(id) {
+  const i = cgManual.findIndex(c => c.id === id); if (i < 0) return;
+  openCG('manual', cgManual[i], cfg => { cgManual[i] = {...cfg, id}; saveManual(); }, () => { cgTake(id, 'out'); cgManual.splice(i, 1); saveManual(); });
+}
+
+// CG editor (manual CGs and live card CGs share it)
+async function openCG(mode, cfg, onSave, onDelete) {
+  await loadCGFiles();
+  if (!cgFiles.length) { alert('No CG files yet. Open the CG Library tab and upload PNG / JPEG / MOV files first.'); return; }
+  cgCtx = {mode, onSave, onDelete};
+  const c = {x: 0, y: 0, zoom: 100, fade: 8, loop: true, live_only: false, delay: 0, duration: null, ...(cfg || {})};
+  $('cgTitle').textContent = (cfg && cfg.name ? 'Edit CG' : 'New CG') + (mode === 'card' ? ' (live card)' : ' (manual)');
+  $('cgFile').innerHTML = cgFiles.map(f => `<option>${esc(f.name)}</option>`).join('');
+  $('cgFile').value = c.file && cgFiles.some(f => f.name === c.file) ? c.file : cgFiles[0].name;
+  $('cgName').value = c.name || ''; $('cgX').value = c.x; $('cgY').value = c.y; $('cgZ').value = c.zoom;
+  $('cgFade').value = c.fade; $('cgLoop').checked = c.loop !== false; $('cgLiveOnly').checked = !!c.live_only;
+  $('cgDelay').value = c.delay || ''; $('cgDur').value = c.duration || '';
+  document.querySelectorAll('.cgMan').forEach(e => e.style.display = mode === 'manual' ? '' : 'none');
+  document.querySelectorAll('.cgCard').forEach(e => e.style.display = mode === 'card' ? '' : 'none');
+  $('cgDel').style.display = onDelete ? '' : 'none';
+  $('cgPos').style.backgroundImage = `url('/api/preview.jpg?${Date.now()}')`;
+  dCG.showModal();
+  cgFileChanged(!cfg || cfg.x == null);
+}
+const cgSel = () => cgFiles.find(f => f.name === $('cgFile').value) || {w: 1, h: 1};
+function cgFileChanged(fresh) {
+  const f = cgSel();
+  document.querySelectorAll('.cgVid').forEach(e => e.style.display = f.kind === 'video' ? '' : 'none');
+  $('cgImg').src = '/api/cg/preview/' + encodeURIComponent(f.name);
+  if (fresh === true && f.w >= S.width * 0.9) cgPreset('full'); else if (fresh === true) cgPreset('tl');
+  cgDraw();
+}
+function cgDraw() {
+  const f = cgSel(), box = $('cgPos'), k = box.clientWidth / (S.width || 1920), z = (+$('cgZ').value || 100) / 100;
+  const img = $('cgImg');
+  img.style.left = (+$('cgX').value || 0) * k + 'px'; img.style.top = (+$('cgY').value || 0) * k + 'px';
+  img.style.width = f.w * z * k + 'px'; img.style.height = f.h * z * k + 'px';
+  $('cgZr').value = Math.min(300, +$('cgZ').value || 100);
+}
+function cgPreset(p) {
+  const f = cgSel(), W = S.width || 1920, H = S.height || 1080, m = Math.round(W * 0.05);
+  let z = +$('cgZ').value || 100;
+  if (p === 'full') z = Math.round(Math.min(W / f.w, H / f.h) * 1000) / 10;
+  if (p === 'lt' && f.w * z / 100 > W - 2 * m) z = Math.floor((W - 2 * m) / f.w * 1000) / 10;
+  const w = Math.round(f.w * z / 100), h = Math.round(f.h * z / 100);
+  const pos = {full: [(W - w) / 2, (H - h) / 2], center: [(W - w) / 2, (H - h) / 2], tl: [m, m], tr: [W - w - m, m],
+               bl: [m, H - h - m], br: [W - w - m, H - h - m], lt: [m, H - h - Math.round(H * 0.08)]}[p];
+  $('cgZ').value = z; $('cgX').value = Math.round(pos[0]); $('cgY').value = Math.round(pos[1]); cgDraw();
+}
+(function cgDrag() {
+  const img = $('cgImg'); let d = null;
+  img.addEventListener('pointerdown', e => { d = {x: e.clientX, y: e.clientY, X: +$('cgX').value || 0, Y: +$('cgY').value || 0}; img.setPointerCapture(e.pointerId); });
+  img.addEventListener('pointermove', e => {
+    if (!d) return; const k = (S.width || 1920) / $('cgPos').clientWidth;
+    $('cgX').value = Math.round(d.X + (e.clientX - d.x) * k); $('cgY').value = Math.round(d.Y + (e.clientY - d.y) * k); cgDraw();
+  });
+  img.addEventListener('pointerup', () => d = null);
+  img.addEventListener('load', cgDraw);
+  window.addEventListener('resize', () => dCG.open && cgDraw());
 })();
-let lastSec = -1;
-function drawClock(d) {
-  const s = d.getSeconds(); if (s === lastSec) return; lastSec = s;
-  $('chm').textContent = d.toTimeString().slice(0, 5); $('cs').textContent = String(s).padStart(2, '0');
-  for (let i = 0; i < 60; i++) $('cd' + i).setAttribute('fill', i <= s ? '#ff8a1c' : '#3a2410');
+function cgSave() {
+  const f = $('cgFile').value;
+  const cfg = {file: f, name: $('cgName').value.trim() || f.replace(/\.[^.]+$/, ''), x: Math.round(+$('cgX').value || 0), y: Math.round(+$('cgY').value || 0),
+               zoom: Math.max(1, +$('cgZ').value || 100), fade: Math.max(0, Math.round(+$('cgFade').value || 0)), loop: $('cgLoop').checked};
+  if (cgCtx.mode === 'manual') cfg.live_only = $('cgLiveOnly').checked;
+  else { cfg.delay = +$('cgDelay').value || 0; cfg.duration = +$('cgDur').value || null; }
+  dCG.close(); cgCtx.onSave(cfg);
+}
+function cgDelete() { if (confirm('Delete this CG?')) { dCG.close(); cgCtx.onDelete(); } }
+
+// stream quality
+function openStreamSet() {
+  const st = streamInfo?.settings || {};
+  $('ssRes').value = st.resolution === '720p' ? '720p' : '1080p'; $('ssV').value = st.video_kbps || 4500;
+  $('ssA').value = String(st.audio_kbps || 128); $('ssE').value = st.encoder || 'libx264';
+  dStream.showModal();
+}
+async function saveStreamSet() {
+  const live = streamInfo?.destinations.some(d => d.enabled);
+  if (live && !confirm('Live destinations will restart with the new settings. Continue?')) return;
+  await api('/api/stream/settings', {resolution:$('ssRes').value, video_kbps:+$('ssV').value, audio_kbps:+$('ssA').value, encoder:$('ssE').value});
+  dStream.close(); pollStream();
 }
 
 // keyboard: Space = Next, F1 = Play, F2 = Pause, Esc-hold avoided; F12 = Take live
@@ -638,6 +976,9 @@ $('pv').onerror = () => setTimeout(() => { $('pv').src = '/api/preview.mjpg?' + 
 poll(); setInterval(poll, 200);
 pollStream(); setInterval(pollStream, 1000);
 refreshSources(); setInterval(refreshSources, 5000);
+pollSys(); setInterval(pollSys, 2000);
+pollAO(); setInterval(() => pollAO(), 5000);
+pollCG(); setInterval(pollCG, 500);
 </script>
 </body>
 </html>

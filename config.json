@@ -16,5 +16,6 @@
     "encoder": "libx264",
     "preset": "veryfast",
     "ffmpeg_path": ""
-  }
+  },
+  "cg_dir": "cg"
 }

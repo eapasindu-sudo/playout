@@ -14,7 +14,11 @@ from flask import Flask, Response, abort, jsonify, request, send_file, send_from
 from PIL import Image
 from werkzeug.utils import secure_filename
 
+from audio_out import AudioOut
+from capture import list_capture_devices
+from cg import CG_EXT, CGManager, cg_preview, list_cg
 from engine import Engine
+from system import SystemMonitor
 from media import MEDIA_EXT, list_media, thumbnail
 from scheduler import Scheduler
 from store import Store
@@ -27,7 +31,7 @@ BUNDLE = paths.bundle_dir()   # the control screen page
 
 DEFAULT_CONFIG = {
     "output_name": "PLAYOUT PGM", "live_source": "", "width": 1920, "height": 1080, "fps": "25",
-    "web_port": 8080, "media_dir": "media", "data_dir": "data", "log_dir": "logs",
+    "web_port": 8080, "media_dir": "media", "data_dir": "data", "log_dir": "logs", "cg_dir": "cg",
     "stream": {"width": 1920, "height": 1080, "video_kbps": 4500, "audio_kbps": 128,
                "encoder": "libx264", "preset": "veryfast", "ffmpeg_path": ""},
 }
@@ -40,7 +44,8 @@ def load_config():
             json.dump(DEFAULT_CONFIG, f, indent=2)
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
-    for key in ("media_dir", "data_dir", "log_dir"):
+    cfg.setdefault("cg_dir", "cg")
+    for key in ("media_dir", "data_dir", "log_dir", "cg_dir"):
         cfg[key] = os.path.join(ROOT, cfg.get(key, key.split("_")[0]))
         os.makedirs(cfg[key], exist_ok=True)
     return cfg
@@ -51,6 +56,11 @@ store = Store(cfg["data_dir"])
 engine = Engine(cfg, cfg["media_dir"], cfg["log_dir"])
 scheduler = Scheduler(engine)
 streamer = Streamer(engine, cfg)
+cgm = CGManager(cfg["cg_dir"], engine.width, engine.height, engine.fps)
+engine.cg = cgm
+sysmon = SystemMonitor()
+audio_out = AudioOut()
+engine.audio_out = audio_out
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 app = Flask(__name__, static_folder=None)
 
@@ -223,6 +233,15 @@ def stream_info():
     return jsonify(streamer.info())
 
 
+@app.post("/api/stream/settings")
+def stream_settings():
+    body = request.get_json(silent=True) or {}
+    result = streamer.apply_settings(body.get("resolution"), body.get("video_kbps"),
+                                     body.get("audio_kbps"), body.get("encoder"))
+    store.set(stream_settings=result)
+    return jsonify(streamer.info())
+
+
 @app.post("/api/stream/<int:slot>")
 def stream_config(slot):
     if not 0 <= slot < len(streamer.dests):
@@ -269,14 +288,90 @@ def trigger_item(name):
     return f"No playlist item called {name}", 404
 
 
+# ---- system load -------------------------------------------------------
+@app.route("/api/audio_out", methods=["GET", "POST"])
+def audio_out_api():
+    """Program sound on this PC's speakers (Windows default output or a chosen device)."""
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        audio_out.configure(b.get("enabled"), b.get("device"), b.get("volume"))
+        store.set(audio_out={"enabled": audio_out.enabled, "device": audio_out.device, "volume": audio_out.volume})
+    return jsonify(audio_out.info())
+
+
+@app.get("/api/system")
+def system_stats():
+    return jsonify(sysmon.stats)
+
+
+# ---- live card sources -------------------------------------------------
+@app.get("/api/inputs")
+def inputs():
+    own = f"({cfg.get('output_name', 'PLAYOUT PGM')})"
+    ndi = [n for n in engine.finder.names() if not n.endswith(own)]
+    return jsonify(ndi=ndi, devices=list_capture_devices(streamer.ffmpeg), main=engine.live.source_name)
+
+
+# ---- CG ----------------------------------------------------------------
+@app.get("/api/cg/files")
+def cg_files():
+    return jsonify(list_cg(cfg["cg_dir"]))
+
+
+@app.post("/api/cg/files")
+def cg_upload():
+    saved = []
+    for f in request.files.getlist("files"):
+        name = secure_filename(f.filename or "")
+        if name and os.path.splitext(name)[1].lower() in CG_EXT:
+            f.save(os.path.join(cfg["cg_dir"], name))
+            saved.append(name)
+    return jsonify(saved=saved)
+
+
+@app.get("/api/cg/preview/<path:name>")
+def cg_preview_png(name):
+    path = os.path.join(cfg["cg_dir"], secure_filename(name))
+    if not os.path.isfile(path):
+        abort(404)
+    try:
+        return send_file(cg_preview(path, THUMBS), mimetype="image/png", max_age=3600)
+    except Exception:
+        abort(404)
+
+
+@app.route("/api/cg/manual", methods=["GET", "POST"])
+def cg_manual():
+    if request.method == "POST":
+        cgm.set_manual(request.get_json(silent=True) or [])
+    return jsonify(list=cgm.manual, **cgm.status())
+
+
+@app.post("/api/cg/manual/<cid>/<action>")
+def cg_manual_action(cid, action):
+    if action == "in":
+        cgm.take_in(cid)
+    elif action == "out":
+        cgm.take_out(cid)
+    else:
+        abort(404)
+    return jsonify(cgm.status())
+
+
+@app.post("/api/cg/all_out")
+def cg_all_out():
+    cgm.all_out()
+    return jsonify(cgm.status())
+
+
 @app.post("/api/open_media_folder")
 def open_media_folder():
     """Opens the media folder in Explorer (only from the playout PC itself)."""
     if request.remote_addr not in ("127.0.0.1", "::1"):
         abort(403)
     if sys.platform == "win32":
-        os.startfile(cfg["media_dir"])
-    return jsonify(path=cfg["media_dir"])
+        os.startfile(cfg["cg_dir"] if request.args.get("cg") else cfg["media_dir"])
+    return jsonify(path=cfg["cg_dir"] if request.args.get("cg") else cfg["media_dir"])
 
 
 _started = False
@@ -293,12 +388,23 @@ def start_backend():
     engine.on_change = lambda items: store.set(playlist=items)
     engine.set_live_source(cfg.get("live_source") or store.data.get("live_source"))
     streamer.load(store.data.get("stream_destinations"))
+    saved = store.data.get("stream_settings") or {}
+    if saved:
+        streamer.apply_settings(saved.get("resolution"), saved.get("video_kbps"),
+                                saved.get("audio_kbps"), saved.get("encoder"))
     engine.streamer = streamer
+    cgm.set_manual(store.data.get("manual_cgs", []))
+    cgm.on_change = lambda items: store.set(manual_cgs=items)
+    sysmon.start()
+    ao = store.data.get("audio_out") or {}
+    audio_out.configure(ao.get("enabled", True), ao.get("device", ""), ao.get("volume", 1.0))
     engine.start()
     scheduler.start()
 
 
 def shutdown():
+    sysmon.stop()
+    audio_out.close()
     scheduler.stop()
     streamer.stop_all()
     engine.shutdown()

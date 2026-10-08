@@ -280,7 +280,35 @@ class Streamer:
                     if d.status != "error":
                         d.status = "off"
 
+    RESOLUTIONS = {"720p": (1280, 720), "1080p": (1920, 1080)}
+
+    def settings(self):
+        res = next((k for k, v in self.RESOLUTIONS.items() if v == (self.width, self.height)),
+                   f"{self.width}x{self.height}")
+        return {"resolution": res, "video_kbps": self.video_kbps, "audio_kbps": self.audio_kbps,
+                "encoder": self.encoder}
+
+    def apply_settings(self, resolution=None, video_kbps=None, audio_kbps=None, encoder=None):
+        """Change stream size / bitrate. Running destinations restart with the new settings."""
+        if resolution in self.RESOLUTIONS:
+            self.width, self.height = self.RESOLUTIONS[resolution]
+        if video_kbps:
+            self.video_kbps = max(300, min(50000, int(video_kbps)))
+        if audio_kbps:
+            self.audio_kbps = max(64, min(320, int(audio_kbps)))
+        if encoder in ("libx264", "h264_nvenc", "h264_qsv", "h264_amf"):
+            self.encoder = encoder
+        live = [d.slot for d in self.dests if d.enabled]
+        if live:
+            self.stop_all()
+            if self._thread:
+                self._thread.join(timeout=5)
+            for slot in live:
+                self.set_enabled(slot, True)
+        return self.settings()
+
     def info(self):
         return {"encoding": self._encoding, "dropped": self.dropped,
-                "format": f"{self.width}x{self.height} {self.video_kbps} kbps",
+                "format": f"{self.height}p {self.video_kbps} kbps",
+                "settings": self.settings(),
                 "destinations": [d.info() for d in self.dests]}

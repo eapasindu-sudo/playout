@@ -3,7 +3,7 @@ import sys
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hidden = [("../web", "web")], [], []
-pkgs = ["cyndilib", "av", "imageio_ffmpeg"]
+pkgs = ["cyndilib", "av", "imageio_ffmpeg", "sounddevice", "_sounddevice_data"]
 if sys.platform == "win32":
     pkgs += ["webview", "clr_loader", "pythonnet"]
 for pkg in pkgs:
@@ -12,7 +12,8 @@ for pkg in pkgs:
     except Exception:
         continue
     datas += d; binaries += b; hidden += h
-hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths"]
+hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths",
+           "capture", "cg", "system", "audio_out", "psutil"]
 
 a = Analysis(["../desktop.py"], pathex=[".."], binaries=binaries, datas=datas, hiddenimports=hidden)
 pyz = PYZ(a.pure)

@@ -20,6 +20,7 @@ from fractions import Fraction
 import numpy as np
 
 from media import ClipPlayer, probe
+from capture import CaptureInput
 from ndi_io import CHANNELS, SAMPLE_RATE, LiveInput, NDIOutput, SourceFinder
 
 FADE = 480  # 10 ms audio fade at every cut, avoids clicks
@@ -97,6 +98,10 @@ class Engine:
         self.message = ""
         self.on_change = None        # callback to persist the playlist
         self.streamer = None         # Streamer fed with every program frame
+        self.audio_out = None        # program sound on this PC's speakers
+        self.cg = None               # CGManager keyed over the program
+        self.inputs = {}             # extra live sources used by live cards: key -> input
+        self._main_wanted = True
         self._running = False
         self._thread = None
 
@@ -219,6 +224,23 @@ class Engine:
     def set_live_source(self, name):
         self.live.set_source(name)
 
+    def _sync_inputs(self):
+        """Open the extra inputs live cards use (other NDI sources, USB capture, bars); close the rest."""
+        wanted = {it.get("source") for it in self.playlist if it.get("type") == "live" and it.get("source")}
+        for key in list(self.inputs):
+            if key not in wanted:
+                self.inputs.pop(key).close()
+        for key in wanted - set(self.inputs):
+            try:
+                if key.startswith("ndi:"):
+                    inp = LiveInput(self.finder, self.width, self.height)
+                    inp.set_source(key[4:])
+                else:
+                    inp = CaptureInput(key, self.width, self.height)
+                self.inputs[key] = inp
+            except Exception as e:
+                self.message = f"Cannot open {key}: {e}"
+
     # -- internals (lock held) ------------------------------------------
     def _open(self, item):
         path = os.path.join(self.media_dir, item.get("file") or "")
@@ -249,6 +271,11 @@ class Engine:
         self.played.discard(item_id)
         self.player = player
         self.on_air = item_id
+        if self.cg is not None:
+            if item["type"] == "live":
+                self.cg.start_card(item_id, item.get("cgs"))
+            else:
+                self.cg.stop_card()
         self.cued = None
         self.state = "PLAYING"
         self.item_started = None
@@ -281,6 +308,8 @@ class Engine:
             self.asrun.write(item["type"], item["name"], self.item_started, dt.datetime.now(),
                              item.get("duration"), st)
         self.played.add(self.on_air)
+        if self.cg is not None and item.get("type") == "live":
+            self.cg.stop_card()
         if self.player:
             self.player.close()
         self.player = None
@@ -324,6 +353,8 @@ class Engine:
             self._finish("stopped")
             self._stop_to_live()
         self.live.close()
+        for inp in self.inputs.values():
+            inp.close()
         self.output.close()
         self.finder.close()
 
@@ -337,12 +368,13 @@ class Engine:
         while self._running:
             n = self._samples_for(k)
             k += 1
-            live_v, live_a = self.live.grab(n)   # always pulled, keeps the input in sync
+            live_v, live_a = self.live.grab(n, self._main_wanted)   # always pulled, keeps the input in sync
             video = audio = None
             source = "LIVE"
             with self._lock:
                 if self.version != last_version:
                     last_version = self.version
+                    self._sync_inputs()
                     if self.on_air:
                         self._refresh_preload()
                 item = self._item(self.on_air)
@@ -374,6 +406,13 @@ class Engine:
                         if self.item_started is None:
                             self.item_started = dt.datetime.now()
                         self.item_ticks += 1
+                        key = (item or {}).get("source")
+                        inp = self.inputs.get(key) if key else None
+                        if inp is not None:
+                            v, a = inp.grab(n)
+                            video = v if v is not None else self.black
+                            audio = a
+                            source = "LIVE:" + key
                         dur = item.get("duration") if item else None
                         if dur and self.item_ticks / float(self.fps) >= dur:
                             self._item_done()
@@ -384,6 +423,12 @@ class Engine:
             if video is None:
                 video = live_v if live_v is not None else self.black
                 audio = live_a if live_a is not None else np.zeros((CHANNELS, n), np.float32)
+            self._main_wanted = source == "LIVE"
+            if self.cg is not None:
+                try:
+                    video = self.cg.render(video, source.startswith("LIVE"))
+                except Exception as e:
+                    self.message = f"CG error: {e}"
             if source != self.last_source:
                 audio = audio.copy()
                 m = min(FADE, audio.shape[1])
@@ -398,6 +443,8 @@ class Engine:
                 time.sleep(float(1 / self.fps))
             if self.streamer is not None:
                 self.streamer.push(video, audio)
+            if self.audio_out is not None:
+                self.audio_out.push(audio)
 
     # -- status ------------------------------------------------------------
     def snapshot(self):
@@ -467,8 +514,11 @@ class Engine:
                 "meters": self.meters,
                 "live_source": self.live.source_name,
                 "live_connected": self.live.connected,
+                "inputs": {k: bool(getattr(v, "connected", False)) for k, v in self.inputs.items()},
                 "output": self.output.sender.ndi_name,
                 "fps": fps,
+                "width": self.width,
+                "height": self.height,
                 "format": f"{self.width}x{self.height} @ {fps:g}",
                 "message": self.message,
                 "now": now.timestamp(),

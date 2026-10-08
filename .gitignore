@@ -9,3 +9,5 @@ logs/*
 media/*
 !media/.keep
 *.zip
+cg/*
+!cg/.keep

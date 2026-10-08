@@ -21,8 +21,10 @@ vMix --NDI--> Playout --NDI "PLAYOUT PGM"--> anything that takes NDI
 - **Playlist:** thumbnail, name, Duration, Start, End, Time to start, and Scheduler
   (Sequential or a fixed time). Each item has buttons to play it, Cue, Edit, move Up/Down,
   Copy and Delete.
-- **Right side:** a program monitor with L/R audio meters, the Functions panel, the 3 stream
-  destinations, and a big clock.
+- **Header:** clock, date, format and **CPU / GPU / RAM** usage of the PC (plus Playout's own CPU and memory).
+- **Right side:** a program monitor with L/R audio meters, the vMix NDI input picker, **PC sound**
+  (program audio on the Windows default output or a chosen device, with volume), the Functions panel,
+  the 3 stream destinations with **Quality**, and the **CG panel** (Manual CG and CG Library tabs).
 
 Keyboard: **Space** = Next, **F1** = Play, **F2** = Pause, **F12** = Take live.
 
@@ -40,6 +42,30 @@ Keyboard: **Space** = Next, **F1** = Play, **F2** = Pause, **F12** = Take live.
 A typical show playlist:
 `LIVE (15:00) -> Ad 1 -> Ad 2 -> Ad 3 -> LIVE (15:00) -> Ad 4 -> Ad 5 -> LIVE (until Next)`
 
+### Live card sources
+Each live card picks its own source in **+ Live Card** (or **Edit** on a live card):
+- **Main vMix input**: the NDI source chosen on the main screen.
+- **Another NDI source** on the network.
+- **USB / HDMI capture device** (AverMedia, Elgato, Magewell, webcams...). Plug it in, press the refresh
+  button, pick the video device and its audio device.
+- **Colour bars + tone** for tests.
+
+## CG (graphics with alpha)
+
+CG files go in `Documents\Playout\cg` (**CG Library > Upload CG** or **CG Folder**). Supported:
+**PNG** (with alpha), **JPEG** (opaque), and **QuickTime MOV** (ProRes 4444, QT Animation and
+PNG-in-MOV keep their alpha). Video CGs can loop or take themselves out at the end.
+
+- **Manual CG tab**: press **+ Add CG**, pick the file and place it. **IN** / **OUT** take it on and
+  off air at any time, even while a commercial plays. **Only on live** hides it while a commercial is
+  on air and shows it again on live. **ALL OUT** clears every CG.
+- **Live card CGs**: in the live card dialog, **+ Add CG** adds CGs that go on air with that card
+  only. **Delay** starts it some seconds after the card starts, **On for** takes it out after some
+  seconds (empty = whole card).
+- **Position editor**: drag the graphic over the current program picture, or type **X**, **Y** and
+  **Zoom %**. Quick place: Full screen, Centre, the four corners and Lower third. **Fade** sets the
+  fade in/out in frames (0 = cut).
+
 ## Live streaming (3 destinations)
 
 1. Click **Setup** on a destination and pick the **Facebook Live** preset (or YouTube or Custom).
@@ -49,7 +75,12 @@ A typical show playlist:
 
 The program is encoded once and sent to every destination. Each destination starts,
 stops and reconnects on its own: if one drops, the others keep going, and the dropped
-one retries every 5 seconds. Stream settings are under `stream` in `config.json`:
+one retries every 5 seconds.
+
+**Quality** (next to Live stream) sets the resolution (**720p** or **1080p**), the video bitrate
+(any value, with presets), the audio bitrate and the encoder (CPU x264, NVIDIA NVENC, Intel Quick Sync
+or AMD AMF). Running destinations restart with the new settings. The starting values are under
+`stream` in `config.json`:
 
 | key | default | meaning |
 |---|---|---|
@@ -121,5 +152,9 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `ndi_io.py` | NDI input (frame sync) and output |
 | `media.py` | clip decoding and thumbnails (FFmpeg via PyAV) |
 | `scheduler.py` | fixed-time items |
+| `cg.py` | CG layers (PNG / JPEG / MOV with alpha), manual and live-card CGs |
+| `capture.py` | USB / HDMI capture devices and test bars for live cards |
+| `audio_out.py` | program sound on the PC's speakers |
+| `system.py` | CPU / GPU / RAM usage |
 | `store.py` | saved state and named playlists |
 | `web/index.html` | control screen |

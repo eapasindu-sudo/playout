@@ -95,7 +95,7 @@ class LiveInput:
         except Exception:
             return False
 
-    def grab(self, n_samples):
+    def grab(self, n_samples, want_video=True):
         """Return (video, audio) for one output frame.
 
         video is a flat uint8 BGRA buffer of the output size, or None when
@@ -112,7 +112,7 @@ class LiveInput:
                 fs.capture_audio(n_samples)
                 video = None
                 w, h = self.video.get_resolution()
-                if w > 0 and h > 0:
+                if want_video and w > 0 and h > 0:
                     arr = self.video.get_array()
                     if (w, h) != (self.width, self.height):
                         arr = resize_bgra(arr.reshape(h, w, 4), self.width, self.height)

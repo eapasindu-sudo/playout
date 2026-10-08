@@ -1,0 +1,173 @@
+"""Live inputs other than the main vMix NDI feed: USB / HDMI capture devices and test bars.
+
+Source keys used by live cards:
+    ""                      the main live input (vMix NDI, chosen on the main screen)
+    "ndi:<NDI source name>" another NDI source
+    "dev:<video>|<audio>"   a capture device (DirectShow on Windows, V4L2/ALSA on Linux)
+    "bars"                  SMPTE colour bars + 1 kHz tone
+"""
+import collections
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+
+import av
+import numpy as np
+
+from ndi_io import CHANNELS, SAMPLE_RATE, fit_audio
+
+
+def list_capture_devices(ffmpeg=None):
+    """[{name, kind: video|audio}] for capture devices on this PC."""
+    out = []
+    if sys.platform == "win32":
+        exe = ffmpeg or _ffmpeg()
+        try:
+            r = subprocess.run([exe, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                               capture_output=True, text=True, timeout=10,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            for line in r.stderr.splitlines():
+                m = re.search(r'"(.+)" \((video|audio)\)', line)
+                if m and "Alternative name" not in line:
+                    out.append({"name": m.group(1), "kind": m.group(2)})
+        except Exception:
+            pass
+    else:
+        import glob
+        for dev in sorted(glob.glob("/dev/video*")):
+            out.append({"name": dev, "kind": "video"})
+    return out
+
+
+def _ffmpeg():
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def open_args(key):
+    """(url, format, options) for PyAV from a source key."""
+    if key == "bars":
+        return None
+    if key.startswith("dev:"):
+        video, _, audio = key[4:].partition("|")
+        if sys.platform == "win32":
+            url = f"video={video}" + (f":audio={audio}" if audio else "")
+            return url, "dshow", {"rtbufsize": "256M"}
+        return video, "v4l2", {}
+    if key.startswith("lavfi:"):
+        return key[6:], "lavfi", {}
+    raise ValueError(f"unknown source {key}")
+
+
+class CaptureInput:
+    """Reads a capture device on its own thread; the output loop takes the newest frame."""
+
+    MAX_AUDIO = SAMPLE_RATE // 4      # keep at most 250 ms of audio queued
+    TARGET_AUDIO = SAMPLE_RATE // 12  # trim back to ~80 ms when it builds up
+
+    def __init__(self, key, width, height):
+        self.key = key
+        self.width, self.height = width, height
+        self.source_name = key
+        self.error = ""
+        self._video = None
+        self._audio = collections.deque()
+        self._audio_len = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._last_frame_time = 0.0
+        if key == "bars":
+            self._video = self._make_bars()
+            self._tone_phase = 0
+        else:
+            threading.Thread(target=self._run, daemon=True, name=f"capture {key}").start()
+
+    @property
+    def connected(self):
+        if self.key == "bars":
+            return True
+        return time.time() - self._last_frame_time < 1.0
+
+    def _make_bars(self):
+        cols = [(192, 192, 192), (0, 192, 192), (192, 192, 0), (0, 192, 0),
+                (192, 0, 192), (0, 0, 192), (192, 0, 0)]   # BGR: white yellow cyan green magenta red blue
+        img = np.zeros((self.height, self.width, 4), np.uint8)
+        img[..., 3] = 255
+        w = self.width / 7
+        for i, (b, g, r) in enumerate(cols):
+            img[: self.height * 3 // 4, int(i * w):int((i + 1) * w), :3] = (b, g, r)
+        img[self.height * 3 // 4:, :, :3] = 16
+        return img.reshape(-1)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                url, fmt, opts = open_args(self.key)
+                with av.open(url, format=fmt, options=opts, timeout=5) as c:
+                    self.error = ""
+                    vs = c.streams.video[0] if c.streams.video else None
+                    aus = c.streams.audio[0] if c.streams.audio else None
+                    resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE) if aus else None
+                    for packet in c.demux(*[s for s in (vs, aus) if s is not None]):
+                        if self._stop.is_set():
+                            return
+                        for frame in packet.decode():
+                            if packet.stream is vs:
+                                img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
+                                with self._lock:
+                                    self._video = np.ascontiguousarray(img).reshape(-1)
+                                self._last_frame_time = time.time()
+                            elif resampler is not None:
+                                for rf in resampler.resample(frame):
+                                    self._push_audio(rf.to_ndarray().reshape(-1, CHANNELS).T)
+            except Exception as e:
+                self.error = str(e)
+            if not self._stop.wait(2.0):   # device unplugged or busy: try again
+                continue
+
+    def _push_audio(self, pcm):
+        with self._lock:
+            self._audio.append(np.ascontiguousarray(pcm, dtype=np.float32))
+            self._audio_len += pcm.shape[1]
+            while self._audio_len > self.MAX_AUDIO and self._audio:
+                drop = self._audio_len - self.TARGET_AUDIO
+                first = self._audio[0]
+                if first.shape[1] <= drop:
+                    self._audio.popleft()
+                    self._audio_len -= first.shape[1]
+                else:
+                    self._audio[0] = first[:, drop:]
+                    self._audio_len -= drop
+
+    def grab(self, n_samples, want_video=True):
+        if self.key == "bars":
+            t = (np.arange(n_samples) + self._tone_phase) / SAMPLE_RATE
+            self._tone_phase += n_samples
+            tone = (0.1 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)   # -20 dBFS
+            return self._video, np.vstack([tone, tone])
+        out = np.zeros((CHANNELS, n_samples), np.float32)
+        got = 0
+        with self._lock:
+            video = self._video
+            while got < n_samples and self._audio:
+                chunk = self._audio[0]
+                take = min(n_samples - got, chunk.shape[1])
+                out[:, got:got + take] = chunk[:, :take]
+                if take == chunk.shape[1]:
+                    self._audio.popleft()
+                else:
+                    self._audio[0] = chunk[:, take:]
+                got += take
+                self._audio_len -= take
+        if not self.connected:
+            video = None
+        return video, fit_audio(out, n_samples)
+
+    def close(self):
+        self._stop.set()
