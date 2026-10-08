@@ -26,6 +26,20 @@ jobs:
       - name: Smoke test (imports + NDI runtime load)
         run: |
           python -c "import cyndilib, av, imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"
+      - name: Smoke test Playout.exe (starts, serves the control screen)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath build/dist/Playout/Playout.exe -WorkingDirectory build/dist/Playout -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-RestMethod http://localhost:8080/api/state; if ($r.output) { $ok = $true; break } } catch {}
+          }
+          Invoke-WebRequest http://localhost:8080/ -UseBasicParsing | Select-Object -ExpandProperty StatusCode
+          Stop-Process -Id $p.Id -Force
+          Remove-Item build/dist/Playout/config.json, build/dist/Playout/data, build/dist/Playout/logs, build/dist/Playout/media -Recurse -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "Playout.exe did not start" }
+          "Playout.exe started and answered on port 8080"
       - name: Add folders and readme
         shell: pwsh
         run: |
