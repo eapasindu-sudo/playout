@@ -20,11 +20,10 @@ from scheduler import Scheduler
 from store import Store
 from streamer import Streamer
 
-if getattr(sys, "frozen", False):   # Playout.exe: user files next to the exe, web page inside it
-    ROOT = os.path.dirname(sys.executable)
-    BUNDLE = getattr(sys, "_MEIPASS", ROOT)
-else:
-    ROOT = BUNDLE = os.path.dirname(os.path.abspath(__file__))
+import paths
+
+ROOT = paths.user_home()      # config, media, playlists, logs
+BUNDLE = paths.bundle_dir()   # the control screen page
 
 DEFAULT_CONFIG = {
     "output_name": "PLAYOUT PGM", "live_source": "", "width": 1920, "height": 1080, "fps": "25",
@@ -270,7 +269,25 @@ def trigger_item(name):
     return f"No playlist item called {name}", 404
 
 
-def main():
+@app.post("/api/open_media_folder")
+def open_media_folder():
+    """Opens the media folder in Explorer (only from the playout PC itself)."""
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        abort(403)
+    if sys.platform == "win32":
+        os.startfile(cfg["media_dir"])
+    return jsonify(path=cfg["media_dir"])
+
+
+_started = False
+
+
+def start_backend():
+    """Load saved state and start the output engine and scheduler (no web server)."""
+    global _started
+    if _started:
+        return
+    _started = True
     engine.set_modes(store.data.get("auto", True), store.data.get("loop", False))
     engine.set_playlist(store.data.get("playlist", []))
     engine.on_change = lambda items: store.set(playlist=items)
@@ -280,22 +297,31 @@ def main():
     engine.start()
     scheduler.start()
 
-    def shutdown(*_):
-        scheduler.stop()
-        streamer.stop_all()
-        engine.shutdown()
+
+def shutdown():
+    scheduler.stop()
+    streamer.stop_all()
+    engine.shutdown()
+
+
+def serve(host="0.0.0.0", port=None):
+    port = port or int(cfg.get("web_port", 8080))
+    app.run(host=host, port=port, threaded=True, use_reloader=False)
+
+
+def main():
+    """Server only; open http://localhost:8080 in a browser. Playout.exe uses desktop.py."""
+    start_backend()
+
+    def on_signal(*_):
+        shutdown()
         sys.exit(0)
 
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
     port = int(cfg.get("web_port", 8080))
     print(f"Playout running. NDI output: '{cfg.get('output_name')}'. Control screen: http://localhost:{port}")
-    print("Keep this window open while on air. Close it to stop the playout.")
-    if getattr(sys, "frozen", False) or "--open" in sys.argv:
-        import threading
-        import webbrowser
-        threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
-    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+    serve(port=port)
 
 
 if __name__ == "__main__":

@@ -214,6 +214,7 @@
         <button onclick="openLogs()">Air Logs</button>
         <button class="lockable" onclick="openSrc()">Live Source</button>
         <button class="lockable" onclick="$('upFile').click()">Upload Clips</button>
+        <button class="lockable" onclick="openMediaFolder()" title="Open the media folder on this PC">Media Folder</button>
         <button id="bLock" onclick="toggleLock()">Lock</button>
       </div>
       <input type="file" id="upFile" multiple accept="video/*,.mxf,.ts" style="display:none" onchange="upload(this)">
@@ -595,6 +596,11 @@ function presetChanged() {
 async function saveDest() {
   await api(`/api/stream/${destSlot}`, {name:$('dsName').value.trim(), url:$('dsUrl').value.trim(), key:$('dsKey').value.trim()});
   dDest.close(); pollStream();
+}
+
+async function openMediaFolder() {
+  try { const r = await api('/api/open_media_folder', {}); $('msg').textContent = 'Media folder: ' + r.path; }
+  catch (e) { $('msg').textContent = 'The media folder can only be opened on the playout PC'; }
 }
 
 // lock

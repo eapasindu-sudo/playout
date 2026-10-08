@@ -1,8 +1,7 @@
-name: Build Playout.exe
+name: Build Playout installer
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -20,38 +19,48 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
-      - name: Build
+      - name: Build Playout.exe
         working-directory: build
         run: pyinstaller --noconfirm playout.spec
-      - name: Smoke test (imports + NDI runtime load)
-        run: |
-          python -c "import cyndilib, av, imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"
-      - name: Smoke test Playout.exe (starts, serves the control screen)
+      - name: Test Playout.exe (starts, serves the control screen)
         shell: pwsh
+        env:
+          PLAYOUT_HOME: ${{ runner.temp }}\playout-test
         run: |
-          $p = Start-Process -FilePath build/dist/Playout/Playout.exe -WorkingDirectory build/dist/Playout -PassThru
+          $p = Start-Process -FilePath build/dist/Playout/Playout.exe -ArgumentList "--headless" -PassThru
           $ok = $false
           for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 2
             try { $r = Invoke-RestMethod http://localhost:8080/api/state; if ($r.output) { $ok = $true; break } } catch {}
           }
-          Invoke-WebRequest http://localhost:8080/ -UseBasicParsing | Select-Object -ExpandProperty StatusCode
-          Stop-Process -Id $p.Id -Force
-          Remove-Item build/dist/Playout/config.json, build/dist/Playout/data, build/dist/Playout/logs, build/dist/Playout/media -Recurse -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Content "$env:PLAYOUT_HOME\logs\playout.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
           if (-not $ok) { throw "Playout.exe did not start" }
           "Playout.exe started and answered on port 8080"
-      - name: Add folders and readme
+      - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force build/dist/Playout/media, build/dist/Playout/data, build/dist/Playout/logs | Out-Null
-          Copy-Item README.md build/dist/Playout/
-          Compress-Archive -Path build/dist/Playout -DestinationPath Playout-windows.zip
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" build\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-Item build\output\Playout-Setup.exe | Select-Object Name, Length
+      - name: Test installer (silent install, start, uninstall)
+        shell: pwsh
+        run: |
+          Start-Process build\output\Playout-Setup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          $exe = "$env:ProgramFiles\Playout\Playout.exe"
+          if (-not (Test-Path $exe)) { throw "Playout.exe not installed" }
+          $p = Start-Process -FilePath $exe -ArgumentList "--headless" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-RestMethod http://localhost:8080/api/state; if ($r.output) { $ok = $true; break } } catch {}
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "Installed Playout.exe did not start" }
+          Start-Process "$env:ProgramFiles\Playout\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES" -Wait
+          "Installer OK: installed, started, uninstalled"
       - uses: actions/upload-artifact@v4
         with:
-          name: Playout-windows
-          path: Playout-windows.zip
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: Playout-windows.zip
+          name: Playout-Setup
+          path: build/output/Playout-Setup.exe

@@ -1,12 +1,21 @@
-# PyInstaller spec: builds dist/Playout/Playout.exe (one folder, starts fast)
+# PyInstaller spec: builds dist/Playout/Playout.exe (windowed desktop app, one folder)
+import sys
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hidden = [("../web", "web")], [], []
-for pkg in ("cyndilib", "av", "imageio_ffmpeg"):
-    d, b, h = collect_all(pkg)
+pkgs = ["cyndilib", "av", "imageio_ffmpeg"]
+if sys.platform == "win32":
+    pkgs += ["webview", "clr_loader", "pythonnet"]
+for pkg in pkgs:
+    try:
+        d, b, h = collect_all(pkg)
+    except Exception:
+        continue
     datas += d; binaries += b; hidden += h
+hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths"]
 
-a = Analysis(["../app.py"], pathex=[".."], binaries=binaries, datas=datas, hiddenimports=hidden)
+a = Analysis(["../desktop.py"], pathex=[".."], binaries=binaries, datas=datas, hiddenimports=hidden)
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Playout", console=True, icon=None)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Playout",
+          console=False, icon="playout.ico")
 coll = COLLECT(exe, a.binaries, a.datas, name="Playout")
