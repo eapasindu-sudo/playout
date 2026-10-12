@@ -34,9 +34,11 @@ Name: "{userdocs}\Playout\media"
 
 [Icons]
 Name: "{group}\Playout"; Filename: "{app}\Playout.exe"
+Name: "{group}\CG Composer"; Filename: "{app}\Playout.exe"; Parameters: "--composer"
 Name: "{group}\Playout media folder"; Filename: "{userdocs}\Playout\media"
 Name: "{group}\Uninstall Playout"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Playout"; Filename: "{app}\Playout.exe"; Tasks: desktopicon
+Name: "{autodesktop}\CG Composer"; Filename: "{app}\Playout.exe"; Parameters: "--composer"; Tasks: desktopicon
 
 [Run]
 ; let NDI and the remote control page through Windows Firewall without a prompt

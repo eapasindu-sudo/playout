@@ -17,6 +17,8 @@ from werkzeug.utils import secure_filename
 from audio_out import AudioOut
 from capture import list_capture_devices
 from cg import CG_EXT, CGManager, cg_preview, list_cg
+from cgedit import PRESET_EXT, list_presets, make_blueprint, read_cgp
+import media as media_mod
 from engine import Engine
 from system import SystemMonitor
 from media import MEDIA_EXT, list_media, thumbnail
@@ -52,6 +54,7 @@ def load_config():
 
 
 cfg = load_config()
+media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
 store = Store(cfg["data_dir"])
 engine = Engine(cfg, cfg["media_dir"], cfg["log_dir"])
 scheduler = Scheduler(engine)
@@ -63,11 +66,25 @@ audio_out = AudioOut()
 engine.audio_out = audio_out
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 app = Flask(__name__, static_folder=None)
+app.register_blueprint(make_blueprint(lambda: cfg["cg_dir"], lambda: (engine.width, engine.height),
+                                      lambda: engine.last_frame))
+fullscreen_on = False
+fullscreen_hook = None   # set by the desktop app: fn(on, screen) opens / closes the full screen output window
 
 
 @app.get("/")
 def index():
     return send_from_directory(os.path.join(BUNDLE, "web"), "index.html")
+
+
+@app.get("/cgedit")
+def cgedit_page():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "cgedit.html")
+
+
+@app.get("/output")
+def output_page():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "output.html")
 
 
 # ---- state & transport -------------------------------------------------
@@ -80,13 +97,17 @@ def state():
 def transport(action):
     body = request.get_json(silent=True) or {}
     if action == "play":
-        engine.play(body.get("id"))
+        engine.take_item(body["id"]) if body.get("id") else engine.play()
     elif action == "pause":
         engine.pause()
     elif action == "stop":
         engine.stop()
     elif action == "next":
-        engine.next()
+        engine.take_next()
+    elif action == "live":
+        engine.take_live()
+    elif action == "stinger":
+        engine.stinger_take(body.get("id"))
     elif action == "cue":
         engine.cue(body.get("id"))
     else:
@@ -163,6 +184,65 @@ def preview_stream():
             yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
             time.sleep(0.1)
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/output.mjpg")
+def output_stream():
+    """Full-size program pictures at the output frame rate, for the full screen output window."""
+    w = max(320, min(engine.width, int(request.args.get("w") or engine.width)))
+    q = max(50, min(95, int(request.args.get("q") or 85)))
+
+    def gen():
+        last = None
+        period = 1.0 / float(engine.fps)
+        while True:
+            frame = engine.last_frame
+            if frame is last:
+                time.sleep(period / 4)
+                continue
+            last = frame
+            img = Image.frombuffer("RGB", (engine.width, engine.height), frame, "raw", "BGRX", 0, 1)
+            if w != engine.width:
+                img = img.resize((w, int(w * engine.height / engine.width)), Image.BILINEAR)
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=q)
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n"
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/screens")
+def screens():
+    try:
+        import webview
+        return jsonify([{"index": i, "width": sc.width, "height": sc.height, "x": sc.x, "y": sc.y}
+                        for i, sc in enumerate(webview.screens)])
+    except Exception:
+        return jsonify([])
+
+
+@app.post("/api/fullscreen")
+def fullscreen():
+    """Program output full screen on a display of this PC (desktop app only)."""
+    body = request.get_json(silent=True) or {}
+    global fullscreen_on
+    if fullscreen_hook is None:
+        return jsonify(ok=False, error="browser")
+    try:
+        fullscreen_hook(bool(body.get("on")), body.get("screen"))
+        fullscreen_on = bool(body.get("on"))
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+    return jsonify(ok=True, on=fullscreen_on)
+
+
+# ---- stinger -----------------------------------------------------------
+@app.route("/api/stinger", methods=["GET", "POST"])
+def stinger():
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        st = engine.set_stinger(b.get("file"), b.get("cut"), b.get("auto"))
+        store.set(stinger=st)
+    return jsonify(engine.stinger)
 
 
 # ---- live input --------------------------------------------------------
@@ -272,9 +352,9 @@ def stream_all(action):
 @app.get("/trigger/<action>")
 def trigger(action):
     actions = {"play": engine.play, "pause": engine.pause, "stop": engine.stop,
-               "live": engine.stop, "next": engine.next}
+               "live": engine.take_live, "next": engine.take_next, "stinger": engine.stinger_take}
     if action not in actions:
-        return "Unknown action. Use play, pause, stop, live or next.", 404
+        return "Unknown action. Use play, pause, stop, live, next or stinger.", 404
     actions[action]()
     return "OK"
 
@@ -323,9 +403,18 @@ def cg_upload():
     saved = []
     for f in request.files.getlist("files"):
         name = secure_filename(f.filename or "")
-        if name and os.path.splitext(name)[1].lower() in CG_EXT:
+        ext = os.path.splitext(name)[1].lower()
+        if name and ext in CG_EXT:
             f.save(os.path.join(cfg["cg_dir"], name))
             saved.append(name)
+        elif name and ext == PRESET_EXT:      # CG Composer preset: unpack its media next to it
+            path = os.path.join(cfg["cg_dir"], name)
+            f.save(path)
+            try:
+                read_cgp(path, cfg["cg_dir"])
+                saved.append(name)
+            except Exception:
+                os.remove(path)
     return jsonify(saved=saved)
 
 
@@ -388,6 +477,8 @@ def start_backend():
     engine.on_change = lambda items: store.set(playlist=items)
     engine.set_live_source(cfg.get("live_source") or store.data.get("live_source"))
     streamer.load(store.data.get("stream_destinations"))
+    st = store.data.get("stinger") or {}
+    engine.set_stinger(st.get("file"), st.get("cut"), st.get("auto"))
     saved = store.data.get("stream_settings") or {}
     if saved:
         streamer.apply_settings(saved.get("resolution"), saved.get("video_kbps"),

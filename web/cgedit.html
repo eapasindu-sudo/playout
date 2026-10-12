@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CG Composer</title>
+<style>
+  :root { --bg:#0c0d0f; --panel:#1a1c1f; --panel2:#232529; --line:#33363b; --text:#e9eaec; --dim:#8d9299;
+          --green:#2fbf3a; --red:#e0261b; --orange:#ff8a1c; --blue:#3b82f6; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:13px/1.35 "Segoe UI", system-ui, sans-serif; display:flex; flex-direction:column; user-select:none; }
+  button { font:inherit; color:var(--text); background:linear-gradient(#45484e, #2f3236); border:1px solid #0006; border-radius:3px;
+           padding:5px 10px; cursor:pointer; box-shadow: inset 0 1px 0 #ffffff1a; white-space:nowrap; }
+  button:hover { filter:brightness(1.2); }
+  button.blue { background:linear-gradient(#4b8ff7, #2462c9); } button.red { background:linear-gradient(#f0362a, #b5170e); }
+  button.green { background:linear-gradient(#36c843, #1f8f29); }
+  button.sm { padding:2px 8px; font-size:11px; }
+  button.sel { box-shadow: inset 0 -3px 0 var(--orange), inset 0 1px 0 #ffffff1a; }
+  input, select { font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:4px 6px; }
+  input[type=number] { width:78px; text-align:right; }
+  input[type=range] { width:100%; accent-color:var(--blue); }
+  .bar { display:flex; gap:8px; align-items:center; padding:8px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .bar .t { font-weight:700; font-size:15px; }
+  .main { flex:1; display:grid; grid-template-columns: 170px minmax(0,1fr); min-height:0; }
+  .side { background:#0f1012; border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  .side button { background:none; border:0; border-radius:0; box-shadow:none; text-align:left; padding:10px 14px; color:#cfd2d6; }
+  .side button.sel { background:#1f6f2a; color:#fff; }
+  .right { display:flex; flex-direction:column; min-height:0; }
+  .settings { background:var(--panel); padding:12px 16px; border-bottom:1px solid var(--line); overflow:auto; max-height:52%; }
+  .grid { display:grid; grid-template-columns: 120px minmax(120px,1fr) 84px 54px; gap:6px 10px; align-items:center; }
+  .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:4px 28px; }
+  .lbl { text-align:right; color:#cfd2d6; }
+  .hint { color:var(--dim); font-size:11px; }
+  .form { display:grid; grid-template-columns: 120px 1fr; gap:8px 10px; align-items:center; max-width:720px; }
+  .pv { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#16181b; padding:10px; position:relative; }
+  .stage { position:relative; height:100%; max-width:100%; aspect-ratio:16/9; }
+  .stage img { width:100%; height:100%; display:block; }
+  .stage .box { position:absolute; outline:1px dashed var(--orange); cursor:move; }
+  .stage.pick, .stage.pick .box { cursor:crosshair; }
+  .pvbar { display:flex; gap:8px; align-items:center; padding:6px 12px; background:var(--panel); border-top:1px solid var(--line); }
+  .swatch { width:34px; height:28px; border:1px solid #000; border-radius:3px; }
+  .pane { display:none; } .pane.on { display:block; }
+  .presets { display:flex; gap:6px; flex-wrap:wrap; }
+  .busy { position:absolute; right:16px; top:14px; color:var(--dim); font-size:11px; }
+  .err { color:#ff6b5f; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="t" id="title">CG Composer</span>
+  <span class="hint" id="fileInfo"></span>
+  <span style="flex:1"></span>
+  <span id="composerBtns" style="display:none; gap:6px">
+    <button onclick="$('upFile').click()">Open file / .cgp</button>
+    <button class="green" onclick="savePreset()" title="Save as .cgp into the Playout CG library">Save to Playout</button>
+    <button onclick="exportCgp()" title="Save a .cgp file anywhere (to copy to another PC)">Export .cgp</button>
+  </span>
+  <span id="embedBtns" style="display:none; gap:6px">
+    <button onclick="$('upFile').click()" title="Load a .cgp made in CG Composer">Load .cgp</button>
+    <button onclick="exportCgp()">Export .cgp</button>
+    <button class="red" id="bDel" onclick="send('delete')">Delete</button>
+    <button onclick="send('cancel')">Cancel</button>
+    <button class="blue" onclick="send('save')">Save</button>
+  </span>
+  <input type="file" id="upFile" accept=".cgp,.png,.jpg,.jpeg,.tga,.bmp,.gif,.webp,.mov,.mp4,.webm,.avi,.mkv,.mxf" style="display:none" onchange="importFile(this)">
+</div>
+<div class="main">
+  <div class="side">
+    <button data-tab="gen" class="sel" onclick="tab('gen')">General</button>
+    <button data-tab="key" onclick="tab('key')">Colour Key</button>
+    <button data-tab="pos" onclick="tab('pos')">Position</button>
+    <span style="flex:1"></span>
+    <button onclick="resetAll()" style="text-align:center; border-top:1px solid var(--line)">Reset All</button>
+  </div>
+  <div class="right">
+    <div class="settings">
+      <!-- General -->
+      <div class="pane on" id="p_gen">
+        <div class="form">
+          <span class="lbl">CG file</span>
+          <span style="display:flex; gap:6px"><select id="file" style="flex:1" onchange="fileChanged()"></select><button class="sm" onclick="loadFiles()">&#10227;</button></span>
+          <span class="lbl">Name</span><input id="name" placeholder="e.g. Lower third - guest" oninput="dirty()">
+          <span class="lbl">Fade</span><span><input id="fade" type="number" min="0" max="100" oninput="dirty()"> frames in / out (0 = cut)</span>
+          <span class="lbl vid">Video CG</span><label class="vid"><input type="checkbox" id="loop" onchange="dirty()"> Loop (otherwise it takes itself out at the end)</label>
+          <span class="lbl man">Show</span><label class="man"><input type="checkbox" id="live_only" onchange="dirty()"> Only on live (hide while a commercial plays)</label>
+          <span class="lbl card">Delay</span><span class="card"><input id="delay" type="number" min="0" step="0.5" oninput="dirty()"> seconds after the live card starts</span>
+          <span class="lbl card">On for</span><span class="card"><input id="duration" type="number" min="0" step="0.5" oninput="dirty()"> seconds (empty = whole card)</span>
+          <span></span><span class="hint">PNG and QuickTime (ProRes 4444 / Animation) keep their own transparency. For JPEG or MP4 on a green or blue screen, use <b>Colour Key</b>.</span>
+        </div>
+      </div>
+      <!-- Colour key -->
+      <div class="pane" id="p_key">
+        <div style="display:flex; gap:14px; align-items:center; margin-bottom:10px; flex-wrap:wrap">
+          <label><input type="radio" name="key" value="none" onchange="keyChanged()"> No key</label>
+          <label><input type="radio" name="key" value="chroma" onchange="keyChanged()"> Colour key (green / blue screen)</label>
+          <label><input type="radio" name="key" value="luma" onchange="keyChanged()"> Luma key (black background)</label>
+        </div>
+        <div id="chromaBox">
+          <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap">
+            <span class="lbl" style="width:120px">Key colour</span>
+            <input type="color" id="key_color" class="swatch" oninput="dirty()">
+            <button id="bPick" onclick="startPick()" title="Click on the preview to pick the background colour">&#128396; Pick from picture</button>
+            <button class="sm" onclick="setColor('#00ff00')">Green</button>
+            <button class="sm" onclick="setColor('#0000ff')">Blue</button>
+            <span style="width:20px"></span>
+            <span class="hint">Auto presets</span>
+            <button class="sm" onclick="keyPreset(1)">1</button><button class="sm" onclick="keyPreset(2)">2</button><button class="sm" onclick="keyPreset(3)">3</button>
+          </div>
+          <div class="grid" id="chromaGrid"></div>
+        </div>
+        <div id="lumaBox"><div class="grid" id="lumaGrid"></div></div>
+      </div>
+      <!-- Position -->
+      <div class="pane" id="p_pos">
+        <div class="grid2">
+          <div class="grid" id="posGrid"></div>
+          <div class="grid" id="cropGrid"></div>
+        </div>
+        <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center">
+          <span class="hint" style="width:120px; text-align:right">Quick place</span>
+          <span class="presets">
+            <button class="sm" onclick="place('full')">Full screen</button><button class="sm" onclick="place('center')">Centre</button>
+            <button class="sm" onclick="place('tl')">Top left</button><button class="sm" onclick="place('tr')">Top right</button>
+            <button class="sm" onclick="place('bl')">Bottom left</button><button class="sm" onclick="place('br')">Bottom right</button>
+            <button class="sm" onclick="place('lt')">Lower third</button><button class="sm" onclick="rot90()">Rotate 90&deg;</button>
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="pv" id="pv">
+      <div class="stage" id="stage"><img id="img" alt=""><div class="box" id="box"></div></div>
+      <span class="busy" id="busy"></span>
+    </div>
+    <div class="pvbar">
+      <span class="hint">Background</span>
+      <select id="bg" onchange="render()"><option value="checker">Transparent (checker)</option><option value="black">Black</option><option value="program" id="bgProg">Current program</option></select>
+      <span class="vid hint">Video time</span><input class="vid" id="t" type="range" min="0" max="10" step="0.04" value="0" style="width:200px" onchange="render()">
+      <span class="vid hint mono" id="tv">0.0s</span>
+      <span style="flex:1"></span>
+      <span class="hint" id="out"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const Q = new URLSearchParams(location.search);
+let MODE = Q.get('mode') || 'composer';         // composer | manual | card
+const EMBED = Q.has('embed');
+let W = 1920, H = 1080, files = [], info = {w:1920, h:1080, kind:'image'}, cfg = {}, timer = null, picking = false, box = null;
+
+const DEF = {x:0, y:0, zoom:100, zoom_x:1, zoom_y:1, rotate:0, crop:[], fade:8, loop:true, live_only:false, delay:0, duration:null,
+             key:'none', key_color:'#00ff00', key_similarity:25, key_blend:15, key_spill:0, luma_threshold:10, luma_softness:5};
+// [id, label, min, max, step, default]
+const CHROMA = [['key_similarity', 'Chroma Key', 0, 100, 1, 25], ['key_blend', 'Edge softness', 0, 100, 1, 15], ['key_spill', 'Spill removal', 0, 100, 1, 0]];
+const LUMA = [['luma_threshold', 'Luma Key', 0, 100, 1, 10], ['luma_softness', 'Softness', 0, 100, 1, 5]];
+const POS = [['zoom', 'Zoom %', 1, 400, 1, 100], ['zoom_x', 'Zoom X', 0.1, 3, 0.01, 1], ['zoom_y', 'Zoom Y', 0.1, 3, 0.01, 1],
+             ['x', 'Pan X', -1920, 1920, 1, 0], ['y', 'Pan Y', -1080, 1080, 1, 0], ['rotate', 'Rotate', -180, 180, 0.5, 0]];
+const CROP = [['c0', 'Crop X1', 0, 1920, 1, 0], ['c1', 'Crop Y1', 0, 1080, 1, 0], ['c2', 'Crop X2', 0, 1920, 1, 1920], ['c3', 'Crop Y2', 0, 1080, 1, 1080]];
+
+function sliders(el, list) {
+  $(el).innerHTML = list.map(([id, l, mn, mx, st, d]) => `
+    <span class="lbl"><b>${l}</b></span>
+    <input type="range" id="r_${id}" min="${mn}" max="${mx}" step="${st}" oninput="$('n_${id}').value=this.value; fromUI()">
+    <input type="number" id="n_${id}" min="${mn}" max="${mx}" step="${st}" oninput="$('r_${id}').value=this.value; fromUI()">
+    <button class="sm" onclick="resetOne('${id}', ${d})">Reset</button>`).join('');
+}
+sliders('chromaGrid', CHROMA); sliders('lumaGrid', LUMA); sliders('posGrid', POS); sliders('cropGrid', CROP);
+const setNum = (id, v) => { if ($('n_' + id)) { $('n_' + id).value = v; $('r_' + id).value = v; } };
+const num = id => parseFloat($('n_' + id).value);
+
+function tab(t) {
+  document.querySelectorAll('.side button[data-tab]').forEach(b => b.classList.toggle('sel', b.dataset.tab === t));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === 'p_' + t));
+}
+function show() {
+  document.querySelectorAll('.man').forEach(e => e.style.display = MODE === 'manual' ? '' : 'none');
+  document.querySelectorAll('.card').forEach(e => e.style.display = MODE === 'card' ? '' : 'none');
+  document.querySelectorAll('.vid').forEach(e => e.style.display = info.kind === 'video' ? '' : 'none');
+  const key = cfg.key || 'none';
+  $('chromaBox').style.display = key === 'chroma' ? '' : 'none';
+  $('lumaBox').style.display = key === 'luma' ? '' : 'none';
+  $('composerBtns').style.display = EMBED ? 'none' : 'inline-flex';
+  $('embedBtns').style.display = EMBED ? 'inline-flex' : 'none';
+  $('bgProg').disabled = !EMBED;
+  $('title').textContent = EMBED ? (MODE === 'card' ? 'Live card CG' : 'Manual CG') : 'CG Composer';
+}
+
+// cfg <-> controls
+function toUI() {
+  const c = cfg;
+  $('file').value = c.file || '';
+  $('name').value = c.name || ''; $('fade').value = c.fade ?? 8; $('loop').checked = c.loop !== false;
+  $('live_only').checked = !!c.live_only; $('delay').value = c.delay || ''; $('duration').value = c.duration || '';
+  document.querySelectorAll('input[name=key]').forEach(r => r.checked = r.value === (c.key || 'none'));
+  $('key_color').value = c.key_color || '#00ff00';
+  [...CHROMA, ...LUMA, ...POS].forEach(([id, , , , , d]) => setNum(id, c[id] ?? d));
+  const cr = c.crop && c.crop.length === 4 ? c.crop : [0, 0, info.w, info.h];
+  ['c0', 'c1', 'c2', 'c3'].forEach((id, i) => { $('r_' + id).max = $('n_' + id).max = i % 2 ? info.h : info.w; setNum(id, cr[i]); });
+  show();
+}
+function fromUI() {
+  const c = cfg;
+  c.file = $('file').value; c.name = $('name').value.trim();
+  c.fade = Math.max(0, parseInt($('fade').value || 0)); c.loop = $('loop').checked;
+  if (MODE === 'manual') c.live_only = $('live_only').checked;
+  if (MODE === 'card') { c.delay = parseFloat($('delay').value) || 0; c.duration = parseFloat($('duration').value) || null; }
+  c.key = (document.querySelector('input[name=key]:checked') || {}).value || 'none';
+  c.key_color = $('key_color').value;
+  [...CHROMA, ...LUMA, ...POS].forEach(([id, , , , , d]) => { const v = num(id); c[id] = isNaN(v) ? d : v; });
+  c.x = Math.round(c.x); c.y = Math.round(c.y);
+  const cr = ['c0', 'c1', 'c2', 'c3'].map(num);
+  c.crop = (cr[0] > 0 || cr[1] > 0 || cr[2] < info.w || cr[3] < info.h) ? cr.map(Math.round) : [];
+  show(); render();
+}
+const dirty = () => fromUI();
+function keyChanged() { fromUI(); }
+function setColor(c) { $('key_color').value = c; fromUI(); }
+function keyPreset(n) {
+  const p = {1: [25, 15, 0], 2: [35, 25, 40], 3: [18, 8, 20]}[n];
+  if (!cfg.key || cfg.key === 'none') document.querySelector('input[name=key][value=chroma]').checked = true;
+  CHROMA.forEach(([id], i) => setNum(id, p[i])); fromUI();
+}
+function resetOne(id, d) { if (id[0] === 'c' && id.length === 2) d = [0, 0, info.w, info.h][+id[1]]; setNum(id, d); fromUI(); }
+function resetAll() { const keep = {file: cfg.file, name: cfg.name}; cfg = {...DEF, ...keep}; toUI(); render(); }
+
+// files
+async function loadFiles() {
+  try { files = await (await fetch('/api/cg/files')).json(); } catch (e) { files = []; }
+  const cur = cfg.file;
+  $('file').innerHTML = (files.length ? '' : '<option value="">(no CG files yet: open one)</option>') +
+    files.map(f => `<option value="${f.name.replace(/"/g, '&quot;')}">${f.name}</option>`).join('');
+  if (cur && files.some(f => f.name === cur)) $('file').value = cur;
+  else if (!cur && files.length) { cfg.file = files[0].name; $('file').value = cfg.file; await fileChanged(true); }
+}
+async function fileChanged(fresh) {
+  cfg.file = $('file').value; if (!cfg.file) return;
+  try { info = await (await fetch('/api/cgfx/info?file=' + encodeURIComponent(cfg.file))).json(); } catch (e) {}
+  $('fileInfo').textContent = `${cfg.file}  ${info.w}x${info.h}${info.duration ? ', ' + info.duration.toFixed(1) + 's' : ''}${info.alpha ? ', has alpha' : ''}`;
+  $('t').max = Math.max(0.04, (info.duration || 0) - 0.04);
+  if (fresh === true) { cfg.crop = []; if (info.w >= W * 0.9) { place('full', true); } }
+  toUI(); render();
+}
+async function importFile(input) {
+  const f = input.files[0]; if (!f) return; input.value = '';
+  const fd = new FormData(); fd.append('file', f);
+  $('busy').textContent = 'Loading ' + f.name + '...';
+  const r = await (await fetch('/api/cgfx/import', {method:'POST', body:fd})).json();
+  $('busy').textContent = '';
+  if (r.error) { alertBox(r.error); return; }
+  const keep = EMBED ? {id: cfg.id, live_only: cfg.live_only} : {};
+  cfg = {...DEF, ...r.cfg, ...keep};
+  await loadFiles(); $('file').value = cfg.file; await fileChanged(!r.cfg.x && r.cfg.x !== 0);
+}
+
+// preview
+function render() {
+  clearTimeout(timer);
+  timer = setTimeout(doRender, 90);
+}
+let rendering = false, again = false;
+async function doRender() {
+  if (!cfg.file) return;
+  if (rendering) { again = true; return; }
+  rendering = true; $('busy').textContent = 'rendering...';
+  try {
+    const body = {cfg: picking ? {...cfg, key:'none'} : cfg, t: +$('t').value, bg: picking ? 'black' : $('bg').value, w: 960};
+    const r = await fetch('/api/cgfx/render', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if (!r.ok) { const e = await r.json().catch(() => ({})); $('busy').innerHTML = '<span class="err">' + (e.error || 'cannot render') + '</span>'; return; }
+    box = JSON.parse(r.headers.get('X-CG-Box') || 'null');
+    const url = URL.createObjectURL(await r.blob());
+    const old = $('img').src; $('img').src = url; if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+    drawBox();
+    $('busy').textContent = '';
+    $('tv').textContent = (+$('t').value).toFixed(2) + 's';
+    $('out').textContent = box ? `On screen: ${box[2]}x${box[3]} at ${box[0]}, ${box[1]}  (output ${W}x${H})` : 'Nothing visible (fully keyed out?)';
+  } finally {
+    rendering = false;
+    if (again) { again = false; doRender(); }
+  }
+}
+function drawBox() {
+  const b = $('box');
+  if (!box || picking) { b.style.display = 'none'; return; }
+  const k = $('stage').clientWidth / W;
+  Object.assign(b.style, {display:'block', left: box[0] * k + 'px', top: box[1] * k + 'px', width: box[2] * k + 'px', height: box[3] * k + 'px'});
+}
+window.addEventListener('resize', drawBox);
+
+// drag to move
+(function drag() {
+  let d = null;
+  $('box').addEventListener('pointerdown', e => { if (picking) return; d = {x:e.clientX, y:e.clientY, X:cfg.x || 0, Y:cfg.y || 0, bx:box[0], by:box[1]}; $('box').setPointerCapture(e.pointerId); });
+  $('box').addEventListener('pointermove', e => {
+    if (!d) return; const k = W / $('stage').clientWidth;
+    const dx = Math.round((e.clientX - d.x) * k), dy = Math.round((e.clientY - d.y) * k);
+    setNum('x', d.X + dx); setNum('y', d.Y + dy);
+    box[0] = d.bx + dx; box[1] = d.by + dy; drawBox();
+  });
+  $('box').addEventListener('pointerup', () => { if (d) { d = null; fromUI(); } });
+})();
+
+// eyedropper: show the unkeyed picture, click the background colour
+function startPick() { picking = true; $('stage').classList.add('pick'); $('bPick').classList.add('sel'); doRender(); }
+$('stage').addEventListener('click', e => {
+  if (!picking) return;
+  const img = $('img'), c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+  const r = img.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) * c.width / r.width), y = Math.floor((e.clientY - r.top) * c.height / r.height);
+  const p = g.getImageData(Math.max(0, x - 1), Math.max(0, y - 1), 3, 3).data;
+  let rr = 0, gg = 0, bb = 0; for (let i = 0; i < p.length; i += 4) { rr += p[i]; gg += p[i + 1]; bb += p[i + 2]; }
+  const hex = '#' + [rr, gg, bb].map(v => Math.round(v / 9).toString(16).padStart(2, '0')).join('');
+  picking = false; $('stage').classList.remove('pick'); $('bPick').classList.remove('sel');
+  document.querySelector('input[name=key][value=chroma]').checked = true;
+  setColor(hex);
+});
+
+function place(p, quiet) {
+  const cr = cfg.crop && cfg.crop.length === 4 ? cfg.crop : [0, 0, info.w, info.h];
+  const cw = cr[2] - cr[0], ch = cr[3] - cr[1], m = Math.round(W * 0.05);
+  let z = cfg.zoom || 100;
+  if (p === 'full') z = Math.round(Math.min(W / info.w, H / info.h) * 1000) / 10;
+  const sx = z / 100 * (cfg.zoom_x || 1), sy = z / 100 * (cfg.zoom_y || 1);
+  const w = cw * sx, h = ch * sy, ox = cr[0] * sx, oy = cr[1] * sy;   // visible part and its offset inside the CG
+  const at = {full: [(W - info.w * sx) / 2 + ox, (H - info.h * sy) / 2 + oy], center: [(W - w) / 2, (H - h) / 2], tl: [m, m], tr: [W - w - m, m],
+              bl: [m, H - h - m], br: [W - w - m, H - h - m], lt: [m, H - h - Math.round(H * 0.08)]}[p];
+  setNum('zoom', z); setNum('x', Math.round(at[0] - ox)); setNum('y', Math.round(at[1] - oy));
+  if (!quiet) fromUI(); else Object.assign(cfg, {zoom: z, x: Math.round(at[0] - ox), y: Math.round(at[1] - oy)});
+}
+function rot90() { setNum('rotate', ((num('rotate') + 90 + 180) % 360) - 180); fromUI(); }
+
+// saving
+async function savePreset() {
+  fromUI(); if (!cfg.file) return;
+  const r = await (await fetch('/api/cgfx/save_preset', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)})).json();
+  alertBox(r.saved ? `Saved "${r.saved}" to the Playout CG library.\nIn Playout: CG Library tab > + Manual, or add it to a live card.` : (r.error || 'Could not save'));
+}
+async function exportCgp() {
+  fromUI(); if (!cfg.file) return;
+  if (window.pywebview?.api?.export_cgp) { const r = await window.pywebview.api.export_cgp(cfg); if (r) alertBox('Saved ' + r); return; }
+  const r = await fetch('/api/cgfx/export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
+  a.download = (cfg.name || cfg.file.replace(/\.[^.]+$/, '')) + '.cgp'; a.click();
+}
+function alertBox(msg) { if (EMBED) parent.postMessage({type:'cg-alert', msg}, '*'); else alert(msg); }
+
+// embedded in Playout: the parent sends the CG and gets it back on Save
+function send(type) { fromUI(); parent.postMessage({type:'cg-' + type, cfg}, '*'); }
+window.addEventListener('message', async e => {
+  const m = e.data || {};
+  if (m.type !== 'cg-load') return;
+  MODE = m.mode || MODE; W = m.width || W; H = m.height || H;
+  cfg = {...DEF, ...(m.cfg || {})};
+  $('bDel').style.display = m.canDelete ? '' : 'none';
+  $('bg').value = 'program';
+  tab('gen'); await loadFiles();
+  if (m.cfg && m.cfg.file) { $('file').value = m.cfg.file; await fileChanged(false); }
+  else if (cfg.file) await fileChanged(true);
+  show();
+});
+
+(async function init() {
+  try { const s = await (await fetch('/api/cgfx/size')).json(); W = s.width; H = s.height; } catch (e) {}
+  cfg = {...DEF};
+  show();
+  if (EMBED) { parent.postMessage({type:'cg-ready'}, '*'); return; }
+  await loadFiles();
+  if (cfg.file) await fileChanged(true);
+})();
+</script>
+</body>
+</html>

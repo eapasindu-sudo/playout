@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Playout output</title>
+<style>
+  html, body { margin:0; height:100%; background:#000; overflow:hidden; cursor:none; }
+  img { width:100%; height:100%; object-fit:contain; display:block; }
+</style>
+</head>
+<body>
+<img id="o" alt="">
+<script>
+// Program output for a second display. Esc closes it.
+const w = new URLSearchParams(location.search).get('w') || '';
+const o = document.getElementById('o');
+const load = () => { o.src = '/api/output.mjpg?w=' + w + '&t=' + Date.now(); };
+o.onerror = () => setTimeout(load, 1000);
+load();
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') fetch('/api/fullscreen', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{"on":false}'});
+});
+</script>
+</body>
+</html>

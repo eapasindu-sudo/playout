@@ -20,6 +20,24 @@ import numpy as np
 from ndi_io import CHANNELS, SAMPLE_RATE, fit_audio
 
 
+def make_bars(width, height):
+    """SMPTE-style colour bars as a flat BGRA frame."""
+    cols = [(192, 192, 192), (0, 192, 192), (192, 192, 0), (0, 192, 0),
+            (192, 0, 192), (0, 0, 192), (192, 0, 0)]   # BGR: white yellow cyan green magenta red blue
+    img = np.zeros((height, width, 4), np.uint8)
+    img[..., 3] = 255
+    w = width / 7
+    for i, (b, g, r) in enumerate(cols):
+        img[: height * 2 // 3, int(i * w):int((i + 1) * w), :3] = (b, g, r)
+    rev = [(192, 0, 0), (16, 16, 16), (192, 0, 192), (16, 16, 16), (0, 192, 192), (16, 16, 16), (192, 192, 192)]
+    for i, (b, g, r) in enumerate(rev):
+        img[height * 2 // 3: height * 3 // 4, int(i * w):int((i + 1) * w), :3] = (b, g, r)
+    q = width / 6
+    for i, v in enumerate([(106, 33, 0), (235, 235, 235), (107, 0, 50), (16, 16, 16), (16, 16, 16), (16, 16, 16)]):
+        img[height * 3 // 4:, int(i * q):int((i + 1) * q), :3] = v
+    return img.reshape(-1)
+
+
 def list_capture_devices(ffmpeg=None):
     """[{name, kind: video|audio}] for capture devices on this PC."""
     out = []
@@ -95,15 +113,7 @@ class CaptureInput:
         return time.time() - self._last_frame_time < 1.0
 
     def _make_bars(self):
-        cols = [(192, 192, 192), (0, 192, 192), (192, 192, 0), (0, 192, 0),
-                (192, 0, 192), (0, 0, 192), (192, 0, 0)]   # BGR: white yellow cyan green magenta red blue
-        img = np.zeros((self.height, self.width, 4), np.uint8)
-        img[..., 3] = 255
-        w = self.width / 7
-        for i, (b, g, r) in enumerate(cols):
-            img[: self.height * 3 // 4, int(i * w):int((i + 1) * w), :3] = (b, g, r)
-        img[self.height * 3 // 4:, :, :3] = 16
-        return img.reshape(-1)
+        return make_bars(self.width, self.height)
 
     def _run(self):
         while not self._stop.is_set():

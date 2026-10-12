@@ -20,7 +20,7 @@ from fractions import Fraction
 import numpy as np
 
 from media import ClipPlayer, probe
-from capture import CaptureInput
+from capture import CaptureInput, make_bars
 from ndi_io import CHANNELS, SAMPLE_RATE, LiveInput, NDIOutput, SourceFinder
 
 FADE = 480  # 10 ms audio fade at every cut, avoids clicks
@@ -102,6 +102,11 @@ class Engine:
         self.cg = None               # CGManager keyed over the program
         self.inputs = {}             # extra live sources used by live cards: key -> input
         self._main_wanted = True
+        self.idle = "live"           # what goes on air when stopped: "live" (TAKE LIVE) or "bars" (Stop)
+        self.bars = make_bars(self.width, self.height)
+        self.stinger = {"file": "", "cut": 0.0, "auto": False}   # cut 0 = half of the stinger's length
+        self._pending = None         # [frames left, action, item id]: switch at the stinger's cut point
+        self._stinger_item = None    # on-air item whose end already got its stinger
         self._running = False
         self._thread = None
 
@@ -198,14 +203,74 @@ class Engine:
                 self._changed()
 
     def stop(self):
-        """Stop the playlist and put LIVE on air (the safe fallback)."""
+        """Stop the playlist and put colour bars on air."""
         with self._lock:
             nxt = self._next_id()
             self._finish("stopped")
             self._stop_to_live()
+            self.idle = "bars"
+            self._pending = None
             self.cued = nxt
-            self.message = "Stopped - live on air"
+            self.message = "Stopped - colour bars on air"
             self._changed()
+
+    def take_live(self):
+        """Stop the playlist and put the live feed on air at once."""
+        with self._lock:
+            nxt = self._next_id() if self.on_air else self.cued
+            self._finish("stopped")
+            self._stop_to_live()
+            self.idle = "live"
+            self._pending = None
+            self.cued = nxt
+            self.message = "Live on air"
+            self._changed()
+
+    # -- stinger transitions -------------------------------------------
+    def set_stinger(self, file=None, cut=None, auto=None):
+        with self._lock:
+            if file is not None:
+                self.stinger["file"] = file
+            if cut is not None:
+                self.stinger["cut"] = max(0.0, float(cut or 0))
+            if auto is not None:
+                self.stinger["auto"] = bool(auto)
+            return dict(self.stinger)
+
+    def _cut_frames(self):
+        cut = self.stinger.get("cut") or 0
+        if not cut:
+            from cg import cg_info
+            path = os.path.join(self.cg.folder, self.stinger["file"]) if self.cg else ""
+            d = cg_info(path).get("duration") if os.path.isfile(path) else None
+            cut = (d or 1.0) / 2
+        return max(1, int(round(cut * float(self.fps))))
+
+    def _fire_stinger(self):
+        return bool(self.cg is not None and self.stinger.get("file") and self.cg.start_stinger(self.stinger["file"]))
+
+    def stinger_take(self, item_id=None):
+        """Play the stinger now and switch to the next item (or item_id) at its cut point."""
+        with self._lock:
+            if self._pending:
+                return
+            if not self._fire_stinger():
+                self.message = "Pick a stinger file (a video CG) first"
+                return
+            self._pending = [self._cut_frames(), "play" if item_id else "next", item_id]
+
+    def take_next(self):
+        """Next button: through the stinger when 'auto stinger' is on."""
+        if self.stinger.get("auto") and self.stinger.get("file") and self.on_air:
+            self.stinger_take()
+        else:
+            self.next()
+
+    def take_item(self, item_id):
+        if self.stinger.get("auto") and self.stinger.get("file") and item_id:
+            self.stinger_take(item_id)
+        else:
+            self.play(item_id)
 
     def cue(self, item_id):
         with self._lock:
@@ -278,6 +343,7 @@ class Engine:
                 self.cg.stop_card()
         self.cued = None
         self.state = "PLAYING"
+        self.idle = "live"
         self.item_started = None
         self.item_ticks = 0
         self.message = f"On air: {item['name']}"
@@ -371,6 +437,12 @@ class Engine:
             live_v, live_a = self.live.grab(n, self._main_wanted)   # always pulled, keeps the input in sync
             video = audio = None
             source = "LIVE"
+            pend = self._pending
+            if pend:
+                pend[0] -= 1
+                if pend[0] <= 0:
+                    self._pending = None
+                    self.next() if pend[1] == "next" else self.play(pend[2])
             with self._lock:
                 if self.version != last_version:
                     last_version = self.version
@@ -382,6 +454,7 @@ class Engine:
                     self._stop_to_live()   # the on-air live card was deleted
                     self._changed()
                 if self.state == "PLAYING" and self.on_air:
+                    self._auto_stinger(item)
                     if self.player is not None and self.player.finished():
                         self._item_done()   # starts the next item in this same frame
                         item = self._item(self.on_air)
@@ -420,13 +493,18 @@ class Engine:
                     video = self.last_clip_frame if self.last_clip_frame is not None else self.black
                     audio = np.zeros((CHANNELS, n), np.float32)
                     source = "PAUSE"
+            if video is None and self.state == "STOPPED" and self.idle == "bars":
+                video, audio, source = self.bars, np.zeros((CHANNELS, n), np.float32), "BARS"
             if video is None:
                 video = live_v if live_v is not None else self.black
                 audio = live_a if live_a is not None else np.zeros((CHANNELS, n), np.float32)
             self._main_wanted = source == "LIVE"
             if self.cg is not None:
                 try:
-                    video = self.cg.render(video, source.startswith("LIVE"))
+                    video = self.cg.render(video, source.startswith("LIVE"), n)
+                    sa = self.cg.stinger_audio
+                    if sa is not None and sa.shape == audio.shape:
+                        audio = np.clip(audio + sa, -1.0, 1.0)
                 except Exception as e:
                     self.message = f"CG error: {e}"
             if source != self.last_source:
@@ -445,6 +523,24 @@ class Engine:
                 self.streamer.push(video, audio)
             if self.audio_out is not None:
                 self.audio_out.push(audio)
+
+    def _auto_stinger(self, item):
+        """Automatic mode with auto stinger: start the stinger so its cut lands on the item's last frame."""
+        if (not self.auto or not self.stinger.get("auto") or not self.stinger.get("file") or self._pending
+                or self._stinger_item == self.on_air or item is None):
+            return
+        fps = float(self.fps)
+        if self.player is not None:
+            if not self.player.ready() or not self.player.duration:
+                return
+            left = self.player.duration - self.player.position
+        elif item.get("duration"):
+            left = item["duration"] - self.item_ticks / fps
+        else:
+            return
+        if left * fps <= self._cut_frames() and self._next_id():
+            self._stinger_item = self.on_air
+            self._fire_stinger()
 
     # -- status ------------------------------------------------------------
     def snapshot(self):
@@ -513,6 +609,8 @@ class Engine:
                 "version": self.version,
                 "meters": self.meters,
                 "live_source": self.live.source_name,
+                "idle": self.idle,
+                "stinger": dict(self.stinger, active=bool(self.cg and self.cg.stinger_active)),
                 "live_connected": self.live.connected,
                 "inputs": {k: bool(getattr(v, "connected", False)) for k, v in self.inputs.items()},
                 "output": self.output.sender.ndi_name,

@@ -34,11 +34,11 @@
   .top { display:flex; align-items:center; gap:14px; padding:8px 12px; }
   .logo { font:700 26px "Segoe UI", sans-serif; letter-spacing:.5px; }
   .clockbox { background:#000; border:1px solid #444; border-radius:3px; padding:2px 14px; font:600 30px Consolas, monospace; }
-  .date { margin-left:auto; font-size:18px; }
+  .date { margin-left:auto; font-size:16px; white-space:nowrap; }
   .fmt { color:var(--dim); font-size:11px; line-height:1.3; }
 
   /* on air */
-  .onair { display:grid; grid-template-columns: 96px 112px minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px 12px; border-top:1px solid var(--line); }
+  .onair { display:grid; grid-template-columns: 112px minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px 12px; border-top:1px solid var(--line); }
   .bigbtn { height:60px; font-size:26px; padding:0; width:96px; }
   .thumb { width:112px; height:63px; background:#000 center/cover no-repeat; border:1px solid #444; border-radius:2px; position:relative; display:flex; align-items:center; justify-content:center; font-weight:700; }
   .thumb .idx { position:absolute; left:3px; bottom:1px; font-size:11px; text-shadow:0 0 3px #000; }
@@ -114,7 +114,7 @@
   .sys { display:flex; gap:10px; align-items:center; }
   .sys .m { width:92px; }
   .sys .m .t { display:flex; justify-content:space-between; font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
-  .sys .m .t b { color:var(--text); font:600 12px Consolas, monospace; }
+  .sys .m .t b { color:var(--text); font:600 12px Consolas, monospace; text-transform:none; }
   .sys .bar { height:6px; background:#050506; border:1px solid #2a2c30; border-radius:2px; overflow:hidden; margin-top:2px; }
   .sys .bar > div { height:100%; width:0; background:var(--green); transition:width .4s; }
   .sys .bar > div.warn { background:var(--yellow); } .sys .bar > div.hot { background:var(--red); }
@@ -136,6 +136,19 @@
   .cgbar { display:flex; gap:6px; padding:8px 10px 10px; flex-wrap:wrap; }
   .b-cg { background:var(--orange); color:#000; }
 
+  /* confirm / message box */
+  #dAsk { width:min(440px, 92vw); }
+  #dAsk .body { white-space:pre-line; font-size:14px; }
+  /* Facebook 8-hour limit warning */
+  .fbwarn { display:none; padding:8px 12px; font-weight:700; font-size:15px; border-top:1px solid var(--line); align-items:center; gap:10px; }
+  .fbwarn.w30 { display:flex; background:#5a4a0c; color:#ffe27a; }
+  .fbwarn.w10 { display:flex; background:#7a3d08; color:#ffd2a1; }
+  .fbwarn.w5 { display:flex; background:var(--red); color:#fff; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { filter:brightness(1.35); } }
+  .fbcd { font:600 12px Consolas, monospace; color:#7fb2ff; }
+  .fbcd.w30 { color:#ffe27a; } .fbcd.w10 { color:#ffb36b; } .fbcd.w5 { color:#ff6b5f; }
+  #dCG { width:min(1180px, 97vw); height:min(860px, 94vh); }
+  #dCG iframe { width:100%; height:100%; border:0; display:block; background:#0c0d0f; }
   /* CG position editor */
   .pos { position:relative; width:100%; aspect-ratio:16/9; background:#000 center/100% 100% no-repeat; border:1px solid #444; overflow:hidden; touch-action:none; }
   .pos img { position:absolute; left:0; top:0; cursor:move; outline:1px dashed #ff8a1c; image-rendering:auto; }
@@ -173,12 +186,12 @@
           <div class="m"><div class="t">CPU <b id="sCpu">--</b></div><div class="bar"><div id="bCpu"></div></div></div>
           <div class="m"><div class="t">GPU <b id="sGpu">--</b></div><div class="bar"><div id="bGpu"></div></div></div>
           <div class="m"><div class="t">RAM <b id="sRam">--</b></div><div class="bar"><div id="bRam"></div></div></div>
+          <div class="m" style="width:118px" title="Network: upload / download of this PC"><div class="t">NET &#8593; <b id="sUp">--</b></div><div class="t">&#8595; <b id="sDown">--</b></div></div>
           <div class="fmt" id="sApp"></div>
         </div>
         <div class="date" id="date"></div>
       </div>
       <div class="onair">
-        <button class="bigbtn lockable" title="Play / Resume" onclick="T('play')">&#9654;</button>
         <div class="thumb" id="oaThumb"></div>
         <div style="min-width:0">
           <div><span class="title live" id="oaTitle">LIVE</span></div>
@@ -186,8 +199,9 @@
         </div>
         <div class="ctl">
           <span class="tally" id="tally">LIVE</span>
-          <button class="lockable" title="Pause" onclick="T('pause')">&#10074;&#10074;</button>
-          <button class="lockable" title="Stop playlist and take live" onclick="T('stop')">&#9632;</button>
+          <button class="lockable" title="Play / Resume (F1)" onclick="T('play')">&#9654;</button>
+          <button class="lockable" title="Pause (F2)" onclick="T('pause')">&#10074;&#10074;</button>
+          <button class="lockable" title="Stop: playlist stops and colour bars go on air" onclick="T('stop')">&#9632;</button>
         </div>
       </div>
       <div class="counters">
@@ -202,13 +216,18 @@
       <div class="fnrow lockable">
         <button class="blue" onclick="T('next')" title="Take the next item now">Next &#9654;&#9654;</button>
         <button onclick="openLive()">+ Live Card</button>
-        <button onclick="openLib()">+ Commercials</button>
+        <button onclick="openLib()">+ Add Media</button>
+        <span style="width:10px"></span>
+        <button id="bSting" onclick="T('stinger')" title="Play the stinger and change to the next item at its cut point">Stinger &#9654;</button>
+        <button id="bAutoSt" onclick="setStinger({auto: !STG.auto})" title="Use the stinger for every change between items">Auto Stinger</button>
+        <button class="sm" onclick="openStinger()" title="Stinger setup">&#9881;</button>
         <span style="flex:1"></span>
         <button id="bLoop" onclick="setMode({loop: !S.loop})">Loop &#10227;</button>
         <button id="bAuto" onclick="setMode({auto: true})">Automatic</button>
         <button id="bMan" onclick="setMode({auto: false})">Manual</button>
-        <button class="red" onclick="T('stop')" title="Stop everything and go to the vMix live feed">TAKE LIVE</button>
+        <button class="red" onclick="T('live')" title="Stop the playlist and go to the vMix live feed (F12)">TAKE LIVE</button>
       </div>
+      <div class="fbwarn" id="fbWarn"></div>
       <div class="msg" id="msg"></div>
     </div>
 
@@ -253,13 +272,15 @@
     <div class="box">
       <div class="section-t" style="border-top:0">Functions</div>
       <div class="fn">
-        <button class="lockable" onclick="openLib()">Commercials</button>
+        <button class="lockable" onclick="openLib()">Add Media to Playlist</button>
         <button class="lockable" onclick="openPM()">Playlist Manager</button>
         <button onclick="openLogs()">Air Logs</button>
         <button class="lockable" onclick="openSrc()">Live Source</button>
         <button class="lockable" onclick="$('upFile').click()">Upload Clips</button>
         <button class="lockable" onclick="openMediaFolder()" title="Open the media folder on this PC">Media Folder</button>
+        <button id="bFull" onclick="toggleFull()" title="Program output full screen on the second display (Esc on that screen closes it)">Full Screen</button>
         <button id="bLock" onclick="toggleLock()">Lock</button>
+        <button onclick="openComposerHelp()" title="Prepare CGs in the separate CG Composer app">CG Composer</button>
       </div>
       <input type="file" id="upFile" multiple accept="video/*,.mxf,.ts" style="display:none" onchange="upload(this)">
 
@@ -292,17 +313,17 @@
         <div class="cgbar lockable">
           <button onclick="$('upCG').click()">Upload CG</button>
           <button onclick="openCGFolder()">CG Folder</button>
-          <span class="hint" style="align-self:center">PNG / JPEG / QuickTime MOV (alpha)</span>
+          <span class="hint" style="align-self:center">PNG / JPEG / MOV / MP4 / .cgp</span>
         </div>
       </div>
-      <input type="file" id="upCG" multiple accept=".png,.jpg,.jpeg,.tga,.bmp,.gif,.webp,.mov,.mp4,.webm,.avi,.mkv,.mxf" style="display:none" onchange="uploadCG(this)">
+      <input type="file" id="upCG" multiple accept=".cgp,.png,.jpg,.jpeg,.tga,.bmp,.gif,.webp,.mov,.mp4,.webm,.avi,.mkv,.mxf" style="display:none" onchange="uploadCG(this)">
     </div>
   </div>
 </div>
 
 <!-- Commercial library -->
 <dialog id="dLib">
-  <header>Commercials <button class="sm" onclick="dLib.close()">Close</button></header>
+  <header>Add Media to Playlist <button class="sm" onclick="dLib.close()">Close</button></header>
   <div class="body">
     <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center">
       <button class="sm" onclick="$('upFile').click()">Upload clips</button>
@@ -343,40 +364,25 @@
 </dialog>
 
 <!-- CG editor: file, position, zoom -->
-<dialog id="dCG" style="width:min(900px, 96vw)">
-  <header><span id="cgTitle">CG</span> <button class="sm" onclick="dCG.close()">Close</button></header>
-  <div class="body">
-    <div class="pos" id="cgPos"><div class="safe"></div><img id="cgImg" alt="" draggable="false"></div>
-    <div class="hint" style="margin:4px 0 10px">Drag the graphic to place it. The dashed box is the title-safe area. Background = current program.</div>
-    <div class="form">
-      <span>CG file</span><select id="cgFile" onchange="cgFileChanged()"></select>
-      <span>Name</span><input id="cgName" placeholder="e.g. Lower third - guest">
-      <span>Position</span>
-      <span style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
-        X <input class="num" id="cgX" type="number" oninput="cgDraw()">
-        Y <input class="num" id="cgY" type="number" oninput="cgDraw()">
-        Zoom % <input class="num" id="cgZ" type="number" min="1" max="800" step="1" oninput="cgDraw()">
-        <input id="cgZr" type="range" min="10" max="300" style="flex:1; min-width:120px" oninput="$('cgZ').value=this.value; cgDraw()">
-      </span>
-      <span>Quick place</span>
-      <span class="presets">
-        <button class="sm" onclick="cgPreset('full')">Full screen</button>
-        <button class="sm" onclick="cgPreset('center')">Centre</button>
-        <button class="sm" onclick="cgPreset('tl')">Top left</button>
-        <button class="sm" onclick="cgPreset('tr')">Top right</button>
-        <button class="sm" onclick="cgPreset('bl')">Bottom left</button>
-        <button class="sm" onclick="cgPreset('br')">Bottom right</button>
-        <button class="sm" onclick="cgPreset('lt')">Lower third</button>
-        <button class="sm" onclick="$('cgZ').value=100; cgDraw()">100%</button>
-      </span>
-      <span>Fade</span><span><input class="num" id="cgFade" type="number" min="0" max="100"> frames (0 = cut)</span>
-      <span class="cgVid">Video CG</span><label class="cgVid"><input type="checkbox" id="cgLoop"> Loop (otherwise it takes itself out at the end)</label>
-      <span class="cgMan">Show</span><label class="cgMan"><input type="checkbox" id="cgLiveOnly"> Only on live (hide while a commercial plays)</label>
-      <span class="cgCard">Delay</span><span class="cgCard"><input class="num" id="cgDelay" type="number" min="0" step="0.5"> seconds after the card starts</span>
-      <span class="cgCard">On for</span><span class="cgCard"><input class="num" id="cgDur" type="number" min="0" step="0.5"> seconds (empty = whole card)</span>
-    </div>
+<dialog id="dCG"><iframe id="cgFrame" src="about:blank" title="CG setup"></iframe></dialog>
+
+<!-- Playout message / confirm box -->
+<dialog id="dAsk">
+  <header>Playout</header>
+  <div class="body" id="askText"></div>
+  <div class="foot"><button id="askNo" onclick="dAsk.close('no')">No</button><button class="blue" id="askYes" onclick="dAsk.close('yes')">Yes</button></div>
+</dialog>
+
+<!-- Stinger setup -->
+<dialog id="dSting" style="width:min(560px, 94vw)">
+  <header>Stinger <button class="sm" onclick="dSting.close()">Close</button></header>
+  <div class="body form">
+    <span>Stinger file</span><select id="stFile"></select>
+    <span>Cut point</span><span><input class="num" id="stCut" type="number" min="0" step="0.04"> seconds after the stinger starts (empty = half way)</span>
+    <span>Auto Stinger</span><label><input type="checkbox" id="stAuto"> Play it on every change between items (Next, playlist, clip to clip)</label>
+    <span></span><span class="hint">A stinger is a short video with transparency (QuickTime MOV with alpha, ProRes 4444 or Animation) in the CG library. It plays over the picture with its sound; at the cut point, when it covers the screen, the next item goes on air. <b>Stinger &#9654;</b> plays it once now and changes to the next item.</span>
   </div>
-  <div class="foot"><button class="red" id="cgDel" onclick="cgDelete()">Delete</button><span style="flex:1"></span><button class="blue" onclick="cgSave()">Save</button></div>
+  <div class="foot"><button class="blue" onclick="saveStinger()">Save</button></div>
 </dialog>
 
 <!-- Stream quality -->
@@ -500,15 +506,17 @@ async function poll() {
   $('fmt').innerHTML = `${esc(S.format)}<br>NDI out: ${esc(S.output)}`;
   const it = S.on_air;
   const isClip = it && it.type === 'clip';
-  $('oaTitle').textContent = it ? it.name : 'LIVE';
+  $('oaTitle').textContent = it ? it.name : S.idle === 'bars' ? 'COLOUR BARS' : 'LIVE';
   $('oaTitle').className = 'title' + (isClip ? '' : ' live');
   $('oaSub').textContent = isClip ? `media\\${it.file}` : srcStatus(it && it.source);
   setThumb($('oaThumb'), it);
   const tally = $('tally');
   if (S.state === 'PAUSED') { tally.textContent = 'PAUSED'; tally.className = 'tally pause'; }
   else if (isClip) { tally.textContent = 'ON-AIR'; tally.className = 'tally air'; }
+  else if (!it && S.idle === 'bars') { tally.textContent = 'BARS'; tally.className = 'tally pause'; }
   else { tally.textContent = 'LIVE'; tally.className = 'tally live'; }
-  $('cType').textContent = isClip ? 'CLIP' : 'LIVE';
+  $('cType').textContent = isClip ? 'CLIP' : (!it && S.idle === 'bars') ? 'BARS' : 'LIVE';
+  if (S.stinger && JSON.stringify(S.stinger) !== JSON.stringify(STG)) { STG = S.stinger; showStinger(); }
   $('cDur').textContent = it ? (it.duration ? tc(it.duration) : 'until Next') : '--:--:--.--';
   $('cPos').textContent = it ? tc(S.position) : '--:--:--.--';
   $('cRem').textContent = it && it.duration ? tc(S.remaining) : '--:--:--.--';
@@ -551,7 +559,7 @@ function setThumb(el, it, idx) {
 // ---------------------------------------------------------------- playlist
 function renderPlaylist() {
   $('plCount').textContent = `${PL.length} items`;
-  if (!PL.length) { $('pl').innerHTML = '<div class="empty">Playlist is empty. Add a <b>Live Card</b> and some <b>Commercials</b>.</div>'; return; }
+  if (!PL.length) { $('pl').innerHTML = '<div class="empty">Playlist is empty. Add a <b>Live Card</b> and some media with <b>+ Add Media</b>.</div>'; return; }
   $('pl').innerHTML = PL.map((it, i) => `
     <div class="row" id="r_${it.id}">
       <button class="lockable" style="height:44px" title="Play this item now" onclick="T('play', {id:'${it.id}'})">&#9654;|</button>
@@ -606,9 +614,9 @@ function insertAt(items, where) {
   return savePlaylist();
 }
 function move(i, d) { const j = i + d; if (j < 0 || j >= PL.length) return; [PL[i], PL[j]] = [PL[j], PL[i]]; savePlaylist(); }
-function del(i) { if (PL[i].id === S.on_air?.id && !confirm('This item is on air. Delete it anyway?')) return; PL.splice(i, 1); savePlaylist(); }
+async function del(i) { if (PL[i].id === S.on_air?.id && !await ask('This item is on air. Delete it anyway?')) return; PL.splice(i, 1); savePlaylist(); }
 function dup(i) { const c = {...PL[i]}; delete c.id; PL.splice(i + 1, 0, c); savePlaylist(); }
-function clearPlaylist() { if (confirm('Clear the whole playlist? (On-air item keeps playing)')) { PL = []; savePlaylist(); } }
+async function clearPlaylist() { if (await ask('Clear the whole playlist? (On-air item keeps playing)')) { PL = []; savePlaylist(); } }
 
 function openEdit(id) {
   const it = PL.find(x => x.id === id); if (!it) return;
@@ -716,8 +724,8 @@ async function openPM() {
   if (!dPM.open) dPM.showModal();
 }
 async function savePL() { const n = $('pmName').value.trim(); if (!n) return; await api('/api/playlists/save', {name:n}); $('pmName').value = ''; openPM(); }
-async function loadPL(n, append) { if (!append && !confirm(`Replace the playlist with "${n}"?`)) return; await api('/api/playlists/load', {name:n, append}); dPM.close(); poll(); }
-async function delPL(n) { if (confirm(`Delete saved playlist "${n}"?`)) { await api('/api/playlists/delete', {name:n}); openPM(); } }
+async function loadPL(n, append) { if (!append && !await ask(`Replace the playlist with "${n}"?`)) return; await api('/api/playlists/load', {name:n, append}); dPM.close(); poll(); }
+async function delPL(n) { if (await ask(`Delete saved playlist "${n}"?`)) { await api('/api/playlists/delete', {name:n}); openPM(); } }
 
 // logs
 async function openLogs() { $('logDate').valueAsDate = new Date(); await loadLogs(); dLogs.showModal(); }
@@ -760,20 +768,22 @@ async function pollStream() {
   $('stFmt').textContent = '- ' + streamInfo.format;
   $('dests').innerHTML = streamInfo.destinations.map(d => {
     const st = d.enabled ? d.status : (d.status === 'error' ? 'error' : 'off');
-    const detail = st === 'live' ? `LIVE ${fmtUp(d.uptime)} - ${d.kbps} kbps` : st === 'error' || st === 'reconnecting' ? (d.error || st) : st === 'connecting' ? 'connecting...' : (d.url ? shortUrl(d.url) + (d.key_set ? '' : ' (no key)') : 'not set up');
+    const fb = fbCountdown(d);
+    const detail = st === 'live' ? `LIVE ${fmtUp(d.uptime)} - ${d.kbps} kbps` + (fb != null ? `  |  FB limit in ${fmtUp(Math.max(0, fb))}` : '') : st === 'error' || st === 'reconnecting' ? (d.error || st) : st === 'connecting' ? 'connecting...' : (d.url ? shortUrl(d.url) + (d.key_set ? '' : ' (no key)') : 'not set up');
     return `<div class="dest">
       <span class="dot ${st}"></span>
-      <div style="min-width:0"><div class="nm">${esc(d.name)}</div><div class="st" title="${esc(d.error)}">${esc(detail)}</div></div>
+      <div style="min-width:0"><div class="nm">${esc(d.name)}</div><div class="st ${fb != null ? 'fbcd ' + fbLevel(fb) : ''}" title="${esc(d.error)}">${esc(detail)}</div></div>
       <button class="sm lockable" onclick="openDest(${d.slot})">Setup</button>
       ${d.enabled ? `<button class="sm red lockable" onclick="streamToggle(${d.slot}, 'stop')">Stop</button>`
                   : `<button class="sm green lockable" onclick="streamToggle(${d.slot}, 'start')" ${d.url ? '' : 'disabled'}>Go live</button>`}
     </div>`;
   }).join('');
+  fbWarnings(streamInfo.destinations);
 }
 const fmtUp = s => tc(s).slice(0, 8);
 const shortUrl = u => u.replace(/^rtmps?:\/\//, '').split('/')[0];
 async function streamToggle(slot, a) { await api(`/api/stream/${slot}/${a}`, {}); pollStream(); }
-async function streamAll(a) { if (a === 'stop' && !confirm('Stop all live streams?')) return; await api('/api/stream/all/' + a, {}); pollStream(); }
+async function streamAll(a) { if (a === 'stop' && !await ask('Stop all live streams?')) return; await api('/api/stream/all/' + a, {}); pollStream(); }
 function openDest(slot) {
   destSlot = slot; const d = streamInfo.destinations[slot];
   $('dsName').value = d.name; $('dsUrl').value = d.url; $('dsKey').value = '';
@@ -820,25 +830,40 @@ async function pollSys() {
   set('sCpu', 'bCpu', m.cpu, m.cpu + '%');
   set('sGpu', 'bGpu', m.gpu, m.gpu + '%');
   set('sRam', 'bRam', m.ram, m.ram + '%');
+  const mb = v => v == null ? '--' : (v >= 10 ? Math.round(v) : v.toFixed(1)) + ' Mbps';
+  $('sUp').textContent = mb(m.net_up_mbps); $('sDown').textContent = mb(m.net_down_mbps);
   $('sys').title = `CPU ${m.cpu ?? '?'}%  |  GPU ${m.gpu ?? 'n/a'}%${m.gpu_name ? ' ' + m.gpu_name : ''}${m.gpu_mem_mb ? ', ' + m.gpu_mem_mb + ' MB' : ''}  |  RAM ${m.ram_used_gb ?? '?'} / ${m.ram_total_gb ?? '?'} GB`;
   $('sApp').innerHTML = m.app_cpu != null ? `Playout<br>${m.app_cpu}% CPU, ${m.app_ram_mb} MB` : '';
 }
 
 // ---------------------------------------------------------------- CG
-let cgFiles = [], cgManual = [], cgStatus = {manual_on:{}}, cgShown = '', cgCtx = null;
+let cgFiles = [], cgManual = [], cgStatus = {manual_on:{}}, cgShown = '';
 function cgTab(t) {
   $('tabMan').classList.toggle('sel', t === 'man'); $('tabLib').classList.toggle('sel', t === 'lib');
   $('cgMan').style.display = t === 'man' ? '' : 'none'; $('cgLib').style.display = t === 'lib' ? '' : 'none';
   if (t === 'lib') loadCGFiles().then(renderCGFiles);
 }
-async function loadCGFiles() { try { cgFiles = await api('/api/cg/files'); } catch (e) {} return cgFiles; }
+let cgPresets = [];
+async function loadCGFiles() {
+  try { [cgFiles, cgPresets] = await Promise.all([api('/api/cg/files'), api('/api/cgfx/presets')]); } catch (e) {}
+  return cgFiles;
+}
 function renderCGFiles() {
-  $('cgFiles').innerHTML = cgFiles.map((f, i) => `<div class="cgrow">
+  $('cgFiles').innerHTML = cgPresets.map((p, i) => `<div class="cgrow">
+    <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(p.file)}">
+    <div style="min-width:0"><div class="nm">${esc(p.name)}</div>
+      <div class="st">CG Composer preset - ${esc(p.file)}${p.cfg.key && p.cfg.key !== 'none' ? ' - ' + p.cfg.key + ' key' : ''}</div></div>
+    <div class="bt lockable"><button class="sm" onclick="addPreset(${i})">+ Manual</button></div></div>`).join('') + cgFiles.map((f, i) => `<div class="cgrow">
     <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(f.name)}">
     <div style="min-width:0"><div class="nm">${esc(f.name)}</div>
       <div class="st">${f.kind === 'video' ? 'QuickTime / video' : 'Image'} ${f.w}x${f.h}${f.duration ? ', ' + f.duration.toFixed(1) + 's' : ''} - ${f.alpha ? 'alpha' : 'no alpha (opaque)'}</div></div>
     <div class="bt lockable"><button class="sm" onclick="addManualCG(cgFiles[${i}].name)">+ Manual</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No CG files yet. Upload PNG / JPEG / QuickTime MOV, or copy them into the CG folder.</div>';
+}
+async function addPreset(i) {
+  const r = await api('/api/cgfx/preset/' + encodeURIComponent(cgPresets[i].name), {});
+  if (r.error) { say(r.error); return; }
+  cgManual.push({...r.cfg, name: r.cfg.name || cgPresets[i].name.replace(/\.cgp$/i, '')}); saveManual(); cgTab('man');
 }
 async function uploadCG(input) {
   const fd = new FormData(); for (const f of input.files) fd.append('files', f);
@@ -883,70 +908,91 @@ function editManualCG(id) {
   openCG('manual', cgManual[i], cfg => { cgManual[i] = {...cfg, id}; saveManual(); }, () => { cgTake(id, 'out'); cgManual.splice(i, 1); saveManual(); });
 }
 
-// CG editor (manual CGs and live card CGs share it)
-async function openCG(mode, cfg, onSave, onDelete) {
-  await loadCGFiles();
-  if (!cgFiles.length) { alert('No CG files yet. Open the CG Library tab and upload PNG / JPEG / MOV files first.'); return; }
+// CG setup (General / Colour Key / Position) runs in an iframe shared with CG Composer
+let cgCtx = null, cgFrameReady = false, cgQueued = null;
+function openCG(mode, cfg, onSave, onDelete) {
   cgCtx = {mode, onSave, onDelete};
-  const c = {x: 0, y: 0, zoom: 100, fade: 8, loop: true, live_only: false, delay: 0, duration: null, ...(cfg || {})};
-  $('cgTitle').textContent = (cfg && cfg.name ? 'Edit CG' : 'New CG') + (mode === 'card' ? ' (live card)' : ' (manual)');
-  $('cgFile').innerHTML = cgFiles.map(f => `<option>${esc(f.name)}</option>`).join('');
-  $('cgFile').value = c.file && cgFiles.some(f => f.name === c.file) ? c.file : cgFiles[0].name;
-  $('cgName').value = c.name || ''; $('cgX').value = c.x; $('cgY').value = c.y; $('cgZ').value = c.zoom;
-  $('cgFade').value = c.fade; $('cgLoop').checked = c.loop !== false; $('cgLiveOnly').checked = !!c.live_only;
-  $('cgDelay').value = c.delay || ''; $('cgDur').value = c.duration || '';
-  document.querySelectorAll('.cgMan').forEach(e => e.style.display = mode === 'manual' ? '' : 'none');
-  document.querySelectorAll('.cgCard').forEach(e => e.style.display = mode === 'card' ? '' : 'none');
-  $('cgDel').style.display = onDelete ? '' : 'none';
-  $('cgPos').style.backgroundImage = `url('/api/preview.jpg?${Date.now()}')`;
+  const msg = {type:'cg-load', mode, cfg: cfg ? JSON.parse(JSON.stringify(cfg)) : null, canDelete: !!onDelete, width:S.width, height:S.height};
+  const fr = $('cgFrame');
+  if (!cgFrameReady) { cgQueued = msg; if (!fr.src.includes('/cgedit')) fr.src = '/cgedit?embed=1'; }
+  else fr.contentWindow.postMessage(msg, '*');
   dCG.showModal();
-  cgFileChanged(!cfg || cfg.x == null);
 }
-const cgSel = () => cgFiles.find(f => f.name === $('cgFile').value) || {w: 1, h: 1};
-function cgFileChanged(fresh) {
-  const f = cgSel();
-  document.querySelectorAll('.cgVid').forEach(e => e.style.display = f.kind === 'video' ? '' : 'none');
-  $('cgImg').src = '/api/cg/preview/' + encodeURIComponent(f.name);
-  if (fresh === true && f.w >= S.width * 0.9) cgPreset('full'); else if (fresh === true) cgPreset('tl');
-  cgDraw();
-}
-function cgDraw() {
-  const f = cgSel(), box = $('cgPos'), k = box.clientWidth / (S.width || 1920), z = (+$('cgZ').value || 100) / 100;
-  const img = $('cgImg');
-  img.style.left = (+$('cgX').value || 0) * k + 'px'; img.style.top = (+$('cgY').value || 0) * k + 'px';
-  img.style.width = f.w * z * k + 'px'; img.style.height = f.h * z * k + 'px';
-  $('cgZr').value = Math.min(300, +$('cgZ').value || 100);
-}
-function cgPreset(p) {
-  const f = cgSel(), W = S.width || 1920, H = S.height || 1080, m = Math.round(W * 0.05);
-  let z = +$('cgZ').value || 100;
-  if (p === 'full') z = Math.round(Math.min(W / f.w, H / f.h) * 1000) / 10;
-  if (p === 'lt' && f.w * z / 100 > W - 2 * m) z = Math.floor((W - 2 * m) / f.w * 1000) / 10;
-  const w = Math.round(f.w * z / 100), h = Math.round(f.h * z / 100);
-  const pos = {full: [(W - w) / 2, (H - h) / 2], center: [(W - w) / 2, (H - h) / 2], tl: [m, m], tr: [W - w - m, m],
-               bl: [m, H - h - m], br: [W - w - m, H - h - m], lt: [m, H - h - Math.round(H * 0.08)]}[p];
-  $('cgZ').value = z; $('cgX').value = Math.round(pos[0]); $('cgY').value = Math.round(pos[1]); cgDraw();
-}
-(function cgDrag() {
-  const img = $('cgImg'); let d = null;
-  img.addEventListener('pointerdown', e => { d = {x: e.clientX, y: e.clientY, X: +$('cgX').value || 0, Y: +$('cgY').value || 0}; img.setPointerCapture(e.pointerId); });
-  img.addEventListener('pointermove', e => {
-    if (!d) return; const k = (S.width || 1920) / $('cgPos').clientWidth;
-    $('cgX').value = Math.round(d.X + (e.clientX - d.x) * k); $('cgY').value = Math.round(d.Y + (e.clientY - d.y) * k); cgDraw();
+window.addEventListener('message', async e => {
+  const m = e.data || {};
+  if (m.type === 'cg-ready') { cgFrameReady = true; if (cgQueued) { $('cgFrame').contentWindow.postMessage(cgQueued, '*'); cgQueued = null; } }
+  else if (m.type === 'cg-save') { if (!m.cfg.file) { say('Pick a CG file first.'); return; } dCG.close(); const c = {...m.cfg}; if (!c.name) c.name = c.file.replace(/\.[^.]+$/, ''); cgCtx.onSave(c); }
+  else if (m.type === 'cg-cancel') dCG.close();
+  else if (m.type === 'cg-delete') { if (await ask('Delete this CG?')) { dCG.close(); cgCtx.onDelete(); } }
+  else if (m.type === 'cg-alert') say(m.msg);
+});
+
+// Playout message boxes (instead of the browser's own, which show the web address as title)
+function ask(text, yes = 'Yes', no = 'No') {
+  return new Promise(res => {
+    $('askText').textContent = text; $('askYes').textContent = yes; $('askNo').textContent = no; $('askNo').style.display = no ? '' : 'none';
+    dAsk.returnValue = ''; dAsk.onclose = () => res(dAsk.returnValue === 'yes'); dAsk.showModal();
   });
-  img.addEventListener('pointerup', () => d = null);
-  img.addEventListener('load', cgDraw);
-  window.addEventListener('resize', () => dCG.open && cgDraw());
-})();
-function cgSave() {
-  const f = $('cgFile').value;
-  const cfg = {file: f, name: $('cgName').value.trim() || f.replace(/\.[^.]+$/, ''), x: Math.round(+$('cgX').value || 0), y: Math.round(+$('cgY').value || 0),
-               zoom: Math.max(1, +$('cgZ').value || 100), fade: Math.max(0, Math.round(+$('cgFade').value || 0)), loop: $('cgLoop').checked};
-  if (cgCtx.mode === 'manual') cfg.live_only = $('cgLiveOnly').checked;
-  else { cfg.delay = +$('cgDelay').value || 0; cfg.duration = +$('cgDur').value || null; }
-  dCG.close(); cgCtx.onSave(cfg);
 }
-function cgDelete() { if (confirm('Delete this CG?')) { dCG.close(); cgCtx.onDelete(); } }
+const say = text => ask(text, 'OK', '');
+
+// stinger
+let STG = {};
+function showStinger() {
+  $('bAutoSt').classList.toggle('on', !!STG.auto);
+  $('bSting').disabled = !STG.file;
+  $('bSting').classList.toggle('red', !!STG.active);
+  $('bSting').title = STG.file ? `Play ${STG.file} and change to the next item at its cut point` : 'Set up a stinger file first (gear button)';
+}
+const setStinger = b => api('/api/stinger', b).then(r => { STG = {...STG, ...r}; showStinger(); });
+async function openStinger() {
+  await loadCGFiles();
+  const vids = cgFiles.filter(f => f.kind === 'video');
+  $('stFile').innerHTML = '<option value="">(none)</option>' + vids.map(f => `<option ${f.name === STG.file ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+  $('stCut').value = STG.cut || ''; $('stAuto').checked = !!STG.auto;
+  dSting.showModal();
+}
+async function saveStinger() { await setStinger({file:$('stFile').value, cut:+$('stCut').value || 0, auto:$('stAuto').checked}); dSting.close(); }
+
+// full screen output on the second display
+let fullOn = false;
+async function toggleFull() {
+  const r = await api('/api/fullscreen', {on: !fullOn});
+  if (r.ok) { fullOn = r.on; $('bFull').classList.toggle('on', fullOn); $('bFull').textContent = fullOn ? 'Exit Full Screen' : 'Full Screen'; }
+  else if (r.error === 'browser') window.open('/output', 'playout_output', 'popup');
+  else say('Full screen output did not open: ' + r.error);
+}
+function openComposerHelp() {
+  say('CG Composer is its own app: Start menu > CG Composer (or desktop shortcut).\n\nOpen a CG, key the green screen, set position, then press "Save to Playout". It appears in the CG Library tab here as a .cgp; press + Manual or add it to a live card.');
+}
+
+// Facebook ends a live video after 8 hours: count down and warn 30, 10 and 5 minutes before
+const FB_LIMIT = 8 * 3600;
+let fbWarned = {};
+function fbCountdown(d) {
+  if (!/facebook|fbcdn/i.test(d.url || '') || d.status !== 'live' || !d.uptime) return null;
+  return FB_LIMIT - d.uptime;
+}
+function fbLevel(left) { return left == null ? '' : left <= 300 ? 'w5' : left <= 600 ? 'w10' : left <= 1800 ? 'w30' : ''; }
+function fbWarnings(dests) {
+  let worst = null, who = '';
+  for (const d of dests) { const l = fbCountdown(d); if (l != null && (worst == null || l < worst)) { worst = l; who = d.name; } }
+  const el = $('fbWarn'), lv = fbLevel(worst);
+  el.className = 'fbwarn ' + lv;
+  if (!lv) { if (worst == null) fbWarned = {}; return; }
+  const mins = Math.max(0, Math.ceil(worst / 60));
+  el.innerHTML = `&#9888; Facebook 8-hour limit: <span class="mono">${fmtUp(Math.max(0, worst))}</span> left on ${esc(who)}. Facebook ends the live video at 8:00:00, so plan to stop and start a new live before then.`;
+  if (!fbWarned[lv]) { fbWarned[lv] = true; beep(lv === 'w5' ? 3 : lv === 'w10' ? 2 : 1); say(`Facebook live limit: about ${mins} minutes left on ${who}.`); }
+}
+function beep(n) {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    for (let i = 0; i < n; i++) {
+      const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 880; o.connect(g); g.connect(ac.destination);
+      const t = ac.currentTime + i * 0.35; g.gain.setValueAtTime(0.25, t); g.gain.setValueAtTime(0, t + 0.2); o.start(t); o.stop(t + 0.22);
+    }
+  } catch (e) {}
+}
 
 // stream quality
 function openStreamSet() {
@@ -957,7 +1003,7 @@ function openStreamSet() {
 }
 async function saveStreamSet() {
   const live = streamInfo?.destinations.some(d => d.enabled);
-  if (live && !confirm('Live destinations will restart with the new settings. Continue?')) return;
+  if (live && !await ask('Live destinations will restart with the new settings. Continue?')) return;
   await api('/api/stream/settings', {resolution:$('ssRes').value, video_kbps:+$('ssV').value, audio_kbps:+$('ssA').value, encoder:$('ssE').value});
   dStream.close(); pollStream();
 }
@@ -968,7 +1014,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); T('next'); }
   if (e.key === 'F1') { e.preventDefault(); T('play'); }
   if (e.key === 'F2') { e.preventDefault(); T('pause'); }
-  if (e.key === 'F12') { e.preventDefault(); T('stop'); }
+  if (e.key === 'F12') { e.preventDefault(); T('live'); }
 });
 
 $('pv').src = '/api/preview.mjpg';

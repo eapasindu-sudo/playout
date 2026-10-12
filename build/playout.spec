@@ -13,7 +13,7 @@ for pkg in pkgs:
         continue
     datas += d; binaries += b; hidden += h
 hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths",
-           "capture", "cg", "system", "audio_out", "psutil"]
+           "capture", "cg", "system", "audio_out", "psutil", "cgfx", "cgedit", "composer"]
 
 a = Analysis(["../desktop.py"], pathex=[".."], binaries=binaries, datas=datas, hiddenimports=hidden)
 pyz = PYZ(a.pure)

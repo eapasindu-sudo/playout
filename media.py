@@ -9,6 +9,43 @@ import numpy as np
 
 from ndi_io import CHANNELS, SAMPLE_RATE
 
+HWACCEL = "auto"   # "auto", "off", or an FFmpeg device type such as d3d11va / cuda / qsv
+_hw_cache = {}
+
+
+def _hwaccel():
+    """GPU video decoding (keeps CPU use down). Falls back to software decoding by itself."""
+    mode = (HWACCEL or "auto").lower()
+    if mode in ("off", "none", "cpu", ""):
+        return None
+    if mode in _hw_cache:
+        return _hw_cache[mode]
+    accel = None
+    try:
+        from av.codec.hwaccel import HWAccel, hwdevices_available
+        have = hwdevices_available()
+        order = [mode] if mode != "auto" else ["d3d11va", "cuda", "qsv", "dxva2", "videotoolbox", "vaapi"]
+        for dev in order:
+            if dev in have:
+                accel = HWAccel(device_type=dev, allow_software_fallback=True)
+                break
+    except Exception:
+        accel = None
+    _hw_cache[mode] = accel
+    return accel
+
+
+def open_video(path):
+    """av.open with GPU decoding when the PC has it, plain software decoding otherwise."""
+    accel = _hwaccel()
+    if accel is not None:
+        try:
+            return av.open(path, hwaccel=accel)
+        except Exception:
+            pass
+    return av.open(path)
+
+
 MEDIA_EXT = {".mp4", ".mov", ".mxf", ".mkv", ".avi", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".wmv"}
 _probe_cache = {}
 
@@ -55,8 +92,9 @@ class ClipPlayer:
 
     VIDEO_BUFFER = 10  # decoded frames held ahead (~80 MB at 1080p)
 
-    def __init__(self, path, width, height, fps):
+    def __init__(self, path, width, height, fps, process=None):
         self.path = path
+        self.process = process   # optional: called with each decoded VideoFrame (CG effects)
         self.name = os.path.basename(path)
         self.width, self.height = width, height
         self.frame_dur = 1.0 / float(fps)
@@ -79,7 +117,7 @@ class ClipPlayer:
     # -- decoder thread -------------------------------------------------
     def _decode(self):
         try:
-            with av.open(self.path) as c:
+            with open_video(self.path) as c:
                 vs = c.streams.video[0] if c.streams.video else None
                 aus = c.streams.audio[0] if c.streams.audio else None
                 if vs is None:
@@ -97,8 +135,11 @@ class ClipPlayer:
                             t = frame.time if frame.time is not None else 0.0
                             if t0 is None:
                                 t0 = t
-                            img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
-                            item = (t - t0, np.ascontiguousarray(img).reshape(-1))
+                            if self.process is not None:
+                                item = (t - t0, self.process(frame))
+                            else:
+                                img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
+                                item = (t - t0, np.ascontiguousarray(img).reshape(-1))
                             while not self._stop.is_set():
                                 try:
                                     self._vq.put(item, timeout=0.1)

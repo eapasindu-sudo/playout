@@ -5,6 +5,7 @@ second PC can open http://PLAYOUT-PC:8080 as a remote control.
 
     Playout.exe              normal start, opens the Playout window
     Playout.exe --headless   no window (used by the build test)
+    Playout.exe --composer   CG Composer (separate CG preparation window)
 """
 import os
 import socket
@@ -47,6 +48,10 @@ def wait_for_server(port, timeout=20):
 
 
 def main():
+    if "--composer" in sys.argv:
+        import composer
+        return composer.main()
+
     import app as server
 
     port = int(server.cfg.get("web_port", 8080))
@@ -74,11 +79,33 @@ def main():
 
     import webview
 
-    webview.create_window(
+    main_win = webview.create_window(
         "Playout", f"http://127.0.0.1:{port}/",
         width=1600, height=950, min_size=(1100, 700),
         background_color="#0c0d0f", confirm_close=True,
     )
+    out = {"win": None}
+
+    def fullscreen(on, screen=None):
+        """Program output, full screen, on a display (default: the last one, normally the second monitor)."""
+        if out["win"] is not None:
+            try:
+                out["win"].destroy()
+            except Exception:
+                pass
+            out["win"] = None
+        if not on:
+            return
+        screens = webview.screens
+        idx = int(screen) if screen not in (None, "") else len(screens) - 1
+        sc = screens[max(0, min(idx, len(screens) - 1))]
+        win = webview.create_window("Playout output", f"http://127.0.0.1:{port}/output?w={sc.width}",
+                                    screen=sc, fullscreen=True, frameless=True, background_color="#000000")
+        win.events.closed += lambda: out.update(win=None) if out["win"] is win else None
+        out["win"] = win
+
+    server.fullscreen_hook = fullscreen
+    main_win.events.closed += lambda: fullscreen(False)
     webview.start()       # returns when the window is closed
     server.shutdown()
     return 0

@@ -73,10 +73,12 @@ def _nvidia_smi():
 class SystemMonitor:
     def __init__(self):
         self.stats = {"cpu": None, "ram": None, "ram_used_gb": None, "ram_total_gb": None,
-                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "app_cpu": None, "app_ram_mb": None}
+                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "app_cpu": None, "app_ram_mb": None,
+                      "net_up_mbps": None, "net_down_mbps": None}
         self._proc = psutil.Process()
         self._pdh = None
         self._running = False
+        self._net = None
 
     def start(self):
         self._running = True
@@ -109,6 +111,13 @@ class SystemMonitor:
         s["ram_total_gb"] = round(vm.total / 1e9, 1)
         s["app_cpu"] = round(self._proc.cpu_percent(None) / psutil.cpu_count())
         s["app_ram_mb"] = round(self._proc.memory_info().rss / 1048576)
+        n, now = psutil.net_io_counters(), time.time()
+        if self._net:
+            sent, recv, t = self._net
+            dt_ = max(0.1, now - t)
+            s["net_up_mbps"] = round((n.bytes_sent - sent) * 8 / dt_ / 1e6, 2)
+            s["net_down_mbps"] = round((n.bytes_recv - recv) * 8 / dt_ / 1e6, 2)
+        self._net = (n.bytes_sent, n.bytes_recv, now)
         if self._pdh:
             try:
                 util, mem = self._pdh.read()

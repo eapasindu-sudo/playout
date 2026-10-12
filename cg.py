@@ -19,7 +19,8 @@ import av
 import numpy as np
 from PIL import Image
 
-from media import ClipPlayer, probe
+from cgfx import FxGraph, render_still
+from media import ClipPlayer, open_video, probe
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp"}
 VIDEO_EXT = {".mov", ".mp4", ".webm", ".avi", ".mkv", ".mxf"}
@@ -105,7 +106,11 @@ def composite(dst, src, x, y, opacity=255):
 
 
 class CGLayer:
-    def __init__(self, cfg, folder, fps):
+    """One CG on air: fades, delay / duration, and the picture with its effects (cgfx)."""
+
+    CACHE_LIMIT = 400 * 1024 * 1024   # keep a looping video CG's keyed frames in memory up to this size
+
+    def __init__(self, cfg, folder, fps, audio=False):
         self.cfg = dict(cfg)
         self.fps = float(fps)
         self.path = os.path.join(folder, cfg.get("file", ""))
@@ -119,27 +124,36 @@ class CGLayer:
         self.ticks = 0
         self.on_ticks = 0
         self.error = ""
-        self._image = None
+        self.want_audio = audio
+        self.audio = None
+        self._image = None       # (bgra, (dx, dy)) for stills
         self._player = None
-        info = cg_info(self.path) if os.path.isfile(self.path) else {"w": 0, "h": 0}
-        zoom = max(1.0, float(cfg.get("zoom") or 100)) / 100
-        self.w = max(1, int(round(info["w"] * zoom)))
-        self.h = max(1, int(round(info["h"] * zoom)))
+        self._last = None
+        self._fx = None
+        self._cache, self._cache_bytes, self._cache_ok = [], 0, True
+        self._replay = None      # index into _cache while replaying a looped CG from memory
         if not os.path.isfile(self.path) or not self.kind:
             self.error = "file missing"
             self.state = "off"
         elif self.kind == "image":
-            im = Image.open(self.path).convert("RGBA")
-            if (self.w, self.h) != im.size:
-                im = im.resize((self.w, self.h), Image.LANCZOS)
-            rgba = np.asarray(im)
-            self._image = np.ascontiguousarray(rgba[..., [2, 1, 0, 3]])   # RGBA -> BGRA
+            try:
+                img, off = render_still(self.path, "image", self.cfg)
+                self._image = (img, off) if img is not None else None
+            except Exception as e:
+                self.error = str(e)
+                self.state = "off"
         else:
             self._player = self._open_video()
 
+    def _process(self, frame):
+        if self._fx is None:
+            self._fx = FxGraph(self.cfg, frame.width, frame.height, frame.format.name)
+        img, off = self._fx.process(frame)
+        return (img, off) if img is not None else None
+
     def _open_video(self):
-        # ClipPlayer decodes ahead and paces frames to the output frame rate; bgra keeps alpha
-        return ClipPlayer(self.path, self.w + (self.w & 1), self.h + (self.h & 1), Fraction_from(self.fps))
+        # decodes ahead on its own thread; the key / crop / rotate runs there too
+        return ClipPlayer(self.path, 2, 2, Fraction_from(self.fps), process=self._process)
 
     def take_out(self):
         if self.state in ("wait",):
@@ -155,9 +169,10 @@ class CGLayer:
     def visible(self):
         return self.state in ("in", "on", "out")
 
-    def tick(self):
-        """Advance one output frame. Returns (bgra image, opacity 0..255) or None."""
+    def tick(self, n_samples=0):
+        """Advance one output frame. Returns (bgra image, opacity 0..255, (dx, dy)) or None."""
         self.ticks += 1
+        self.audio = None
         if self.state == "off":
             return None
         if self.state == "wait":
@@ -178,36 +193,57 @@ class CGLayer:
             self.on_ticks += 1
             if self.duration_frames and self.on_ticks >= self.duration_frames:
                 self.state = "out"
-        img = self._frame()
-        if img is None:
+        pic = self._frame(n_samples)
+        if pic is None:
             return None
         opacity = 255 if (not self.fade or self.state == "on") else int(255 * self.level / self.fade)
-        return img, opacity
+        return pic[0], opacity, pic[1]
 
-    def _frame(self):
+    def _frame(self, n):
         if self._image is not None:
             return self._image
+        if self._replay is not None:              # looping from memory: no decoding at all
+            pic = self._cache[self._replay]
+            self._replay = (self._replay + 1) % len(self._cache)
+            return pic
         p = self._player
         if p is None:
-            return None
+            return self._last
         if p.finished():
             p.close()
-            if self.cfg.get("loop", True):
+            if self.cfg.get("loop", True) and self.state != "off":
+                if self._cache_ok and self._cache:
+                    self._player = None
+                    self._replay = 0
+                    return self._frame(n)
+                self._cache, self._cache_ok = [], False
                 self._player = p = self._open_video()
             else:
-                self.state = "out" if self.state != "off" else "off"
-                return self._last if hasattr(self, "_last") else None
+                self._player = None
+                if self.state != "off":
+                    self.state = "out" if self.fade else "off"
+                return self._last
         if not p.ready():
-            return getattr(self, "_last", None)
-        flat, _ = p.next_frame(0)
-        if flat is None:
-            return getattr(self, "_last", None)
-        self._last = flat.reshape(p.height, p.width, 4)
+            return self._last
+        pic, audio = p.next_frame(n)
+        if self.want_audio:
+            self.audio = audio
+        if pic is not None and pic is not self._last:
+            self._last = pic
+            if self._cache_ok:
+                self._cache_bytes += pic[0].nbytes
+                if self._cache_bytes > self.CACHE_LIMIT:
+                    self._cache, self._cache_ok = [], False
+                else:
+                    self._cache.append(pic)
+        elif pic is self._last and self._cache_ok and pic is not None:
+            self._cache.append(pic)   # same picture held for another output frame
         return self._last
 
     def close(self):
         if self._player:
             self._player.close()
+        self._cache = []
 
 
 def Fraction_from(fps):
@@ -227,6 +263,8 @@ class CGManager:
         self._manual_layers = {}      # id -> CGLayer
         self._card_layers = []        # CGLayer for the on-air live card
         self._card_id = None
+        self._stinger = None          # CGLayer of a stinger transition in progress (drawn on top)
+        self.stinger_audio = None
         self.on_change = None
 
     # manual CG list
@@ -296,8 +334,30 @@ class CGManager:
                 layer.take_out()
             self._card_id = None
 
+    # stinger transitions
+    def start_stinger(self, file):
+        """Full-screen video with alpha played over everything (with its sound)."""
+        path = os.path.join(self.folder, file or "")
+        if not os.path.isfile(path) or cg_kind(path) != "video":
+            return False
+        info = cg_info(path)
+        w, h = info["w"] or self.width, info["h"] or self.height
+        zoom = 100.0 * min(self.width / w, self.height / h)
+        cfg = {"file": file, "x": int((self.width - w * zoom / 100) / 2), "y": int((self.height - h * zoom / 100) / 2),
+               "zoom": zoom, "fade": 0, "loop": False}
+        layer = CGLayer(cfg, self.folder, self.fps, audio=True)
+        with self._lock:
+            if self._stinger:
+                self._stinger.close()
+            self._stinger = layer
+        return True
+
+    @property
+    def stinger_active(self):
+        return self._stinger is not None
+
     # rendering (output thread)
-    def render(self, frame_flat, is_live):
+    def render(self, frame_flat, is_live, n_samples=0):
         with self._lock:
             jobs = []
             for layer in self._card_layers:
@@ -317,11 +377,21 @@ class CGManager:
                 if cfg.get("live_only") and not is_live:
                     continue
                 jobs.append((layer, r))
+            self.stinger_audio = None
+            st = self._stinger
+            if st is not None:
+                r = st.tick(n_samples)
+                self.stinger_audio = st.audio
+                if r is not None:
+                    jobs.append((st, r))
+                if st.state == "off":
+                    st.close()
+                    self._stinger = None
         if not jobs:
             return frame_flat
         out = np.array(frame_flat, copy=True).reshape(self.height, self.width, 4)
-        for layer, (img, opacity) in jobs:
-            composite(out, img, int(layer.cfg.get("x") or 0), int(layer.cfg.get("y") or 0), opacity)
+        for layer, (img, opacity, (dx, dy)) in jobs:
+            composite(out, img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
         return out.reshape(-1)
 
     def status(self):
@@ -332,4 +402,8 @@ class CGManager:
 
 
 def _changed(a, b):
-    return any(a.get(k) != b.get(k) for k in ("file", "x", "y", "zoom", "loop"))
+    return any(a.get(k) != b.get(k) for k in FX_KEYS)
+
+
+FX_KEYS = ("file", "x", "y", "zoom", "zoom_x", "zoom_y", "rotate", "crop", "loop", "key", "key_color",
+           "key_similarity", "key_blend", "key_spill", "luma_threshold", "luma_softness")

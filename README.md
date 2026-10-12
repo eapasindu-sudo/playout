@@ -16,17 +16,35 @@ vMix --NDI--> Playout --NDI "PLAYOUT PGM"--> anything that takes NDI
 
 - **On-air bar:** Play, Pause and Stop, a thumbnail, the item name, and the ON-AIR / LIVE tally.
 - **Counters:** Duration, Position, Remain, Playlist Remain, and Automatic/Manual mode.
-- **Buttons:** **Next** (take the next item now), **+ Live Card**, **+ Commercials**, **Loop**,
-  **Automatic / Manual**, and **TAKE LIVE** (stops the playlist and puts vMix on air at once).
+- **Buttons:** **Next** (take the next item now), **+ Live Card**, **+ Add Media**, **Stinger**,
+  **Auto Stinger**, **Loop**, **Automatic / Manual**, and **TAKE LIVE** (stops the playlist and puts vMix on air at once).
+- **Play / Pause / Stop** sit next to the tally. **Stop** stops the playlist and puts **colour bars** on air;
+  **TAKE LIVE** stops it and puts the live feed on air.
 - **Playlist:** thumbnail, name, Duration, Start, End, Time to start, and Scheduler
   (Sequential or a fixed time). Each item has buttons to play it, Cue, Edit, move Up/Down,
   Copy and Delete.
-- **Header:** clock, date, format and **CPU / GPU / RAM** usage of the PC (plus Playout's own CPU and memory).
+- **Header:** clock, date, format, **CPU / GPU / RAM** and **network** (upload / download) of the PC, plus Playout's own CPU and memory.
 - **Right side:** a program monitor with L/R audio meters, the vMix NDI input picker, **PC sound**
   (program audio on the Windows default output or a chosen device, with volume), the Functions panel,
   the 3 stream destinations with **Quality**, and the **CG panel** (Manual CG and CG Library tabs).
 
 Keyboard: **Space** = Next, **F1** = Play, **F2** = Pause, **F12** = Take live.
+
+**Full Screen** (Functions) shows the program output full screen on the second display. Press it
+again, or Esc on that display, to close it.
+
+### Stinger transitions
+Put a stinger (a short QuickTime MOV with alpha, with or without sound) in the CG library, then
+press the gear next to **Auto Stinger** and pick it. **Cut point** is when the stinger covers the
+screen (empty = half way).
+- **Stinger ▶** plays it now and changes to the next item at the cut point.
+- **Auto Stinger** uses it for every change: Next, playing a playlist item, and clip to clip in
+  Automatic mode (it starts early so the cut lands exactly on the end of the clip).
+
+### GPU video decoding
+Clips and video CGs are decoded on the graphics card when the PC has one (D3D11 / NVIDIA / Intel),
+which keeps CPU use down. Set `"hwaccel": "off"` in `config.json` to decode on the CPU. Use a GPU
+encoder under **Quality** for streaming as well (NVENC / Quick Sync / AMF).
 
 ### How items play
 - A **commercial** plays its file, then the next item starts. The next clip is loaded
@@ -62,9 +80,22 @@ PNG-in-MOV keep their alpha). Video CGs can loop or take themselves out at the e
 - **Live card CGs**: in the live card dialog, **+ Add CG** adds CGs that go on air with that card
   only. **Delay** starts it some seconds after the card starts, **On for** takes it out after some
   seconds (empty = whole card).
-- **Position editor**: drag the graphic over the current program picture, or type **X**, **Y** and
-  **Zoom %**. Quick place: Full screen, Centre, the four corners and Lower third. **Fade** sets the
-  fade in/out in frames (0 = cut).
+- **CG setup** has three tabs, like vMix:
+  - **General**: file, name, fade, loop, only on live (manual) or delay / on for (live card).
+  - **Colour Key**: green / blue screen key with **Pick from picture**, Chroma Key, Edge softness and
+    Spill removal sliders and auto presets 1-3, or a **Luma key** for black backgrounds. Use it for
+    JPEG or MP4 CGs made on a green screen.
+  - **Position**: Zoom, Zoom X, Zoom Y, Pan X, Pan Y, Rotate and Crop X1 / Y1 / X2 / Y2, each with a
+    Reset, quick place buttons, and drag on the preview.
+- Keying and effects run as FFmpeg filters on the decode thread; a looping video CG is kept in
+  memory after its first loop, so it costs almost nothing after that.
+
+### CG Composer
+A separate app (Start menu > **CG Composer**) with the same three tabs. Open a PNG / JPEG / MOV / MP4,
+key it and place it, then **Save to Playout**: it is saved as a `.cgp` file in the Playout CG
+library and shows in the **CG Library** tab, where **+ Manual** adds it with all its settings.
+**Export .cgp** saves the file anywhere (to use on another PC: upload it in the CG Library tab).
+A `.cgp` is a zip holding the settings and the CG file.
 
 ## Live streaming (3 destinations)
 
@@ -152,7 +183,12 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `ndi_io.py` | NDI input (frame sync) and output |
 | `media.py` | clip decoding and thumbnails (FFmpeg via PyAV) |
 | `scheduler.py` | fixed-time items |
-| `cg.py` | CG layers (PNG / JPEG / MOV with alpha), manual and live-card CGs |
+| `cg.py` | CG layers (PNG / JPEG / MOV with alpha), manual and live-card CGs, stingers |
+| `cgfx.py` | colour / luma key, crop, zoom, rotate (FFmpeg filter graph) |
+| `cgedit.py` | CG setup previews and `.cgp` presets (shared with CG Composer) |
+| `composer.py` | CG Composer app |
+| `web/cgedit.html` | CG setup / CG Composer screen |
+| `web/output.html` | full screen output page |
 | `capture.py` | USB / HDMI capture devices and test bars for live cards |
 | `audio_out.py` | program sound on the PC's speakers |
 | `system.py` | CPU / GPU / RAM usage |
