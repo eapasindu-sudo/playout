@@ -201,8 +201,9 @@ def render_comment(cfg, out_w):
     pad = max(8, size // 3)
     width = min(int(_num(cfg.get("width"), 0)) or int(out_w * 0.45), out_w)
     # emoji are not in the broadcast fonts (they would show as boxes)
-    text = "".join(ch for ch in (cfg.get("text") or "") if ord(ch) < 0x1F000 and not 0x2600 <= ord(ch) <= 0x27BF
-                   and ch not in "\ufe0f\u200d" or 0x0D80 <= ord(ch) <= 0x0DFF)
+    # (the zero width joiner stays: Sinhala needs it, e.g. in "ශ්‍රී")
+    text = "".join(ch for ch in (cfg.get("text") or "")
+                   if ord(ch) < 0x1F000 and not 0x2600 <= ord(ch) <= 0x27BF and ch != "\ufe0f")
     text = re.sub(r"[ \t]{2,}", " ", text)
     lines = _wrap(font, text, width - pad * 2, 4)
     if not lines:
