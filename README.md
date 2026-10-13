@@ -102,6 +102,18 @@ library and shows in the **CG Library** tab, where **+ Manual** adds it with all
 **Export .cgp** saves the file anywhere (to use on another PC: Import CG (.cgp) in the CG Library tab).
 A `.cgp` is a zip holding the settings and the CG file.
 
+## Squeeze Feed (L-ad)
+
+The program shrinks into the green area of an overlay video (an "L" advert around the live picture).
+
+1. In **CG Composer** open the L-ad video, turn on **Colour Key** (green), and press **Save to Squeeze Feed**.
+   The green area is found by itself; the **Squeeze Feed** tab shows the box over the Playout output so it can be
+   dragged into place (bottom-right corner to resize).
+2. In Playout: **CG > Squeeze Feed** tab. **IN** slides the program into the box, **OUT** (or **SQUEEZE OUT**) brings
+   it back to full screen. **Position** moves / sizes the feed (also while it is on air: **Save** moves it at once),
+   with **Fit to green area**, squeeze time and Loop overlay. Without Loop it goes back to full screen when the
+   overlay video ends.
+
 ## Live streaming (3 destinations)
 
 1. Click **Setup** on a destination and pick the **Facebook Live** preset (or YouTube or Custom).

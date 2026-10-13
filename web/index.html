@@ -370,6 +370,7 @@
       <div class="cgtabs">
         <button id="tabMan" class="sel" onclick="cgTab('man')">Manual CG</button>
         <button id="tabLib" onclick="cgTab('lib')">CG Library</button>
+        <button id="tabSq" onclick="cgTab('sq')" title="L-ad: the program shrinks into the green area of an overlay">Squeeze Feed</button>
         <span style="flex:1"></span>
         <span class="hint" id="cgCard" style="align-self:center"></span>
       </div>
@@ -390,10 +391,47 @@
           <span class="hint" style="align-self:center">CG Composer files (.cgp) only</span>
         </div>
       </div>
+      <div id="cgSq" style="display:none">
+        <div class="cglist" id="sqList"></div>
+        <div class="cgbar">
+          <span class="hint" style="align-self:center">Make one in CG Composer: open the L-ad video, key the green, then <b>Save to Squeeze Feed</b>.</span>
+          <span style="flex:1"></span>
+          <button class="red" onclick="sqTake('', 'out')" title="Program back to full screen">SQUEEZE OUT</button>
+        </div>
+      </div>
       <input type="file" id="upCG" multiple accept=".cgp" style="display:none" onchange="uploadCG(this)">
     </div>
   </div>
 </div>
+
+<!-- Squeeze feed position -->
+<dialog id="dSq">
+  <header>Squeeze Feed: <span id="sqTitle"></span> <button class="sm" onclick="dSq.close()">Close</button></header>
+  <div style="padding:12px; display:flex; flex-direction:column; gap:10px">
+    <div id="sqStage" style="position:relative; width:640px; max-width:100%; aspect-ratio:16/9; background:#000; user-select:none">
+      <img id="sqImg" style="position:absolute; inset:0; width:100%; height:100%" draggable="false">
+      <div id="sqBox" title="Drag to move, drag the corner to resize" style="position:absolute; border:2px dashed #ffb36b; cursor:move; box-sizing:border-box">
+        <div data-h="1" style="position:absolute; right:-6px; bottom:-6px; width:12px; height:12px; background:#ffb36b; cursor:nwse-resize"></div></div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+      Feed position
+      <label>X <input id="sqX" type="number" style="width:70px" oninput="sqEdited()"></label>
+      <label>Y <input id="sqY" type="number" style="width:70px" oninput="sqEdited()"></label>
+      <label>W <input id="sqW" type="number" style="width:70px" oninput="sqEdited('w')"></label>
+      <label>H <input id="sqH" type="number" style="width:70px" oninput="sqEdited('h')"></label>
+      <label title="Keep the program 16:9 while resizing"><input id="sqLock" type="checkbox" checked> 16:9</label>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+      <button onclick="sqFit()">Fit to green area</button>
+      <button onclick="sqFull()">Full screen</button>
+      <label>Squeeze time <input id="sqT" type="number" step="0.1" min="0" max="5" style="width:60px"> s</label>
+      <label title="Repeat the overlay until OUT. Off: it goes back to full screen when the overlay ends."><input id="sqLoop" type="checkbox"> Loop overlay</label>
+      <span style="flex:1"></span>
+      <button class="blue" onclick="sqSave()">Save</button>
+    </div>
+    <div class="hint" id="sqMsg"></div>
+  </div>
+</dialog>
 
 <!-- Commercial library -->
 <dialog id="dLib">
@@ -1624,9 +1662,10 @@ async function pollSys() {
 // ---------------------------------------------------------------- CG
 let cgFiles = [], cgManual = [], cgStatus = {manual_on:{}}, cgShown = '';
 function cgTab(t) {
-  $('tabMan').classList.toggle('sel', t === 'man'); $('tabLib').classList.toggle('sel', t === 'lib');
-  $('cgMan').style.display = t === 'man' ? '' : 'none'; $('cgLib').style.display = t === 'lib' ? '' : 'none';
+  $('tabMan').classList.toggle('sel', t === 'man'); $('tabLib').classList.toggle('sel', t === 'lib'); $('tabSq').classList.toggle('sel', t === 'sq');
+  $('cgMan').style.display = t === 'man' ? '' : 'none'; $('cgLib').style.display = t === 'lib' ? '' : 'none'; $('cgSq').style.display = t === 'sq' ? '' : 'none';
   if (t === 'lib') loadCGFiles().then(renderCGFiles);
+  if (t === 'sq') loadSqueeze();
 }
 let cgPresets = [];
 async function loadCGFiles() {
@@ -1634,7 +1673,7 @@ async function loadCGFiles() {
   return cgFiles;
 }
 function renderCGFiles() {
-  $('cgFiles').innerHTML = cgPresets.map((p, i) => `<div class="cgrow">
+  $('cgFiles').innerHTML = cgPresets.map((p, i) => p.cfg.squeeze ? '' : `<div class="cgrow">
     <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(p.file)}">
     <div style="min-width:0"><div class="nm">${esc(p.name)}</div>
       <div class="st">CG Composer preset - ${esc(p.file)}${p.cfg.key && p.cfg.key !== 'none' ? ' - ' + p.cfg.key + ' key' : ''}</div></div>
@@ -1661,6 +1700,7 @@ async function openCGFolder() {
 async function pollCG() {
   let r; try { r = await api('/api/cg/manual'); } catch (e) { return; }
   cgStatus = r; const key = JSON.stringify(r.list);
+  if ($('cgSq').style.display !== 'none') sqState(r.squeeze);
   if (key !== cgShown) { cgManual = r.list; cgShown = key; renderManual(); }
   for (const c of cgManual) {
     const el = $('mc_' + c.id); if (!el) continue;
@@ -1682,6 +1722,93 @@ function renderManual() {
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
       <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No manual CGs. Press <b>+ Add CG</b>. They go on air with IN, even while a commercial plays.</div>';
+}
+// Squeeze feed (L-ad): program squeezed into the green area of an overlay
+let sqItems = [], sqShown = '', sqEdit = null, sqDim = {w:1920, h:1080};
+async function loadSqueeze() {
+  let r; try { r = await api('/api/squeeze'); } catch (e) { return; }
+  sqItems = r.items; sqDim = {w: r.width, h: r.height};
+  $('sqList').innerHTML = sqItems.map((q, i) => `<div class="cgrow" id="sq_${i}">
+    <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(q.file)}">
+    <div style="min-width:0"><div class="nm">${esc(q.name)}</div><div class="st" data-f="st"></div></div>
+    <div class="bt"><button class="sm in" onclick="sqTake(${i}, 'in')">IN</button><button class="sm" onclick="sqTake(${i}, 'out')">OUT</button>
+      <button class="sm lockable" onclick="sqOpen(${i})">Position</button></div></div>`).join('')
+    || '<div class="empty" style="padding:20px">No squeeze feeds yet. In CG Composer open the L-ad video (with the green area), key the green and press <b>Save to Squeeze Feed</b>.</div>';
+  sqShown = ''; sqState(cgStatus.squeeze);
+}
+function sqState(on) {
+  const key = JSON.stringify(on || null); if (key === sqShown) return; sqShown = key;
+  sqItems.forEach((q, i) => {
+    const el = $('sq_' + i); if (!el) return;
+    const st = on && on.name === q.name ? on.state : '';
+    el.className = 'cgrow ' + st;
+    const b = q.cfg.squeeze || {};
+    el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'squeezing in' : st === 'out' ? 'going full screen' : 'off') +
+      ` - feed ${b.x}, ${b.y}, ${b.w} x ${b.h}${q.cfg.loop ? ' - loop' : ''}`;
+    el.querySelector('.in').classList.toggle('red', st === 'on' || st === 'in');
+  });
+}
+async function sqTake(i, a) {
+  const r = await api('/api/squeeze/' + a, a === 'out' ? {} : {preset: sqItems[i].preset});
+  if (r.error) say(r.error);
+  pollCG();
+}
+function sqOpen(i) {
+  const q = sqItems[i]; sqEdit = {i, q};
+  $('sqTitle').textContent = q.name;
+  const b = q.cfg.squeeze;
+  $('sqX').value = b.x; $('sqY').value = b.y; $('sqW').value = b.w; $('sqH').value = b.h;
+  $('sqLock').checked = Math.abs(b.w / b.h - sqDim.w / sqDim.h) < 0.02;
+  $('sqT').value = q.cfg.squeeze_time ?? 0.6; $('sqLoop').checked = !!q.cfg.loop; $('sqMsg').textContent = '';
+  dSq.showModal(); sqDraw(true);
+}
+const sqVal = () => ({x: +$('sqX').value || 0, y: +$('sqY').value || 0, w: Math.max(16, +$('sqW').value || 16), h: Math.max(16, +$('sqH').value || 16)});
+let sqTimer = null;
+function sqDraw(img) {
+  const b = sqVal(), st = $('sqStage').getBoundingClientRect(), k = st.width / sqDim.w, bx = $('sqBox').style;
+  bx.left = b.x * k + 'px'; bx.top = b.y * k + 'px'; bx.width = b.w * k + 'px'; bx.height = b.h * k + 'px';
+  if (!img) return;
+  clearTimeout(sqTimer);
+  sqTimer = setTimeout(() => { $('sqImg').src = `/api/squeeze/preview.jpg?preset=${encodeURIComponent(sqEdit.q.preset)}&x=${b.x}&y=${b.y}&w=${b.w}&h=${b.h}&pw=640&_=${Date.now()}`; }, 120);
+}
+function sqEdited(which) {
+  if ($('sqLock').checked && which) {
+    const r = sqDim.w / sqDim.h;
+    if (which === 'w') $('sqH').value = Math.round((+$('sqW').value || 0) / r); else $('sqW').value = Math.round((+$('sqH').value || 0) * r);
+  }
+  sqDim && sqDraw(true);
+}
+(function sqDrag() {
+  let d = null;
+  document.addEventListener('pointerdown', e => {
+    if (!e.target.closest || !e.target.closest('#sqBox')) return;
+    e.preventDefault();
+    d = {resize: !!e.target.dataset.h, x0: e.clientX, y0: e.clientY, b: sqVal(), k: $('sqStage').getBoundingClientRect().width / sqDim.w};
+  });
+  document.addEventListener('pointermove', e => {
+    if (!d) return;
+    const dx = Math.round((e.clientX - d.x0) / d.k), dy = Math.round((e.clientY - d.y0) / d.k);
+    if (d.resize) {
+      const w = Math.max(16, d.b.w + dx);
+      $('sqW').value = w; $('sqH').value = $('sqLock').checked ? Math.round(w * sqDim.h / sqDim.w) : Math.max(16, d.b.h + dy);
+    } else { $('sqX').value = d.b.x + dx; $('sqY').value = d.b.y + dy; }
+    sqDraw(false);
+  });
+  document.addEventListener('pointerup', () => { if (d) { d = null; sqDraw(true); } });
+})();
+async function sqFit() {
+  const r = await api('/api/cgfx/find_green', {cfg: {...sqEdit.q.cfg, file: sqEdit.q.file}});
+  if (r.error || !r.box) { $('sqMsg').textContent = r.error || 'No green area found'; return; }
+  const g = r.box, b = $('sqLock').checked && r.fit ? r.fit : g;   // fit: 16:9 covering the green, the overlay hides the rest
+  $('sqX').value = b.x; $('sqY').value = b.y; $('sqW').value = b.w; $('sqH').value = b.h;
+  $('sqMsg').textContent = `Green area: ${g.x}, ${g.y}, ${g.w} x ${g.h}`; sqDraw(true);
+}
+function sqFull() { $('sqX').value = 0; $('sqY').value = 0; $('sqW').value = sqDim.w; $('sqH').value = sqDim.h; sqDraw(true); }
+async function sqSave() {
+  const r = await api('/api/squeeze/save', {preset: sqEdit.q.preset, squeeze: sqVal(), squeeze_time: +$('sqT').value, loop: $('sqLoop').checked});
+  if (r.error) { $('sqMsg').textContent = r.error; return; }
+  $('sqMsg').textContent = r.live ? 'Saved. The feed moved on air.' : 'Saved.';
+  await loadSqueeze();
 }
 const cgTake = (id, a) => api(`/api/cg/manual/${id}/${a}`, {}).then(pollCG);
 const saveManual = () => api('/api/cg/manual', cgManual).then(() => { cgShown = ''; pollCG(); });

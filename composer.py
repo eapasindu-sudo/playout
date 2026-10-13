@@ -35,12 +35,34 @@ def _settings():
         c = {}
     folder = os.path.join(HOME, c.get("cg_dir", "cg"))
     os.makedirs(folder, exist_ok=True)
-    return folder, int(c.get("width", 1920)), int(c.get("height", 1080))
+    return folder, int(c.get("width", 1920)), int(c.get("height", 1080)), int(c.get("web_port", 8080))
 
 
-FOLDER, WIDTH, HEIGHT = _settings()
+FOLDER, WIDTH, HEIGHT, PLAYOUT_PORT = _settings()
+
+
+def program_frame():
+    """The program output of Playout (running on this PC), so CGs can be lined up over the real
+    picture. None when Playout is not running."""
+    import io
+    import urllib.request
+    import numpy as np
+    from PIL import Image
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{PLAYOUT_PORT}/api/preview.jpg?w={WIDTH}", timeout=2) as r:
+            img = Image.open(io.BytesIO(r.read())).convert("RGB")
+    except Exception:
+        return None
+    if img.size != (WIDTH, HEIGHT):
+        img = img.resize((WIDTH, HEIGHT), Image.BILINEAR)
+    a = np.asarray(img)
+    out = np.empty((HEIGHT, WIDTH, 4), np.uint8)
+    out[..., 0], out[..., 1], out[..., 2], out[..., 3] = a[..., 2], a[..., 1], a[..., 0], 255
+    return out.reshape(-1)
+
+
 app = Flask(__name__, static_folder=None)
-app.register_blueprint(make_blueprint(lambda: FOLDER, lambda: (WIDTH, HEIGHT)))
+app.register_blueprint(make_blueprint(lambda: FOLDER, lambda: (WIDTH, HEIGHT), program_frame))
 
 
 @app.get("/")

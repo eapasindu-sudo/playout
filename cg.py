@@ -99,11 +99,14 @@ def composite(dst, src, x, y, opacity=255):
     if opacity >= 255 and a.min() == 255:
         d[..., :3] = s[..., :3]          # fully opaque (JPEG): plain copy
         return
-    a = a.astype(np.uint16)
     if opacity < 255:
-        a = a * opacity // 255
-    a3 = a[..., None]
-    d[..., :3] = ((s[..., :3] * a3 + d[..., :3] * (255 - a3) + 127) // 255).astype(np.uint8)
+        s = s.copy()
+        s[..., 3] = (s[..., 3].astype(np.uint16) * opacity // 255).astype(np.uint8)
+    # PIL's alpha blend runs in C: about 4x faster than numpy on a full 1080p picture
+    dh, dw = d.shape[:2]
+    out = Image.alpha_composite(Image.frombuffer("RGBA", (dw, dh), np.ascontiguousarray(d), "raw", "RGBA", 0, 1),
+                                Image.frombuffer("RGBA", (dw, dh), np.ascontiguousarray(s), "raw", "RGBA", 0, 1))
+    d[..., :3] = np.asarray(out)[..., :3]
 
 
 class CGLayer:
@@ -265,6 +268,7 @@ class CGManager:
         self._card_layers = []        # CGLayer for the on-air live card
         self._card_id = None
         self._stinger = None          # CGLayer of a stinger transition in progress (drawn on top)
+        self._squeeze = None          # SqueezeLayer: the program squeezed into an L-ad's green area
         self.stinger_audio = None
         self.on_change = None
 
@@ -327,6 +331,8 @@ class CGManager:
                 layer.take_out()
             for layer in self._card_layers:
                 layer.take_out()
+            if self._squeeze is not None:
+                self._squeeze.take_out()
 
     # live card CGs
     def start_card(self, item_id, cfgs):
@@ -360,6 +366,53 @@ class CGManager:
             self._stinger = layer
         return True
 
+    # squeeze feed (L-ad)
+    def squeeze_in(self, cfg):
+        from squeeze import SqueezeLayer
+        layer = SqueezeLayer(cfg, self.folder, self.fps, self.width, self.height)
+        if layer.error:
+            layer.close()
+            return layer.error
+        with self._lock:
+            old = self._squeeze
+            if old is not None and old.visible and old.name == layer.name:
+                layer.close()
+                old.take_in()
+                return ""
+            if old is not None:
+                # another squeeze is on: switch straight to the new one at the same point
+                layer.pos, layer.state = old.pos, "in"
+                old.close()
+            self._squeeze = layer
+        return ""
+
+    def squeeze_update(self, name, changes):
+        """New feed position / time / loop for the squeeze on air (moves at once)."""
+        from squeeze import clean_box
+        with self._lock:
+            sq = self._squeeze
+            if sq is None or sq.name != name:
+                return False
+            if changes.get("squeeze"):
+                sq.box = clean_box(changes["squeeze"], self.width, self.height) or sq.box
+            if changes.get("squeeze_time") is not None:
+                old = sq.frames
+                sq.frames = max(1, int(float(changes["squeeze_time"]) * float(self.fps)))
+                sq.pos = sq.frames if sq.state == "on" else min(sq.frames, sq.pos * sq.frames // old)
+            if changes.get("loop") is not None:
+                sq.overlay.cfg["loop"] = bool(changes["loop"])
+            return True
+
+    def squeeze_out(self):
+        with self._lock:
+            if self._squeeze is not None:
+                self._squeeze.take_out()
+
+    @property
+    def squeeze_state(self):
+        sq = self._squeeze
+        return {"name": sq.name, "state": sq.state} if sq is not None and sq.visible else None
+
     @property
     def stinger_active(self):
         return self._stinger is not None
@@ -367,6 +420,14 @@ class CGManager:
     # rendering (output thread)
     def render(self, frame_flat, is_live, n_samples=0):
         with self._lock:
+            base = None
+            sq = self._squeeze
+            if sq is not None:
+                base = sq.render(np.asarray(frame_flat).reshape(self.height, self.width, 4))
+                if sq.state == "off":
+                    sq.close()
+                    self._squeeze = None
+                    base = None
             jobs = []
             for layer in self._card_layers:
                 r = layer.tick()
@@ -396,8 +457,8 @@ class CGManager:
                     st.close()
                     self._stinger = None
         if not jobs:
-            return frame_flat
-        out = np.array(frame_flat, copy=True).reshape(self.height, self.width, 4)
+            return frame_flat if base is None else base.reshape(-1)
+        out = np.array(frame_flat, copy=True).reshape(self.height, self.width, 4) if base is None else base
         for layer, (img, opacity, (dx, dy)) in jobs:
             composite(out, img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
         return out.reshape(-1)
@@ -406,7 +467,7 @@ class CGManager:
         with self._lock:
             on = {cid: l.state for cid, l in self._manual_layers.items() if l.visible or l.state == "wait"}
             card = [{"file": l.cfg.get("file") or l.cfg.get("name"), "state": l.state} for l in self._card_layers]
-            return {"manual_on": on, "card": card, "card_id": self._card_id}
+            return {"manual_on": on, "card": card, "card_id": self._card_id, "squeeze": self.squeeze_state}
 
 
 def _changed(a, b):

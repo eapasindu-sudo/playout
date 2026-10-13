@@ -14,19 +14,22 @@ import threading
 import time
 
 from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory, session
+import numpy as np
 from PIL import Image
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from audio_out import AudioOut
 from recorder import Recorder
 from capture import list_capture_devices
-from cg import CGManager, cg_kind, cg_preview, list_cg
-from cgedit import PRESET_EXT, list_presets, make_blueprint, read_cgp
+from cg import CGManager, cg_info, cg_kind, cg_preview, list_cg
+from cgedit import PRESET_EXT, list_presets, make_blueprint, read_cgp, update_preset
+from cgfx import render_still
 import media as media_mod
 from engine import Engine
 from system import SystemMonitor
 from media import MEDIA_EXT, list_media, thumbnail
 from paths import safe_name
+from squeeze import clean_box, compose
 from scheduler import DayPlanner, Scheduler
 from store import Store
 from streamer import Streamer
@@ -142,7 +145,7 @@ def sec():
 
 
 OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png")
-LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen")   # full screen output window
+LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen", "/api/preview.jpg")   # + CG Composer   # full screen output window
 ADMIN_ONLY = ("/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
               "/api/sdi", "/api/alerts", "/api/backup")
 
@@ -574,7 +577,8 @@ def _jpeg(width=640):
 
 @app.get("/api/preview.jpg")
 def preview():
-    resp = Response(_jpeg(), mimetype="image/jpeg")
+    w = max(160, min(engine.width, int(request.args.get("w") or 640)))
+    resp = Response(_jpeg(w), mimetype="image/jpeg")
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -1224,6 +1228,94 @@ def cg_upload():
                 os.remove(path)
                 rejected.append(name)
     return jsonify(saved=saved, rejected=rejected)
+
+
+# ---- squeeze feed (L-ad) ------------------------------------------------------
+def _squeeze_presets():
+    return [p for p in list_presets(cfg["cg_dir"]) if (p.get("cfg") or {}).get("squeeze")]
+
+
+def _squeeze_cfg(name):
+    p = next((p for p in _squeeze_presets() if p["name"] == name), None)
+    if p is None:
+        return None
+    return {**p["cfg"], "file": p["file"], "name": p["cfg"].get("name") or os.path.splitext(p["name"])[0],
+            "preset": p["name"]}
+
+
+@app.get("/api/squeeze")
+def squeeze_list():
+    return jsonify(items=[{"preset": p["name"], "name": p["cfg"].get("name") or os.path.splitext(p["name"])[0],
+                           "file": p["file"], "cfg": p["cfg"]} for p in _squeeze_presets()],
+                   on=cgm.squeeze_state, width=engine.width, height=engine.height)
+
+
+@app.post("/api/squeeze/<action>")
+def squeeze_action(action):
+    b = request.get_json(silent=True) or {}
+    if action == "out":
+        cgm.squeeze_out()
+        return jsonify(ok=True)
+    c = _squeeze_cfg(safe_name(b.get("preset")))
+    if c is None:
+        return jsonify(error="Squeeze not found"), 404
+    if action == "in":
+        err = cgm.squeeze_in(c)
+        return jsonify(ok=not err, error=err)
+    if action == "save":
+        changes = {}
+        if b.get("squeeze") is not None:
+            box = clean_box(b["squeeze"], engine.width, engine.height)
+            if box is None:
+                return jsonify(error="Bad position"), 400
+            changes["squeeze"] = box
+        if b.get("squeeze_time") is not None:
+            changes["squeeze_time"] = max(0.0, min(5.0, float(b["squeeze_time"] or 0)))
+        if b.get("loop") is not None:
+            changes["loop"] = bool(b["loop"])
+        update_preset(os.path.join(cfg["cg_dir"], c["preset"]), changes)
+        return jsonify(ok=True, live=cgm.squeeze_update(c["name"], changes))
+    abort(404)
+
+
+_sq_stills = {}
+
+
+def _squeeze_still(p, c):
+    """The keyed overlay picture for the position preview (cached: dragging the box asks for many)."""
+    key = (p, os.path.getmtime(p), json.dumps({k: v for k, v in c.items() if k not in ("squeeze", "squeeze_time", "loop")},
+                                              sort_keys=True))
+    if key not in _sq_stills:
+        if len(_sq_stills) > 8:
+            _sq_stills.clear()
+        t = min(2.0, (cg_info(p).get("duration") or 0) / 2)
+        _sq_stills[key] = render_still(p, cg_kind(p), c, t)
+    return _sq_stills[key]
+
+
+@app.get("/api/squeeze/preview.jpg")
+def squeeze_preview():
+    """A still of the squeeze with the current program in the box (or the box given in ?x=&y=&w=&h=)."""
+    c = _squeeze_cfg(safe_name(request.args.get("preset")))
+    if c is None:
+        abort(404)
+    W, H = engine.width, engine.height
+    box = c["squeeze"]
+    if request.args.get("w"):
+        box = clean_box({k: request.args.get(k) for k in ("x", "y", "w", "h")}, W, H) or box
+    p = os.path.join(cfg["cg_dir"], c["file"])
+    try:
+        img, (dx, dy) = _squeeze_still(p, c)
+    except Exception:
+        abort(404)
+    feed = np.frombuffer(bytes(engine.clean_frame), np.uint8).reshape(H, W, 4)
+    out = compose(feed, img, int(c.get("x") or 0) + dx, int(c.get("y") or 0) + dy, clean_box(box, W, H),
+                  (c.get("key") or "none") != "none")
+    im = Image.fromarray(out[..., [2, 1, 0]]).resize((int(request.args.get("pw") or 640),
+                                                      int((int(request.args.get("pw") or 640)) * H / W)))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=80)
+    return Response(buf.getvalue(), mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/cg/preview/<path:name>")

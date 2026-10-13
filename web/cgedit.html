@@ -37,6 +37,8 @@
   .stage { position:relative; height:100%; max-width:100%; aspect-ratio:16/9; }
   .stage img { width:100%; height:100%; display:block; }
   .stage .box { position:absolute; outline:1px dashed var(--orange); cursor:move; }
+  .stage .box::after { content:""; position:absolute; right:-5px; bottom:-5px; width:10px; height:10px; background:var(--orange); cursor:nwse-resize; }
+  .sqn { width:70px; }
   .stage.pick, .stage.pick .box { cursor:crosshair; }
   .pvbar { display:flex; gap:8px; align-items:center; padding:6px 12px; background:var(--panel); border-top:1px solid var(--line); }
   .swatch { width:34px; height:28px; border:1px solid #000; border-radius:3px; }
@@ -55,6 +57,7 @@
   <span id="composerBtns" style="display:none; gap:6px">
     <button onclick="$('upFile').click()">Open file / .cgp</button>
     <button class="green" onclick="savePreset()" title="Save as .cgp into the Playout CG library">Save to Playout</button>
+    <button class="green" onclick="saveSqueeze()" title="Save as an L-ad / squeeze overlay (the program goes into the green area)">Save to Squeeze Feed</button>
     <button onclick="exportCgp()" title="Save a .cgp file anywhere (to copy to another PC)">Export .cgp</button>
   </span>
   <span id="embedBtns" style="display:none; gap:6px">
@@ -71,6 +74,7 @@
     <button data-tab="gen" class="sel" onclick="tab('gen')">General</button>
     <button data-tab="key" onclick="tab('key')">Colour Key</button>
     <button data-tab="pos" onclick="tab('pos')">Position</button>
+    <button data-tab="sq" onclick="tab('sq')" id="tabSq">Squeeze Feed</button>
     <span style="flex:1"></span>
     <button onclick="resetAll()" style="text-align:center; border-top:1px solid var(--line)">Reset All</button>
   </div>
@@ -113,6 +117,18 @@
         <div id="lumaBox"><div class="grid" id="lumaGrid"></div></div>
       </div>
       <!-- Position -->
+      <div class="pane" id="p_sq">
+        <div class="form">
+          <span class="lbl">Squeeze</span><label><input type="checkbox" id="sqOn" onchange="sqChanged()"> This is an L-ad / squeeze overlay: the program goes into its green area</label>
+          <span class="lbl">Feed box</span><span style="display:flex; gap:6px; align-items:center; flex-wrap:wrap">
+            X <input class="sqn" id="sqX" type="number" oninput="sqChanged()"> Y <input class="sqn" id="sqY" type="number" oninput="sqChanged()">
+            W <input class="sqn" id="sqW" type="number" oninput="sqChanged()"> H <input class="sqn" id="sqH" type="number" oninput="sqChanged()">
+            <button class="sm" onclick="findGreen()">Find green area</button></span>
+          <span class="lbl">Squeeze time</span><span><input id="sqT" type="number" min="0" max="5" step="0.1" style="width:70px" oninput="sqChanged()"> seconds to slide in / out</span>
+          <span class="lbl">Preview</span><label><input type="checkbox" id="sqShow" checked onchange="render()"> Show the feed in the box (the Playout output, or colour bars when Playout is not running)</label>
+          <span></span><span class="hint">Turn on <b>Colour Key</b> (green) so things drawn over the green stay on top of the feed; without a key the feed is simply put over the box. Drag the box in the preview to move it, its bottom-right corner to size it. Then press <b>Save to Squeeze Feed</b>; it shows in Playout under CG &gt; Squeeze Feed.</span>
+        </div>
+      </div>
       <div class="pane" id="p_pos">
         <div class="grid2">
           <div class="grid" id="posGrid"></div>
@@ -185,7 +201,7 @@ function show() {
   $('composerBtns').style.display = EMBED ? 'none' : 'inline-flex';
   if (!EMBED) { $('cgLogo').style.display = ''; $('title').style.display = 'none'; }
   $('embedBtns').style.display = EMBED ? 'inline-flex' : 'none';
-  $('bgProg').disabled = !EMBED;
+  $('bgProg').textContent = EMBED ? 'Current program' : 'Playout output (live)';
   $('title').textContent = EMBED ? (MODE === 'card' ? 'Live card CG' : 'Manual CG') : 'CG Composer';
 }
 
@@ -200,6 +216,7 @@ function toUI() {
   [...CHROMA, ...LUMA, ...POS].forEach(([id, , , , , d]) => setNum(id, c[id] ?? d));
   const cr = c.crop && c.crop.length === 4 ? c.crop : [0, 0, info.w, info.h];
   ['c0', 'c1', 'c2', 'c3'].forEach((id, i) => { $('r_' + id).max = $('n_' + id).max = i % 2 ? info.h : info.w; setNum(id, cr[i]); });
+  sqToUI();
   show();
 }
 function fromUI() {
@@ -217,6 +234,37 @@ function fromUI() {
   show(); render();
 }
 const dirty = () => fromUI();
+
+// squeeze feed (L-ad): the program goes into a box (the green area) of this CG
+const sqActive = () => !!cfg.squeeze && $('sqShow').checked;
+function sqToUI() {
+  const q = cfg.squeeze; $('sqOn').checked = !!q;
+  ['X', 'Y', 'W', 'H'].forEach(k => $('sq' + k).value = q ? q[k.toLowerCase()] : '');
+  $('sqT').value = cfg.squeeze_time ?? 0.6;
+}
+function sqChanged() {
+  if ($('sqOn').checked) {
+    const v = k => parseInt($('sq' + k).value);
+    cfg.squeeze = {x: v('X') || 0, y: v('Y') || 0, w: v('W') || Math.round(W * 0.7), h: v('H') || Math.round(H * 0.7)};
+    cfg.squeeze_time = parseFloat($('sqT').value); if (isNaN(cfg.squeeze_time)) cfg.squeeze_time = 0.6;
+  } else delete cfg.squeeze;
+  sqToUI(); render();
+}
+async function findGreen(quiet) {
+  fromUI(); if (!cfg.file) return false;
+  const r = await (await fetch('/api/cgfx/find_green', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cfg})})).json();
+  if (!r.box) { if (quiet !== true) alertBox(r.error || 'No green area found'); return false; }
+  cfg.squeeze = r.fit || r.box; if (cfg.squeeze_time == null) cfg.squeeze_time = 0.6;
+  sqToUI(); render(); return true;
+}
+async function saveSqueeze() {
+  fromUI(); if (!cfg.file) return;
+  if (!cfg.squeeze && !await findGreen(true)) {
+    alertBox('Set the feed box first (Squeeze Feed tab): no green area was found by itself.'); tab('sq'); return;
+  }
+  const r = await (await fetch('/api/cgfx/save_preset', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)})).json();
+  alertBox(r.saved ? `Saved "${r.saved}" as a squeeze.\nIn Playout: CG > Squeeze Feed tab > IN.` : (r.error || 'Could not save'));
+}
 function keyChanged() { fromUI(); }
 function setColor(c) { $('key_color').value = c; fromUI(); }
 function keyPreset(n) {
@@ -267,7 +315,8 @@ async function doRender() {
   if (rendering) { again = true; return; }
   rendering = true; $('busy').textContent = 'rendering...';
   try {
-    const body = {cfg: picking ? {...cfg, key:'none'} : cfg, t: +$('t').value, bg: picking ? 'black' : $('bg').value, w: 960};
+    const body = {cfg: picking ? {...cfg, key:'none'} : cfg, t: +$('t').value, bg: picking ? 'black' : $('bg').value, w: 960,
+                  squeeze: !picking && sqActive()};
     const r = await fetch('/api/cgfx/render', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
     if (!r.ok) { const e = await r.json().catch(() => ({})); $('busy').innerHTML = '<span class="err">' + (e.error || 'cannot render') + '</span>'; return; }
     box = JSON.parse(r.headers.get('X-CG-Box') || 'null');
@@ -293,14 +342,25 @@ window.addEventListener('resize', drawBox);
 // drag to move
 (function drag() {
   let d = null;
-  $('box').addEventListener('pointerdown', e => { if (picking) return; d = {x:e.clientX, y:e.clientY, X:cfg.x || 0, Y:cfg.y || 0, bx:box[0], by:box[1]}; $('box').setPointerCapture(e.pointerId); });
+  $('box').addEventListener('pointerdown', e => {
+    if (picking) return;
+    const r = $('box').getBoundingClientRect();
+    d = {x:e.clientX, y:e.clientY, X:cfg.x || 0, Y:cfg.y || 0, bx:box[0], by:box[1], bw:box[2], bh:box[3],
+         sq: sqActive() ? {...cfg.squeeze} : null, size: r.right - e.clientX < 16 && r.bottom - e.clientY < 16};
+    $('box').setPointerCapture(e.pointerId);
+  });
   $('box').addEventListener('pointermove', e => {
     if (!d) return; const k = W / $('stage').clientWidth;
     const dx = Math.round((e.clientX - d.x) * k), dy = Math.round((e.clientY - d.y) * k);
+    if (d.sq) {                                   // squeeze feed box
+      if (d.size) { cfg.squeeze.w = Math.max(32, d.sq.w + dx); cfg.squeeze.h = Math.max(18, d.sq.h + dy); box[2] = cfg.squeeze.w; box[3] = cfg.squeeze.h; }
+      else { cfg.squeeze.x = d.sq.x + dx; cfg.squeeze.y = d.sq.y + dy; box[0] = cfg.squeeze.x; box[1] = cfg.squeeze.y; }
+      sqToUI(); drawBox(); return;
+    }
     setNum('x', d.X + dx); setNum('y', d.Y + dy);
     box[0] = d.bx + dx; box[1] = d.by + dy; drawBox();
   });
-  $('box').addEventListener('pointerup', () => { if (d) { d = null; fromUI(); } });
+  $('box').addEventListener('pointerup', () => { if (d) { const sq = d.sq; d = null; if (sq) render(); else fromUI(); } });
 })();
 
 // eyedropper: show the unkeyed picture, click the background colour

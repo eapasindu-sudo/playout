@@ -124,6 +124,7 @@ class Engine:
         self.item_started = None     # wall clock when the item went to air
         self.item_ticks = 0          # frames the on-air item has run
         self.last_frame = self.black
+        self.clean_frame = self.black
         self.last_clip_frame = None
         self.last_source = None
         self.meters = [-90.0, -90.0]
@@ -646,6 +647,7 @@ class Engine:
         elif not self._fo_checked:
             self._failover(True, n)       # live not on air: nothing to cover
         self._main_wanted = source in ("LIVE", "FILLER")
+        self.clean_frame = video          # program before CGs (squeeze preview)
         if self.cg is not None:
             try:
                 video = self.cg.render(video, source.startswith("LIVE"), n)
