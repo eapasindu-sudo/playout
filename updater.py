@@ -138,21 +138,21 @@ class Updater:
             self.state = "idle"
 
     def install(self):
-        """Hand over to a small PowerShell updater that runs on its own (not as a child of Playout):
-        it waits for Playout to close, stops what is still running from the install folder
-        (ffmpeg of a stream / recording, CG Composer), runs the installer silently (Windows asks for
-        admin rights), and then starts Playout again, also when the install did not work."""
+        """Hand over to update.ps1 (next to Playout.exe), which runs on its own: it waits for Playout to
+        close, stops what still runs from the install folder, installs silently, and starts Playout again
+        (also when the install did not work). Windows asks the admin Yes / No question for the install."""
         if self.state != "ready" or not self.file or not os.path.isfile(self.file):
             return {"ok": False, "error": "Download the update first"}
         if sys.platform != "win32":
             return {"ok": False, "error": "Install works on Windows only"}
         app_dir = os.path.dirname(sys.executable)
-        script = os.path.join(tempfile.gettempdir(), "endora-update.ps1")
-        with open(script, "w", encoding="utf-8-sig") as f:
-            f.write(UPDATE_SCRIPT)
+        script = os.path.join(app_dir, "update.ps1")
+        if not os.path.isfile(script):
+            return {"ok": False, "error": "update.ps1 is missing: install this version by hand once"}
+        with open(REQUEST_FILE, "w", encoding="utf-8") as f:
+            json.dump({"setup": self.file, "pid": os.getpid(), "version": self.latest}, f)
         args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-                "-File", script, "-Setup", self.file, "-AppDir", app_dir, "-AppPid", str(os.getpid()),
-                "-Result", RESULT_FILE, "-Version", str(self.latest)]
+                "-File", script]
         flags = 0x00000008 | 0x00000200 | 0x08000000      # detached, own process group, no window
         try:                                              # also break out of a job Playout may be in
             subprocess.Popen(args, close_fds=True, creationflags=flags | 0x01000000)
@@ -163,7 +163,7 @@ class Updater:
                 return {"ok": False, "error": f"Could not start the installer: {e}"}
         self.state = "installing"
         if self.on_install:
-            threading.Timer(1.0, self.on_install).start()
+            threading.Timer(1.5, self.on_install).start()
         return {"ok": True}
 
     def last_result(self):
@@ -178,8 +178,9 @@ class Updater:
             return
         code, _, want = text.partition(" ")
         if code != "0" or (want and _ver(want) > _ver(self.current)):
-            self.notice = (f"The last update ({want or '?'}) did not install (setup code {code}). "
-                           f"Was the Windows admin question answered with Yes? Details: {SETUP_LOG}")
+            why = {"97": "the Windows admin question was answered No", "98": "the installer file was not found"}
+            self.notice = (f"The last update ({want or '?'}) did not install "
+                           f"({why.get(code, f'setup code {code}')}). Details: {SETUP_LOG}")
         else:
             self.notice = f"Updated to {self.current}."
         t = threading.Timer(300, lambda: setattr(self, "notice", ""))     # shown after the restart only
@@ -187,28 +188,6 @@ class Updater:
         t.start()
 
 
+REQUEST_FILE = os.path.join(tempfile.gettempdir(), "endora-update-request.json")
 RESULT_FILE = os.path.join(tempfile.gettempdir(), "endora-update-result.txt")
 SETUP_LOG = os.path.join(tempfile.gettempdir(), "endora-update-setup.log")
-UPDATE_SCRIPT = r"""
-param([string]$Setup, [string]$AppDir, [int]$AppPid, [string]$Result, [string]$Version)
-$ErrorActionPreference = 'SilentlyContinue'
-$log = Join-Path $env:TEMP 'endora-update-setup.log'
-# 1. wait for Playout to close (it closes itself), then make sure nothing from its folder still runs
-for ($i = 0; $i -lt 40 -and (Get-Process -Id $AppPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
-Start-Sleep -Seconds 1
-$dir = $AppDir.TrimEnd('') + ''
-Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force
-Start-Sleep -Seconds 1
-# 2. install (setup asks Windows for admin rights by itself)
-$code = 1
-try {
-  $p = Start-Process -FilePath $Setup -ArgumentList @('/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/FORCECLOSEAPPLICATIONS', "/LOG=`"$log`"") -Wait -PassThru
-  $code = $p.ExitCode
-} catch { $code = 99 }
-Set-Content -Path $Result -Value "$code $Version" -Encoding UTF8
-# 3. start Playout again (the new one, or the old one if the install did not work)
-Start-Sleep -Seconds 1
-if (-not (Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })) {
-  Start-Process -FilePath (Join-Path $AppDir 'Playout.exe') -WorkingDirectory $AppDir
-}
-"""

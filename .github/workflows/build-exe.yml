@@ -37,9 +37,8 @@ jobs:
       - name: Check the update script (PowerShell syntax)
         shell: pwsh
         run: |
-          python -c "import updater; open('upd.ps1','w',encoding='utf-8-sig').write(updater.UPDATE_SCRIPT)"
           $errs = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path upd.ps1), [ref]$null, [ref]$errs) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path build\update.ps1), [ref]$null, [ref]$errs) | Out-Null
           if ($errs.Count) { $errs | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
           Write-Host "update script OK"
 
@@ -85,6 +84,18 @@ jobs:
           }
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           if (-not $ok) { throw "Installed Playout.exe did not start" }
+          # update the installed Playout the way the Update button does (update.ps1 + request file)
+          if (-not (Test-Path "$env:ProgramFiles\Playout\update.ps1")) { throw "update.ps1 not installed" }
+          Copy-Item build\output\Playout-Setup.exe "$env:TEMP\Playout-Setup-9.9.9.exe"
+          Remove-Item "$env:TEMP\endora-update-result.txt" -ErrorAction SilentlyContinue
+          @{ setup = "$env:TEMP\Playout-Setup-9.9.9.exe"; pid = 999999; version = "9.9.9" } | ConvertTo-Json | Set-Content "$env:TEMP\endora-update-request.json"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:ProgramFiles\Playout\update.ps1"
+          $res = (Get-Content "$env:TEMP\endora-update-result.txt" -Raw).Trim()
+          "update result: $res"
+          Get-Content "$env:TEMP\endora-update-setup.log" -Tail 5 -ErrorAction SilentlyContinue
+          if ($res -ne "0 9.9.9") { throw "Update did not install: $res" }
+          Get-Process Playout -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
           Start-Process "$env:ProgramFiles\Playout\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES" -Wait
           "Installer OK: installed, started, uninstalled"
       - uses: actions/upload-artifact@v4

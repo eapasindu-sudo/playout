@@ -1510,7 +1510,7 @@ async function upAsk() {
 }
 async function upInstall(confirmed) {
   const onAir = onAirNow();
-  if (!confirmed && !await ask((onAir ? 'WARNING: Playout is on air / streaming / recording. Installing stops the output for about a minute.\n\n' : '') + `Install Playout ${UPD.latest} now? Playout closes, updates and starts again.`)) return;
+  if (!confirmed && !await ask((onAir ? 'WARNING: Playout is on air / streaming / recording. Installing stops the output for about a minute.\n\n' : '') + `Install Playout ${UPD.latest} now? Playout closes, updates and starts again.\n\nWindows asks "Do you want to allow this app to make changes?": press Yes.`)) return;
   const r = await api('/api/update/install', {}); if (!r.ok) say(r.error); else pollUpdate();
 }
 

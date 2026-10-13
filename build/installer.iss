@@ -33,6 +33,7 @@ Name: "autostart"; Description: "Start Endora Playout when Windows starts (recom
 Source: "dist\Playout\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "endora-playout.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "endora-cgcomposer.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "update.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
 Type: files; Name: "{app}\cgcomposer.ico"
