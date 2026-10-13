@@ -99,6 +99,7 @@ class Engine:
         self.on_change = None        # callback to persist the playlist
         self.streamer = None         # Streamer fed with every program frame
         self.audio_out = None        # program sound on this PC's speakers
+        self.recorder = None         # program recording to a file
         self.cg = None               # CGManager keyed over the program
         self.inputs = {}             # extra live sources used by live cards: key -> input
         self._main_wanted = True
@@ -523,6 +524,8 @@ class Engine:
                 self.streamer.push(video, audio)
             if self.audio_out is not None:
                 self.audio_out.push(audio)
+            if self.recorder is not None:
+                self.recorder.push(video, audio)
 
     def _auto_stinger(self, item):
         """Automatic mode with auto stinger: start the stinger so its cut lands on the item's last frame."""

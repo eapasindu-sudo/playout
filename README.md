@@ -124,6 +124,14 @@ or AMD AMF). Running destinations restart with the new settings. The starting va
 
 Stream keys are saved in `data/state.json` on this PC only.
 
+## Recording
+
+**Recording** (under Live stream) records the program output, with CGs and sound, to an MP4 file in
+`Documents\Playout\recordings` (named `PGM_<date>_<time>.mp4`). Pick **1080p** or 720p, **10 / 20 / 50 Mbps**
+(constant bitrate) and the encoder, then press **● REC**. A GPU encoder (NVIDIA / Intel / AMD) keeps the
+CPU free; if the PC does not have it, Playout records with the CPU instead and says so. The file is
+written in fragments, so it stays playable even if the PC loses power while recording.
+
 ## Install (Windows)
 
 1. Download **Playout-Setup.exe** (GitHub > Actions > latest "Build Playout installer" run > Artifacts).
@@ -191,6 +199,7 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `web/output.html` | full screen output page |
 | `capture.py` | USB / HDMI capture devices and test bars for live cards |
 | `audio_out.py` | program sound on the PC's speakers |
+| `recorder.py` | program recording to MP4 |
 | `system.py` | CPU / GPU / RAM usage |
 | `store.py` | saved state and named playlists |
 | `web/index.html` | control screen |

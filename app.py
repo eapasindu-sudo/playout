@@ -15,6 +15,7 @@ from PIL import Image
 from werkzeug.utils import secure_filename
 
 from audio_out import AudioOut
+from recorder import Recorder
 from capture import list_capture_devices
 from cg import CG_EXT, CGManager, cg_preview, list_cg
 from cgedit import PRESET_EXT, list_presets, make_blueprint, read_cgp
@@ -64,6 +65,8 @@ engine.cg = cgm
 sysmon = SystemMonitor()
 audio_out = AudioOut()
 engine.audio_out = audio_out
+recorder = Recorder(engine, os.path.join(ROOT, cfg.get("record_dir", "recordings")))
+engine.recorder = recorder
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 app = Flask(__name__, static_folder=None)
 app.register_blueprint(make_blueprint(lambda: cfg["cg_dir"], lambda: (engine.width, engine.height),
@@ -233,6 +236,32 @@ def fullscreen():
     except Exception as e:
         return jsonify(ok=False, error=str(e))
     return jsonify(ok=True, on=fullscreen_on)
+
+
+# ---- recording ---------------------------------------------------------
+@app.route("/api/record", methods=["GET", "POST"])
+def record_info():
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        recorder.configure(b.get("resolution"), b.get("mbps"), b.get("encoder"))
+        store.set(record_settings=recorder.settings())
+    return jsonify(recorder.info())
+
+
+@app.post("/api/record/<action>")
+def record_action(action):
+    if action == "start":
+        return jsonify(recorder.start())
+    if action == "stop":
+        return jsonify(recorder.stop())
+    if action == "folder":
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            abort(403)
+        os.makedirs(recorder.folder, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(recorder.folder)
+        return jsonify(path=recorder.folder)
+    abort(404)
 
 
 # ---- stinger -----------------------------------------------------------
@@ -477,6 +506,8 @@ def start_backend():
     engine.on_change = lambda items: store.set(playlist=items)
     engine.set_live_source(cfg.get("live_source") or store.data.get("live_source"))
     streamer.load(store.data.get("stream_destinations"))
+    rs = store.data.get("record_settings") or {}
+    recorder.configure(rs.get("resolution"), rs.get("mbps"), rs.get("encoder"))
     st = store.data.get("stinger") or {}
     engine.set_stinger(st.get("file"), st.get("cut"), st.get("auto"))
     saved = store.data.get("stream_settings") or {}
@@ -495,6 +526,7 @@ def start_backend():
 
 def shutdown():
     sysmon.stop()
+    recorder.stop()
     audio_out.close()
     scheduler.stop()
     streamer.stop_all()
