@@ -282,11 +282,16 @@ async function loadFiles() {
   $('file').innerHTML = (files.length ? '' : '<option value="">(no CG files yet: open one)</option>') +
     files.map(f => `<option value="${f.name.replace(/"/g, '&quot;')}">${f.name}</option>`).join('');
   if (cur && files.some(f => f.name === cur)) $('file').value = cur;
+  else if (cur) {   // the CG file was moved or deleted: keep its settings, show it as missing
+    $('file').insertAdjacentHTML('afterbegin', `<option value="${cur.replace(/"/g, '&quot;')}">${cur}  (missing: pick or open the file again)</option>`);
+    $('file').value = cur;
+  }
   else if (!cur && files.length) { cfg.file = files[0].name; $('file').value = cfg.file; await fileChanged(true); }
 }
 async function fileChanged(fresh) {
   cfg.file = $('file').value; if (!cfg.file) return;
-  try { info = await (await fetch('/api/cgfx/info?file=' + encodeURIComponent(cfg.file))).json(); } catch (e) {}
+  try { info = await (await fetch('/api/cgfx/info?file=' + encodeURIComponent(cfg.file))).json(); } catch (e) { info = {}; }
+  if (!info.kind) { info = {}; $('fileInfo').textContent = `${cfg.file}  is not in the CG folder: open it again (or pick another file)`; toUI(); return; }
   $('fileInfo').textContent = `${cfg.file}  ${info.w}x${info.h}${info.duration ? ', ' + info.duration.toFixed(1) + 's' : ''}${info.alpha ? ', has alpha' : ''}`;
   $('t').max = Math.max(0.04, (info.duration || 0) - 0.04);
   if (fresh === true) { cfg.crop = []; if (info.w >= W * 0.9) { place('full', true); } }

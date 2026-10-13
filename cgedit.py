@@ -134,6 +134,8 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
     @bp.get("/api/cgfx/info")
     def info():
         p = path_of(request.args.get("file"))
+        if not p or not os.path.isfile(p):
+            return jsonify(kind=None, missing=True)
         return jsonify(kind=cg_kind(p), **cg_info(p))
 
     @bp.post("/api/cgfx/render")

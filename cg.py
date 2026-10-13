@@ -318,7 +318,12 @@ class CGManager:
                 return True
             if layer:
                 layer.close()
-            self._manual_layers[cid] = self._layer(cfg)
+            layer = self._layer(cfg)
+            self._manual_layers[cid] = layer
+            if getattr(layer, "error", ""):
+                if layer.error == "file missing":
+                    return f"{cfg.get('file')} is not in the CG folder any more: open Edit and pick the file again"
+                return layer.error
             return True
 
     def take_out(self, cid):

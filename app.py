@@ -1383,13 +1383,15 @@ def cg_manual():
 
 @app.post("/api/cg/manual/<cid>/<action>")
 def cg_manual_action(cid, action):
+    err = None
     if action == "in":
-        cgm.take_in(cid)
+        r = cgm.take_in(cid)
+        err = r if isinstance(r, str) else None
     elif action == "out":
         cgm.take_out(cid)
     else:
         abort(404)
-    return jsonify(cgm.status())
+    return jsonify(error=err, **cgm.status())
 
 
 @app.post("/api/cg/all_out")

@@ -1959,7 +1959,7 @@ async function cmLookSave() {
   const ch = {look: cmLook()}; if ($('cmTok').value.trim()) ch.facebook_token = $('cmTok').value.trim();
   await cmSet(ch); dCm.close(); cmPoll();
 }
-const cgTake = (id, a) => api(`/api/cg/manual/${id}/${a}`, {}).then(pollCG);
+const cgTake = (id, a) => api(`/api/cg/manual/${id}/${a}`, {}).then(r => { if (r && r.error) say(r.error); pollCG(); });
 const saveManual = () => api('/api/cg/manual', cgManual).then(() => { cgShown = ''; pollCG(); });
 function addManualCG(file) { openCG('manual', file ? {file} : null, cfg => { cgManual.push(cfg); saveManual(); }); }
 function editManualCG(id) {
