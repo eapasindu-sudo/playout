@@ -13,6 +13,8 @@ Playlist item (dict):
     gain_db   extra volume for this clip
     category  clip type: Commercial (default), Program, Starting Soon, Theme, Promo, ...
     cgs       CGs (logo, bug, lower third) that go on air with this item
+    squeeze   Squeeze Feed preset (.cgp) that goes IN with this item; squeeze_at = seconds after the
+              item starts, squeeze_for = seconds on air (0 = until the item ends)
 """
 import csv
 import datetime as dt
@@ -209,6 +211,9 @@ class Engine:
                     it["name"] = it.get("name") or "LIVE"
                 else:
                     continue
+                it["squeeze"] = os.path.basename(str(it.get("squeeze") or ""))
+                it["squeeze_at"] = max(0.0, _num(it.get("squeeze_at")))
+                it["squeeze_for"] = max(0.0, _num(it.get("squeeze_for")))
                 clean.append(it)
             self.playlist = clean
             if self._index(self.cued) is None:
@@ -459,6 +464,10 @@ class Engine:
                 self.cg.start_card(item_id, item.get("cgs"))
             else:
                 self.cg.stop_card()
+            if item.get("squeeze"):
+                err = self.cg.squeeze_item(item_id, item["squeeze"], item.get("squeeze_at"), item.get("squeeze_for"))
+                if err:
+                    self.message = f"Squeeze: {err}"
         self.cued = None
         self.state = "PLAYING"
         self.idle = "live"
@@ -495,6 +504,8 @@ class Engine:
         self.played.add(self.on_air)
         if self.cg is not None and item.get("cgs"):
             self.cg.stop_card()
+        if self.cg is not None and item.get("squeeze"):
+            self.cg.squeeze_item_end(self.on_air)
         if self.player:
             self.player.close()
         self.player = None

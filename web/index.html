@@ -371,6 +371,7 @@
         <button id="tabMan" class="sel" onclick="cgTab('man')">Manual CG</button>
         <button id="tabLib" onclick="cgTab('lib')">CG Library</button>
         <button id="tabSq" onclick="cgTab('sq')" title="L-ad: the program shrinks into the green area of an overlay">Squeeze Feed</button>
+        <button id="tabCm" onclick="cgTab('cm')" title="YouTube / Facebook live comments on air">Comments</button>
         <span style="flex:1"></span>
         <span class="hint" id="cgCard" style="align-self:center"></span>
       </div>
@@ -378,7 +379,7 @@
         <div class="cglist" id="cgList"></div>
         <div class="cgbar">
           <button class="lockable" onclick="addManualCG()">+ Add CG</button>
-          <button class="lockable" onclick="openTextCG()" title="Ticker, name / title lower third, clock, text">+ Text CG</button>
+          <button class="lockable" onclick="openTextCG()" title="Ticker, name / title lower third, clock, countdown, text">+ Text CG</button>
           <span style="flex:1"></span>
           <button class="red" onclick="api('/api/cg/all_out', {}).then(pollCG)" title="Take every CG off air">ALL OUT</button>
         </div>
@@ -399,10 +400,50 @@
           <button class="red" onclick="sqTake('', 'out')" title="Program back to full screen">SQUEEZE OUT</button>
         </div>
       </div>
+      <div id="cgCm" style="display:none">
+        <div style="display:flex; gap:6px; padding:8px 10px 0; flex-wrap:wrap; align-items:center">
+          <input id="cmYt" placeholder="YouTube live link" style="flex:1; min-width:160px">
+          <input id="cmFb" placeholder="Facebook live video link" style="flex:1; min-width:160px">
+          <button class="sm lockable" onclick="cmConnect()">Connect</button>
+          <button class="sm lockable" onclick="cmLookOpen()">Look / Facebook token</button>
+        </div>
+        <div class="hint" id="cmStatus" style="padding:4px 10px"></div>
+        <div class="cglist" id="cmList" style="max-height:300px; overflow:auto"></div>
+        <div style="display:flex; gap:6px; padding:6px 10px">
+          <input id="cmAuthor" placeholder="Name" style="width:120px"><input id="cmText" placeholder="Type a comment (e.g. from WhatsApp) and press Enter" style="flex:1"
+            onkeydown="if (event.key === 'Enter') cmAdd()"><button class="sm" onclick="cmAdd()">Add</button>
+        </div>
+        <div class="cgbar">
+          <label title="Show every new comment by itself, one after another"><input type="checkbox" id="cmAuto" onchange="cmSet({auto: this.checked})"> Auto</label>
+          <label>for <input class="num" id="cmSecs" type="number" min="2" max="120" style="width:56px" onchange="cmSet({show_secs: +this.value || 8})"> s</label>
+          <span style="flex:1"></span>
+          <button class="red" onclick="api('/api/comments/hide', {}).then(cmPoll)">HIDE COMMENT</button>
+        </div>
+      </div>
       <input type="file" id="upCG" multiple accept=".cgp" style="display:none" onchange="uploadCG(this)">
     </div>
   </div>
 </div>
+
+<!-- Comment box look -->
+<dialog id="dCm" style="width:min(720px, 96vw)">
+  <header>Comments on air <button class="sm" onclick="dCm.close()">Close</button></header>
+  <div class="body">
+    <img class="tcg-prev" id="cmPrev" alt="preview" style="max-width:100%">
+    <div class="form" style="grid-template-columns: 110px 1fr; margin-top:8px">
+      <span>Font</span><select id="cmFont" onchange="cmPrevLater()"></select>
+      <span>Size</span><input class="num" id="cmSize" type="number" min="12" max="120" onchange="cmPrevLater()">
+      <span>Colours</span><span style="display:flex; gap:6px; align-items:center">Text <input type="color" id="cmColor" onchange="cmPrevLater()"> Box <input type="color" id="cmBg" onchange="cmPrevLater()"> Name bar <input type="color" id="cmAcc" onchange="cmPrevLater()">
+        <input type="range" id="cmBgA" min="0" max="100" style="width:100px" onchange="cmPrevLater()"> box opacity</span>
+      <span>Position</span><span style="display:flex; gap:6px; align-items:center">X <input class="num" id="cmX" type="number" style="width:80px" onchange="cmPrevLater()"> Y <input class="num" id="cmY" type="number" style="width:80px" onchange="cmPrevLater()">
+        Width <input class="num" id="cmW" type="number" style="width:80px" onchange="cmPrevLater()"></span>
+      <span>Show</span><label><input type="checkbox" id="cmLive"> Only on live (hide during commercials)</label>
+      <span>Facebook token</span><span style="display:flex; gap:6px; align-items:center"><input id="cmTok" type="password" placeholder="Page access token" style="flex:1"><button class="sm" onclick="cmSet({clear_token: true}).then(cmLoad)">Clear</button></span>
+      <span></span><span class="hint" id="cmTokHint">Facebook needs a Page access token: Meta for Developers &gt; Graph API Explorer &gt; pick your Page, add pages_read_engagement and pages_read_user_content &gt; Generate token. YouTube needs nothing.</span>
+    </div>
+  </div>
+  <div class="foot"><button class="blue" onclick="cmLookSave()">Save</button></div>
+</dialog>
 
 <!-- Squeeze feed position -->
 <dialog id="dSq">
@@ -469,6 +510,13 @@
       <span style="flex:1"></span><button class="sm" onclick="addCardCG()">+ Add CG</button></div>
     <table class="cardcg" id="lvCG"></table>
     <div class="hint" style="margin-top:6px">These CGs go on air with this card only, and come off when the card ends. Delay = seconds after the card starts; On for = seconds on screen (empty = whole card).</div>
+    <div class="section-t" style="margin:12px -14px 6px">Squeeze Feed with this card</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+      <select id="lvSq" style="min-width:200px"></select>
+      <label>In after <input class="num" id="lvSqAt" type="number" min="0" step="0.5" style="width:70px"> s</label>
+      <label>On for <input class="num" id="lvSqFor" type="number" min="0" step="0.5" style="width:70px" placeholder="whole"> s</label>
+      <span class="hint">The program squeezes into the L-ad by itself while this card plays, and goes back to full screen when it ends.</span>
+    </div>
   </div>
   <div class="foot" id="lvFootAdd">
     <button onclick="addLive('next')">Insert after on-air</button>
@@ -540,9 +588,16 @@
         <button class="sm" onclick="nudge('edOut', -1)">-1s</button><button class="sm" onclick="nudge('edOut', 1)">+1s</button><button class="sm" onclick="$('edOut').value=''; trimPrev()">End</button></div></div>
     </div>
     <div style="display:flex; gap:8px; align-items:center; margin-top:6px"><span class="hint" id="edTrimInfo"></span><span style="flex:1"></span><button class="sm" onclick="previewClip(edItem.file, parseClock($('edIn').value))">&#9654; Preview clip</button></div>
-    <div class="section-t" style="margin:12px -14px 6px; display:flex; align-items:center">CGs with this commercial (logo, bug, lower third)
+    <div class="section-t" style="margin:12px -14px 6px; display:flex; align-items:center">CGs with this clip (logo, bug, lower third)
       <span style="flex:1"></span><button class="sm" onclick="addItemCG()">+ Add CG</button></div>
     <table class="cardcg" id="edCG"></table>
+    <div class="section-t" style="margin:12px -14px 6px">Squeeze Feed with this clip</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+      <select id="edSq" style="min-width:200px"></select>
+      <label>In after <input class="num" id="edSqAt" type="number" min="0" step="0.5" style="width:70px"> s</label>
+      <label>On for <input class="num" id="edSqFor" type="number" min="0" step="0.5" style="width:70px" placeholder="whole"> s</label>
+      <span class="hint">The program squeezes into the L-ad by itself while this clip plays, and goes back to full screen when it ends.</span>
+    </div>
   </div>
   <div class="foot"><button class="blue" onclick="saveEdit()">Save</button></div>
 </dialog>
@@ -765,11 +820,17 @@
     <div><img class="tcg-prev" id="tcPrev" alt="preview"><div class="hint" id="tcErr" style="margin-top:4px"></div>
       <div style="display:flex; gap:6px; margin-top:6px"><label><input type="checkbox" id="tcOnPgm" onchange="tcRender()"> Show over the program</label></div></div>
     <div class="form" style="grid-template-columns: 90px 1fr">
-      <span>Type</span><select id="tcStyle" onchange="tcShow(); tcRender()"><option value="lower3">Lower third (name / title)</option><option value="ticker">Ticker (scrolling news)</option><option value="clock">Clock / date</option><option value="text">Text box</option></select>
+      <span>Type</span><select id="tcStyle" onchange="tcShow(); tcRender()"><option value="lower3">Lower third (name / title)</option><option value="ticker">Ticker (scrolling news)</option><option value="clock">Clock / date</option><option value="countdown">Countdown</option><option value="text">Text box</option></select>
       <span>Name</span><input id="tcName" placeholder="name in the CG list">
       <span class="tc-l3">Line 1</span><input class="tc-l3" id="tcL1" placeholder="Name" oninput="tcLater()">
       <span class="tc-l3">Line 2</span><input class="tc-l3" id="tcL2" placeholder="Title" oninput="tcLater()">
       <span class="tc-tk tc-tx">Text</span><textarea class="tc-tk tc-tx" id="tcText" rows="5" style="font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:6px" placeholder="Ticker: one news item per line" oninput="tcLater()"></textarea>
+      <span class="tc-cd">Count</span><span class="tc-cd" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap">
+        <select id="tcCdMode" onchange="tcCdShow(); tcRender()"><option value="for">for</option><option value="to">until the time</option></select>
+        <input id="tcCdSecs" placeholder="05:00" style="width:80px" oninput="tcLater()" title="mm:ss or h:mm:ss, counted from when it goes IN">
+        <input id="tcCdTo" type="time" step="1" style="width:110px" onchange="tcRender()"></span>
+      <span class="tc-cd">At zero</span><input class="tc-cd" id="tcEnd" placeholder="LIVE NOW (empty = goes off by itself)" oninput="tcLater()">
+      <span class="tc-cd"></span><span class="tc-cd hint">Text: {t} is the time left, e.g. "Starting in {t}". It starts counting when it goes IN.</span>
       <span class="tc-tk">Label</span><input class="tc-tk" id="tcLabel" placeholder="NEWS / BREAKING (optional)" oninput="tcLater()">
       <span class="tc-tk">Text file</span><input class="tc-tk" id="tcFile" placeholder="optional: C:\news\ticker.txt (read every 10 s)" oninput="tcLater()">
       <span class="tc-tk">Speed</span><span class="tc-tk"><input class="num" id="tcSpeed" type="number" min="20" max="600" step="10"> pixels / second</span>
@@ -878,7 +939,7 @@ async function poll() {
   $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
   if (S.live_source !== shownSource) fillSources();
   meters(S.meters);
-  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || [], client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
   $('foWarn').classList.toggle('show', !!S.failover?.active);
   if (S.failover?.active) { tally.textContent = 'FILLER'; tally.className = 'tally pause'; }
@@ -937,7 +998,7 @@ function renderPlaylist() {
           <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}" ${catColor(it)}>${it.type === 'live' ? 'LIVE' : catShort(it)}</span>
           <span class="name">${esc(it.name)}</span>
         </div>
-        <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}</div>
+        <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.squeeze ? ` <span class="badge" style="background:#15803d" title="Squeeze Feed: ${esc(it.squeeze)}">SQUEEZE</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}</div>
         <div class="metrics">
           <div><div class="lbl">Duration</div><div class="v">${it.duration ? tc(it.duration).slice(0, 11) : 'until Next'}</div></div>
           <div><div class="lbl">Start</div><div class="v" data-f="start">--:--:--</div></div>
@@ -998,7 +1059,7 @@ async function openEdit(id) {
   fillCats(it.category || 'Commercial');
   $('edIn').value = it.in ? clockShort(it.in) : ''; $('edOut').value = it.out ? clockShort(it.out) : '';
   $('edFull').textContent = it.file_duration ? `- file is ${clockShort(it.file_duration)} long` : '';
-  edCGs = JSON.parse(JSON.stringify(it.cgs || [])); renderItemCG(); trimPrev(); loadCGFiles();
+  edCGs = JSON.parse(JSON.stringify(it.cgs || [])); renderItemCG(); trimPrev(); loadCGFiles(); fillSqSel('ed', it);
   fillClients();
   $('edLufs').textContent = '';
   api('/api/media').then(list => { const m = list.find(x => x.name === it.file);
@@ -1022,9 +1083,22 @@ function saveEdit() {
   it.client = $('edClient').value.trim(); it.gain_db = +$('edGain').value || 0;
   it.category = $('edCat').value === '__new' ? (it.category || 'Commercial') : $('edCat').value || 'Commercial';
   it.in = parseClock($('edIn').value); it.out = parseClock($('edOut').value);
-  it.cgs = edCGs;
+  it.cgs = edCGs; Object.assign(it, sqFields('ed'));
   dEdit.close(); savePlaylist();
 }
+// Squeeze Feed attached to a playlist item
+async function fillSqSel(pre, it) {
+  const sel = $(pre + 'Sq'), want = it?.squeeze || '';
+  sel.innerHTML = `<option value="">None</option>` + (want ? `<option value="${esc(want)}">${esc(want.replace(/\.cgp$/i, ''))}</option>` : '');
+  sel.value = want; $(pre + 'SqAt').value = it?.squeeze_at || 0; $(pre + 'SqFor').value = it?.squeeze_for || '';
+  try {
+    const r = await api('/api/squeeze');
+    sel.innerHTML = `<option value="">None</option>` + r.items.map(q => `<option value="${esc(q.preset)}">${esc(q.name)}</option>`).join('') +
+      (want && !r.items.some(q => q.preset === want) ? `<option value="${esc(want)}">${esc(want)} (missing)</option>` : '');
+    sel.value = want;
+  } catch (e) {}
+}
+const sqFields = pre => ({squeeze: $(pre + 'Sq').value, squeeze_at: +$(pre + 'SqAt').value || 0, squeeze_for: +$(pre + 'SqFor').value || 0});
 function renderItemCG() {
   $('edCG').innerHTML = '<tr><th></th><th>CG</th><th>X, Y</th><th>Zoom</th><th>Delay</th><th>On for</th><th></th></tr>' + (edCGs.map((c, i) => `<tr>
     <td><img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}"></td><td>${esc(c.name || c.file)}</td>
@@ -1079,12 +1153,12 @@ function openLive(it) {
   $('lvSrc').dataset.want = it ? it.source || '' : '';
   lvCGs = it ? JSON.parse(JSON.stringify(it.cgs || [])) : [];
   $('lvFootAdd').style.display = it ? 'none' : ''; $('lvFootEdit').style.display = it ? '' : 'none';
-  renderCardCG(); loadInputs(false); loadCGFiles();
+  renderCardCG(); loadInputs(false); loadCGFiles(); fillSqSel('lv', it);
   dLive.showModal();
 }
 function liveFields() {
   let f = $('lvFixed').value; if (f && f.length === 5) f += ':00';
-  return {name:$('lvName').value.trim() || 'LIVE', duration:parseDur($('lvDur').value), fixed:f, source:lvSource(), cgs:lvCGs};
+  return {name:$('lvName').value.trim() || 'LIVE', duration:parseDur($('lvDur').value), fixed:f, source:lvSource(), cgs:lvCGs, ...sqFields('lv')};
 }
 function addLive(where) { const f = liveFields(); dLive.close(); insertAt([{type:'live', ...f}], where); }
 function saveLive() { const it = PL.find(x => x.id === editId); if (it) Object.assign(it, liveFields()); dLive.close(); savePlaylist(); }
@@ -1526,7 +1600,10 @@ function closePreview() { dPrev.close(); }
 let tcEdit = null, tcTimer = null, FONTS = null;
 const TC_DEF = {kind:'text', style:'lower3', line1:'Name Surname', line2:'Title', text:'', label:'', text_file:'', fmt:'%H:%M:%S', font:'Arial', size:44, bold:true,
   color:'#ffffff', bg:'#0f2252', bg_alpha:85, accent:'#e0261b', x:120, y:820, width:0, speed:120, live_only:false, fade:8};
-const TC_POS = {lower3:[120, 0.76], ticker:[0, 0.93], clock:[0.86, 0.04], text:[80, 0.06]};
+const TC_POS = {lower3:[120, 0.76], ticker:[0, 0.93], clock:[0.86, 0.04], countdown:[0.35, 0.42], text:[80, 0.06]};
+const secsText = v => { v = Math.max(0, Math.round(+v || 0)); const h = Math.floor(v / 3600), m = Math.floor(v / 60) % 60, x = v % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(x).padStart(2, '0'); };
+function tcCdShow() { const to = $('tcCdMode').value === 'to'; $('tcCdSecs').style.display = to ? 'none' : ''; $('tcCdTo').style.display = to ? '' : 'none'; }
 async function openTextCG(c) {
   if (!FONTS) { try { FONTS = (await api('/api/textcg/fonts')).fonts; } catch (e) { FONTS = ['Arial']; } }
   tcEdit = c || null;
@@ -1539,6 +1616,8 @@ async function openTextCG(c) {
   $('tcFmt').value = cfg.fmt; $('tcSize').value = cfg.size; $('tcBold').checked = cfg.bold !== false;
   $('tcColor').value = cfg.color; $('tcBg').value = cfg.bg; $('tcAcc').value = cfg.accent; $('tcBgA').value = cfg.bg_alpha;
   $('tcX').value = cfg.x; $('tcY').value = cfg.y; $('tcW').value = cfg.width || 0; $('tcLive').checked = !!cfg.live_only;
+  $('tcCdMode').value = cfg.cd_mode || 'for'; $('tcCdSecs').value = secsText(cfg.cd_secs ?? 300); $('tcCdTo').value = cfg.cd_to || '';
+  $('tcEnd').value = cfg.end_text ?? 'LIVE NOW'; tcCdShow();
   $('tcStyle').dataset.prev = cfg.style;
   tcShow(); dText.showModal(); tcRender();
 }
@@ -1546,20 +1625,23 @@ function tcShow() {
   const st = $('tcStyle').value, prev = $('tcStyle').dataset.prev;
   if (prev && prev !== st && !tcEdit) {        // new CG: sensible place and size for the type
     const [px, py] = TC_POS[st]; $('tcX').value = px < 1 ? Math.round(S.width * px) : px; $('tcY').value = Math.round(S.height * py);
-    $('tcSize').value = st === 'ticker' ? 36 : st === 'clock' ? 34 : 44;
+    $('tcSize').value = st === 'ticker' ? 36 : st === 'clock' ? 34 : st === 'countdown' ? 72 : 44;
+    if (st === 'countdown' && !$('tcText').value.trim()) $('tcText').value = 'Starting in {t}';
   }
   $('tcStyle').dataset.prev = st;
   const show = (cls, on) => document.querySelectorAll(cls).forEach(e => e.style.display = on ? '' : 'none');
-  show('.tc-l3', st === 'lower3'); show('.tc-tk', st === 'ticker'); show('.tc-ck', st === 'clock');
-  document.querySelectorAll('.tc-tx').forEach(e => e.style.display = (st === 'ticker' || st === 'text') ? '' : 'none');
+  show('.tc-l3', st === 'lower3'); show('.tc-tk', st === 'ticker'); show('.tc-ck', st === 'clock'); show('.tc-cd', st === 'countdown');
+  document.querySelectorAll('.tc-tx').forEach(e => e.style.display = (st === 'ticker' || st === 'text' || st === 'countdown') ? '' : 'none');
+  if (st === 'countdown') tcCdShow();
 }
 function tcCfg() {
   const st = $('tcStyle').value;
   const c = {...(tcEdit || {}), kind:'text', style:st, name:$('tcName').value.trim(), line1:$('tcL1').value, line2:$('tcL2').value, text:$('tcText').value,
     label:$('tcLabel').value.trim(), text_file:$('tcFile').value.trim(), fmt:$('tcFmt').value, font:$('tcFont').value, size:+$('tcSize').value || 40,
     bold:$('tcBold').checked, color:$('tcColor').value, bg:$('tcBg').value, accent:$('tcAcc').value, bg_alpha:+$('tcBgA').value,
-    x:+$('tcX').value || 0, y:+$('tcY').value || 0, width:+$('tcW').value || 0, speed:+$('tcSpeed').value || 120, live_only:$('tcLive').checked};
-  if (!c.name) c.name = st === 'lower3' ? (c.line1 || 'Lower third') : st === 'ticker' ? 'Ticker' : st === 'clock' ? 'Clock' : (c.text.split('\n')[0] || 'Text').slice(0, 30);
+    x:+$('tcX').value || 0, y:+$('tcY').value || 0, width:+$('tcW').value || 0, speed:+$('tcSpeed').value || 120, live_only:$('tcLive').checked,
+    cd_mode:$('tcCdMode').value, cd_secs:parseClock($('tcCdSecs').value) || 300, cd_to:$('tcCdTo').value, end_text:$('tcEnd').value};
+  if (!c.name) c.name = st === 'lower3' ? (c.line1 || 'Lower third') : st === 'ticker' ? 'Ticker' : st === 'clock' ? 'Clock' : st === 'countdown' ? 'Countdown' : (c.text.split('\n')[0] || 'Text').slice(0, 30);
   return c;
 }
 function tcLater() { clearTimeout(tcTimer); tcTimer = setTimeout(tcRender, 250); }
@@ -1662,10 +1744,11 @@ async function pollSys() {
 // ---------------------------------------------------------------- CG
 let cgFiles = [], cgManual = [], cgStatus = {manual_on:{}}, cgShown = '';
 function cgTab(t) {
-  $('tabMan').classList.toggle('sel', t === 'man'); $('tabLib').classList.toggle('sel', t === 'lib'); $('tabSq').classList.toggle('sel', t === 'sq');
-  $('cgMan').style.display = t === 'man' ? '' : 'none'; $('cgLib').style.display = t === 'lib' ? '' : 'none'; $('cgSq').style.display = t === 'sq' ? '' : 'none';
+  $('tabMan').classList.toggle('sel', t === 'man'); $('tabLib').classList.toggle('sel', t === 'lib'); $('tabSq').classList.toggle('sel', t === 'sq'); $('tabCm').classList.toggle('sel', t === 'cm');
+  $('cgMan').style.display = t === 'man' ? '' : 'none'; $('cgLib').style.display = t === 'lib' ? '' : 'none'; $('cgSq').style.display = t === 'sq' ? '' : 'none'; $('cgCm').style.display = t === 'cm' ? '' : 'none';
   if (t === 'lib') loadCGFiles().then(renderCGFiles);
   if (t === 'sq') loadSqueeze();
+  if (t === 'cm') cmLoad();
 }
 let cgPresets = [];
 async function loadCGFiles() {
@@ -1708,7 +1791,7 @@ async function pollCG() {
     el.className = 'cgrow ' + st;
     const live = st === 'on' || st === 'in';
     el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
-      (c.live_only ? ' - live only' : '') + (c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
+      (c.live_only ? ' - live only' : '') + (c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
     el.querySelector('.in').classList.toggle('red', live);
   }
   const card = r.card || [];
@@ -1716,7 +1799,7 @@ async function pollCG() {
 }
 function renderManual() {
   $('cgList').innerHTML = cgManual.map(c => `<div class="cgrow" id="mc_${c.id}">
-    ${c.kind === 'text' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#ffb36b">${{lower3:'NAME', ticker:'TICKER', clock:'CLOCK', text:'TEXT'}[c.style] || 'TEXT'}</div>`
+    ${c.kind === 'text' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#ffb36b">${{lower3:'NAME', ticker:'TICKER', clock:'CLOCK', countdown:'COUNT', text:'TEXT'}[c.style] || 'TEXT'}</div>`
       : `<img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}">`}
     <div style="min-width:0"><div class="nm">${esc(c.name || c.file)}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
@@ -1732,7 +1815,7 @@ async function loadSqueeze() {
     <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(q.file)}">
     <div style="min-width:0"><div class="nm">${esc(q.name)}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="sqTake(${i}, 'in')">IN</button><button class="sm" onclick="sqTake(${i}, 'out')">OUT</button>
-      <button class="sm lockable" onclick="sqOpen(${i})">Position</button></div></div>`).join('')
+      <button class="sm lockable" onclick="sqOpen(${i})">Position</button><button class="sm lockable" onclick="sqDelete(${i})">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No squeeze feeds yet. In CG Composer open the L-ad video (with the green area), key the green and press <b>Save to Squeeze Feed</b>.</div>';
   sqShown = ''; sqState(cgStatus.squeeze);
 }
@@ -1752,6 +1835,13 @@ async function sqTake(i, a) {
   const r = await api('/api/squeeze/' + a, a === 'out' ? {} : {preset: sqItems[i].preset});
   if (r.error) say(r.error);
   pollCG();
+}
+async function sqDelete(i) {
+  const q = sqItems[i];
+  if (!await ask(`Delete the squeeze "${q.name}"? (The video file stays in the CG folder.)`)) return;
+  const r = await api('/api/squeeze/delete', {preset: q.preset});
+  if (r.error) say(r.error);
+  loadSqueeze();
 }
 function sqOpen(i) {
   const q = sqItems[i]; sqEdit = {i, q};
@@ -1809,6 +1899,64 @@ async function sqSave() {
   if (r.error) { $('sqMsg').textContent = r.error; return; }
   $('sqMsg').textContent = r.live ? 'Saved. The feed moved on air.' : 'Saved.';
   await loadSqueeze();
+}
+// Live comments (YouTube / Facebook / typed)
+let CM = {items: [], last: 0, cfg: {}, on: null, timer: null};
+async function cmLoad() {
+  CM.items = []; CM.last = 0; $('cmList').innerHTML = '';
+  await cmPoll(true);
+  const c = CM.cfg; $('cmYt').value = c.youtube || ''; $('cmFb').value = c.facebook || '';
+  $('cmAuto').checked = !!c.auto; $('cmSecs').value = c.show_secs || 8;
+  clearInterval(CM.timer); CM.timer = setInterval(() => { if ($('cgCm').style.display !== 'none') cmPoll(); }, 1500);
+}
+async function cmPoll() {
+  let r; try { r = await api('/api/comments?since=' + CM.last); } catch (e) { return; }
+  CM.cfg = r.cfg; CM.on = r.on;
+  const st = Object.entries(r.status).filter(([k, v]) => v).map(([k, v]) => `${k}: ${v}`);
+  $('cmStatus').textContent = st.join('  |  ') || 'Paste a YouTube and / or Facebook live link and press Connect.';
+  if (r.items.length) {
+    CM.items.push(...r.items); CM.last = r.items[r.items.length - 1].n;
+    if (CM.items.length > 300) CM.items.splice(0, CM.items.length - 300);
+    const box = $('cmList'), atTop = box.scrollTop < 20;
+    box.querySelector('.empty')?.remove();
+    box.insertAdjacentHTML('afterbegin', r.items.slice().reverse().map(m => `<div class="cgrow" id="cm_${m.n}" style="grid-template-columns:1fr auto">
+      <div style="min-width:0"><div class="nm">${esc(m.author)} <span class="hint">${esc(m.src)}</span></div><div class="st" style="white-space:normal">${esc(m.text)}</div></div>
+      <div class="bt"><button class="sm in" onclick="cmShow(${m.n})">Show</button></div></div>`).join(''));
+    while (box.children.length > 300) box.lastElementChild.remove();
+    if (atTop) box.scrollTop = 0;
+  }
+  if (!CM.items.length && !$('cmList').children.length) $('cmList').innerHTML = '<div class="empty" style="padding:16px">No comments yet.</div>';
+  document.querySelectorAll('#cmList .cgrow').forEach(el => { const on = el.id === 'cm_' + r.on; el.classList.toggle('on', on); el.querySelector('.in').classList.toggle('red', on); });
+}
+const cmSet = ch => api('/api/comments/settings', ch);
+async function cmConnect() { await cmSet({youtube: $('cmYt').value.trim(), facebook: $('cmFb').value.trim()}); $('cmStatus').textContent = 'Connecting...'; setTimeout(cmPoll, 2500); }
+async function cmShow(n) { const r = await api('/api/comments/show', {n}); if (r.error) say(r.error); cmPoll(); }
+async function cmAdd() {
+  const text = $('cmText').value.trim(); if (!text) return;
+  const r = await api('/api/comments/add', {author: $('cmAuthor').value.trim(), text});
+  $('cmText').value = ''; await cmPoll(); if (r.n && !CM.cfg.auto) cmShow(r.n);
+}
+async function cmLookOpen() {
+  if (!FONTS) { try { FONTS = (await api('/api/textcg/fonts')).fonts; } catch (e) { FONTS = ['Arial']; } }
+  const l = CM.cfg.look || {};
+  $('cmFont').innerHTML = [...new Set([l.font, ...FONTS])].map(f => `<option ${f === l.font ? 'selected' : ''}>${esc(f)}</option>`).join('');
+  $('cmSize').value = l.size; $('cmColor').value = l.color; $('cmBg').value = l.bg; $('cmAcc').value = l.accent; $('cmBgA').value = l.bg_alpha;
+  $('cmX').value = l.x; $('cmY').value = l.y; $('cmW').value = l.width; $('cmLive').checked = !!l.live_only; $('cmTok').value = '';
+  $('cmTok').placeholder = CM.cfg.has_token ? 'token saved (type a new one to change it)' : 'Page access token';
+  dCm.showModal(); cmPrev();
+}
+const cmLook = () => ({...(CM.cfg.look || {}), font: $('cmFont').value, size: +$('cmSize').value || 34, color: $('cmColor').value, bg: $('cmBg').value, accent: $('cmAcc').value,
+  bg_alpha: +$('cmBgA').value, x: +$('cmX').value || 0, y: +$('cmY').value || 0, width: +$('cmW').value || 0, live_only: $('cmLive').checked});
+let cmTimer = null;
+function cmPrevLater() { clearTimeout(cmTimer); cmTimer = setTimeout(cmPrev, 200); }
+async function cmPrev() {
+  const cfg = {...cmLook(), kind: 'text', style: 'comment', line1: 'Kasun Perera', label: 'YouTube', text: 'සුබ උදෑසනක්! Great stream, greetings from Kandy.'};
+  const r = await fetch('/api/textcg/render', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cfg, bg:'program', w:960})});
+  const b = await r.blob(); const old = $('cmPrev').src; $('cmPrev').src = URL.createObjectURL(b); if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+}
+async function cmLookSave() {
+  const ch = {look: cmLook()}; if ($('cmTok').value.trim()) ch.facebook_token = $('cmTok').value.trim();
+  await cmSet(ch); dCm.close(); cmPoll();
 }
 const cgTake = (id, a) => api(`/api/cg/manual/${id}/${a}`, {}).then(pollCG);
 const saveManual = () => api('/api/cg/manual', cgManual).then(() => { cgShown = ''; pollCG(); });

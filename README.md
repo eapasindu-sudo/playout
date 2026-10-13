@@ -114,6 +114,24 @@ The program shrinks into the green area of an overlay video (an "L" advert aroun
    with **Fit to green area**, squeeze time and Loop overlay. Without Loop it goes back to full screen when the
    overlay video ends.
 
+Squeeze with a clip: **Edit** on a clip (or live card) > **Squeeze Feed with this clip**: pick the squeeze, **In after**
+(seconds after the clip starts) and **On for** (empty = until the clip ends). It goes back to full screen by itself.
+**Delete** in the Squeeze Feed tab removes a squeeze (the video stays in the CG folder).
+
+## Countdown
+
+**+ Text CG > Type: Countdown**. Count *for* a time (05:00, from when it goes IN) or *until* a clock time (20:30).
+Text: `Starting in {t}`; **At zero**: text shown at 00:00 (e.g. LIVE NOW), or empty to take it off by itself.
+
+## Live comments (YouTube / Facebook)
+
+**CG > Comments**: paste the YouTube live link and / or the Facebook live video link and press **Connect**.
+New comments appear in the list; **Show** puts one on air, **HIDE COMMENT** takes it off, **Auto** shows each new
+comment by itself for the seconds set. Comments can also be typed in (e.g. from WhatsApp).
+YouTube needs nothing. Facebook needs a Page access token (**Look / Facebook token**): Meta for Developers >
+Graph API Explorer > your Page, permissions pages_read_engagement and pages_read_user_content > Generate token.
+**Look** sets the font (Nirmala UI shows Sinhala, Tamil and English), size, colours and position.
+
 ## Live streaming (3 destinations)
 
 1. Click **Setup** on a destination and pick the **Facebook Live** preset (or YouTube or Custom).

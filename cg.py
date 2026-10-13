@@ -269,6 +269,8 @@ class CGManager:
         self._card_id = None
         self._stinger = None          # CGLayer of a stinger transition in progress (drawn on top)
         self._squeeze = None          # SqueezeLayer: the program squeezed into an L-ad's green area
+        self._comments = []           # TextLayer(s) of viewer comments (the old one fades out as the new comes)
+        self.comment_id = None        # id of the comment on air
         self.stinger_audio = None
         self.on_change = None
 
@@ -332,7 +334,10 @@ class CGManager:
             for layer in self._card_layers:
                 layer.take_out()
             if self._squeeze is not None:
-                self._squeeze.take_out()
+                self._squeeze.cancel()
+            for layer in self._comments:
+                layer.take_out()
+            self.comment_id = None
 
     # live card CGs
     def start_card(self, item_id, cfgs):
@@ -367,21 +372,30 @@ class CGManager:
         return True
 
     # squeeze feed (L-ad)
-    def squeeze_in(self, cfg):
+    def squeeze_in(self, cfg, delay=0.0, duration=0.0):
         from squeeze import SqueezeLayer
-        layer = SqueezeLayer(cfg, self.folder, self.fps, self.width, self.height)
+        layer = SqueezeLayer(cfg, self.folder, self.fps, self.width, self.height, delay, duration)
         if layer.error:
             layer.close()
             return layer.error
         with self._lock:
             old = self._squeeze
-            if old is not None and old.visible and old.name == layer.name:
+            if old is not None and old.visible and old.name == layer.name and not layer.wait:
+                # the same squeeze is already on: keep its overlay running, take the new timing
                 layer.close()
                 old.take_in()
+                old.on_frames, old.on_count, old.owner, old.next = layer.on_frames, 0, None, None
                 return ""
-            if old is not None:
-                # another squeeze is on: switch straight to the new one at the same point
+            if old is not None and old.visible:
+                if layer.wait:
+                    old.take_out()                   # this one goes in after the delay, once the old one is out
+                    if old.next is not None:
+                        old.next.close()
+                    old.next = layer
+                    return ""
+                # no delay: switch straight to the new one at the same point
                 layer.pos, layer.state = old.pos, "in"
+            if old is not None:
                 old.close()
             self._squeeze = layer
         return ""
@@ -403,15 +417,79 @@ class CGManager:
                 sq.overlay.cfg["loop"] = bool(changes["loop"])
             return True
 
+    def squeeze_preset(self, preset):
+        """Squeeze settings saved in a .cgp in the CG folder, or None."""
+        from cgedit import list_presets
+        for p in list_presets(self.folder):
+            if p["name"] == preset and (p.get("cfg") or {}).get("squeeze"):
+                return {**p["cfg"], "file": p["file"], "preset": p["name"],
+                        "name": p["cfg"].get("name") or os.path.splitext(p["name"])[0]}
+        return None
+
+    def squeeze_item(self, item_id, preset, at=0, dur=0):
+        """Squeeze attached to a playlist item: IN after `at` seconds, OUT after `dur` (0 = item end)."""
+        c = self.squeeze_preset(preset)
+        if c is None:
+            return f"{preset} not found"
+        err = self.squeeze_in(c, delay=float(at or 0), duration=float(dur or 0))
+        if not err:
+            with self._lock:
+                sq = self._squeeze
+                if sq is not None:
+                    (sq.next or sq).owner = item_id
+        return err
+
+    def squeeze_item_end(self, item_id):
+        with self._lock:
+            sq = self._squeeze
+            if sq is not None and sq.next is not None and sq.next.owner == item_id:
+                sq.next.close()
+                sq.next = None
+            elif sq is not None and sq.owner == item_id:
+                if sq.state == "wait":
+                    sq.close()
+                    self._squeeze = None
+                else:
+                    sq.take_out()
+
     def squeeze_out(self):
         with self._lock:
             if self._squeeze is not None:
-                self._squeeze.take_out()
+                self._squeeze.cancel()
 
     @property
     def squeeze_state(self):
         sq = self._squeeze
         return {"name": sq.name, "state": sq.state} if sq is not None and sq.visible else None
+
+    # viewer comments (comments.py)
+    def show_comment(self, cfg, cid):
+        layer = TextLayer({**cfg, "kind": "text", "style": "comment"}, self.width, self.height, self.fps)
+        if layer.error:
+            return layer.error
+        img = layer._img
+        if img is not None:                  # a long comment is taller: keep it on the screen
+            h, w = img.shape[:2]
+            layer.cfg["y"] = max(0, min(int(layer.cfg.get("y") or 0), self.height - h - self.height // 30))
+            layer.cfg["x"] = max(0, min(int(layer.cfg.get("x") or 0), self.width - w))
+        with self._lock:
+            for old in self._comments:
+                old.take_out()
+            self._comments.append(layer)
+            self.comment_id = cid
+        return ""
+
+    def hide_comment(self):
+        with self._lock:
+            for old in self._comments:
+                old.take_out()
+            self.comment_id = None
+
+    @property
+    def comment_on(self):
+        with self._lock:
+            live = [l for l in self._comments if l.state in ("wait", "in", "on")]
+            return self.comment_id if live else None
 
     @property
     def stinger_active(self):
@@ -425,8 +503,9 @@ class CGManager:
             if sq is not None:
                 base = sq.render(np.asarray(frame_flat).reshape(self.height, self.width, 4))
                 if sq.state == "off":
+                    nxt, sq.next = sq.next, None
                     sq.close()
-                    self._squeeze = None
+                    self._squeeze = nxt              # a squeeze waiting for this one to go out
                     base = None
             jobs = []
             for layer in self._card_layers:
@@ -436,6 +515,13 @@ class CGManager:
             for layer in [l for l in self._card_layers if l.state == "off"]:
                 layer.close()
             self._card_layers = [l for l in self._card_layers if l.state != "off"]
+            for layer in self._comments:
+                r = layer.tick()
+                if r is not None:
+                    jobs.append((layer, r))
+            for layer in [l for l in self._comments if l.state == "off"]:
+                layer.close()
+            self._comments = [l for l in self._comments if l.state != "off"]
             for cfg in self.manual:
                 layer = self._manual_layers.get(cfg["id"])
                 if layer is None:

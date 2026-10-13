@@ -17,7 +17,8 @@ import time
 import urllib.parse
 import urllib.request
 
-SYNC_FIELDS = ("id", "type", "name", "file", "duration", "fixed", "source", "cgs", "client", "in", "out", "gain_db", "category")
+SYNC_FIELDS = ("id", "type", "name", "file", "duration", "fixed", "source", "cgs", "client", "in", "out", "gain_db", "category",
+               "squeeze", "squeeze_at", "squeeze_for")
 
 
 class Backup:
@@ -164,6 +165,8 @@ class Backup:
                 for c in it.get("cgs") or []:
                     if c.get("file"):
                         self._fetch("cg", c["file"], self.cg_dir)
+                if it.get("squeeze"):
+                    self._fetch("cg", it["squeeze"], self.cg_dir)
         if e.auto != s["auto"] or e.loop != s["loop"]:
             e.set_modes(s["auto"], s["loop"])
         # manual CGs

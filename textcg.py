@@ -1,7 +1,8 @@
-"""Text CGs typed on screen: lower third (name / title), scrolling ticker, clock / date, plain text.
+"""Text CGs typed on screen: lower third (name / title), scrolling ticker, clock / date, countdown,
+plain text, and live comments (YouTube / Facebook, see comments.py).
 
 A text CG is a manual CG config with "kind": "text":
-    style        "lower3" | "ticker" | "clock" | "text"
+    style        "lower3" | "ticker" | "clock" | "countdown" | "text" | "comment"
     line1, line2 lower third: name and title.  text: the text (new lines allowed)
     text         ticker: the news items, one per line (shown with a separator between)
     text_file    ticker: read the items from this .txt file instead (re-read every 10 s)
@@ -13,10 +14,16 @@ A text CG is a manual CG config with "kind": "text":
     accent       lower third / ticker label colour
     x, y, width  position; width 0 = automatic (ticker: whole screen)
     speed        ticker: pixels per second
+    cd_mode      countdown: "for" (cd_secs seconds from when it goes IN) or "to" (the clock time cd_to, "20:30")
+    text         countdown: "Starting in {t}"  ({t} = the time left, 05:00 or 1:05:00)
+    end_text     countdown: shown at zero ("LIVE NOW"); empty = it takes itself off
+    line1, text  comment: who wrote it and the comment; label = "YouTube" / "Facebook"
 Sinhala and Tamil work with a font that has them (Iskoola Pota, Nirmala UI).
 """
 import datetime as dt
 import glob
+import math
+import re
 import os
 import sys
 import time
@@ -26,7 +33,7 @@ from PIL import Image, ImageDraw, ImageFont, features
 
 RAQM = features.check("raqm")      # proper Sinhala / Tamil shaping
 TEXT_KEYS = ("style", "line1", "line2", "text", "text_file", "label", "fmt", "font", "size", "bold", "color",
-             "bg", "bg_alpha", "accent", "x", "y", "width", "speed", "separator")
+             "bg", "bg_alpha", "accent", "x", "y", "width", "speed", "separator", "cd_mode", "cd_secs", "cd_to", "end_text")
 
 # font name -> (regular, bold) file names
 WIN_FONTS = {
@@ -133,9 +140,94 @@ def _text_w(font, s):
     return b[2] - b[0] if b else 0
 
 
-def render_static(cfg, out_w, out_h, now=None):
-    """Lower third / clock / plain text -> BGRA array (cropped to its size)."""
+def countdown_text(cfg, left):
+    """Countdown words for `left` seconds to go."""
+    if left <= 0:
+        return cfg.get("end_text") or ""
+    left = int(math.ceil(left))
+    h, m, sec = left // 3600, left // 60 % 60, left % 60
+    t = f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+    tpl = cfg.get("text") or "{t}"
+    return tpl.replace("{t}", t) if "{t}" in tpl else f"{tpl} {t}".strip()
+
+
+def countdown_deadline(cfg, started):
+    """Epoch time the countdown reaches zero."""
+    if (cfg.get("cd_mode") or "for") == "to":
+        try:
+            parts = [int(p) for p in str(cfg.get("cd_to") or "").split(":")]
+            now = dt.datetime.fromtimestamp(started)
+            t = now.replace(hour=parts[0], minute=parts[1] if len(parts) > 1 else 0,
+                            second=parts[2] if len(parts) > 2 else 0, microsecond=0)
+            if t < now - dt.timedelta(hours=12):           # just after midnight for "23:59" etc.
+                t += dt.timedelta(days=1)
+            return t.timestamp()
+        except (ValueError, IndexError):
+            return started
+    return started + max(0.0, _num(cfg.get("cd_secs"), 300))
+
+
+def _wrap(font, text, width, max_lines):
+    """Lines of text that fit in width (words; very long words are cut)."""
+    lines = []
+    for para in text.splitlines() or [""]:
+        cur = ""
+        for word in para.split():
+            trial = (cur + " " + word).strip()
+            if _text_w(font, trial) <= width or not cur:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = word
+        lines.append(cur)
+    lines = [l for l in lines if l.strip()]
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        while lines[-1] and _text_w(font, lines[-1] + "...") > width:
+            lines[-1] = lines[-1][:-1]
+        lines[-1] += "..."
+    return lines
+
+
+def render_comment(cfg, out_w):
+    """A viewer comment: name bar (with YouTube / Facebook) over the comment."""
+    size = int(_num(cfg.get("size"), 36))
+    font = get_font(cfg.get("font") or "Arial", size, False)
+    fname = get_font(cfg.get("font") or "Arial", max(10, int(size * 0.8)), True)
+    color = _rgb(cfg.get("color"), (255, 255, 255)) + (255,)
+    bg = _rgb(cfg.get("bg"), (10, 30, 80))
+    bg_a = int(255 * max(0, min(100, _num(cfg.get("bg_alpha"), 85))) / 100)
+    accent = _rgb(cfg.get("accent"), (224, 38, 27)) + (255,)
+    pad = max(8, size // 3)
+    width = min(int(_num(cfg.get("width"), 0)) or int(out_w * 0.45), out_w)
+    # emoji are not in the broadcast fonts (they would show as boxes)
+    text = "".join(ch for ch in (cfg.get("text") or "") if ord(ch) < 0x1F000 and not 0x2600 <= ord(ch) <= 0x27BF
+                   and ch not in "\ufe0f\u200d" or 0x0D80 <= ord(ch) <= 0x0DFF)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    lines = _wrap(font, text, width - pad * 2, 4)
+    if not lines:
+        return None
+    hn = int(size * 0.8 * 1.5)
+    lh = int(size * 1.3)
+    im = Image.new("RGBA", (width, hn + lh * len(lines) + pad * 2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rectangle([0, 0, width, hn], fill=accent)
+    d.text((pad, hn // 2), cfg.get("line1") or "Viewer", font=fname, fill=(255, 255, 255, 255), anchor="lm")
+    label = cfg.get("label") or ""
+    if label:
+        lf = get_font(cfg.get("font") or "Arial", max(10, int(size * 0.55)), True)
+        d.text((width - pad, hn // 2), label, font=lf, fill=(255, 255, 255, 220), anchor="rm")
+    d.rectangle([0, hn, width, im.height], fill=bg + (bg_a,))
+    for i, line in enumerate(lines):
+        d.text((pad, hn + pad + lh * i + lh // 2), line, font=font, fill=color, anchor="lm")
+    return _bgra(im)
+
+
+def render_static(cfg, out_w, out_h, now=None, left=None):
+    """Lower third / clock / countdown / plain text / comment -> BGRA array (cropped to its size)."""
     style = cfg.get("style") or "text"
+    if style == "comment":
+        return render_comment(cfg, out_w)
     size = int(_num(cfg.get("size"), 44))
     font = get_font(cfg.get("font") or "Arial", size, cfg.get("bold", True))
     color = _rgb(cfg.get("color"), (255, 255, 255)) + (255,)
@@ -168,6 +260,8 @@ def render_static(cfg, out_w, out_h, now=None):
             except ValueError:
                 lines.append(fmt)
         text = "\n".join(lines)
+    elif style == "countdown":
+        text = countdown_text(cfg, _num(cfg.get("cd_secs"), 300) if left is None else left)
     else:
         text = cfg.get("text") or ""
     if not text.strip():
@@ -208,12 +302,16 @@ class TextLayer:
         self._pos = 0.0
         self._file_check = 0.0
         self._file_text = None
+        self._deadline = None          # countdown: when it reaches zero (set as it goes IN)
         self._build()
 
     # ---- content --------------------------------------------------------
     def update(self, cfg):
         """New text / look while on air (the ticker keeps scrolling from where it is)."""
+        changed = any(self.cfg.get(k) != cfg.get(k) for k in ("cd_mode", "cd_secs", "cd_to"))
         self.cfg.update(cfg)
+        if changed:
+            self._deadline = None
         self._build()
 
     def _ticker_text(self):
@@ -232,7 +330,7 @@ class TextLayer:
         try:
             if style == "ticker":
                 self._build_ticker()
-            elif style != "clock":
+            elif style not in ("clock", "countdown"):
                 self._img = render_static(self.cfg, self.out_w, self.out_h)
             self.error = ""
         except Exception as e:
@@ -300,6 +398,17 @@ class TextLayer:
         style = self.cfg.get("style") or "text"
         if style == "ticker":
             return self._ticker_frame() if self._strip is not None else None
+        if style == "countdown":
+            if self._deadline is None:
+                self._deadline = countdown_deadline(self.cfg, time.time())
+            left = self._deadline - time.time()
+            key = math.ceil(left) if left > 0 else "end"
+            if key != self._clock_key:
+                self._clock_key = key
+                self._img = render_static(self.cfg, self.out_w, self.out_h, left=left)
+                if self._img is None and left <= 0:
+                    self.take_out()                # no end text: off by itself at zero
+            return self._img
         if style == "clock":
             now = dt.datetime.now()
             key = now.replace(microsecond=0)
@@ -317,6 +426,9 @@ class TextLayer:
 
     def take_in(self):
         if self.state in ("out", "off"):
+            if self.state == "off":
+                self._deadline = None      # a countdown starts again
+                self._clock_key = None
             self.state = "in"
 
     @property

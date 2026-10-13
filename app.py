@@ -30,6 +30,7 @@ from system import SystemMonitor
 from media import MEDIA_EXT, list_media, thumbnail
 from paths import safe_name
 from squeeze import clean_box, compose
+from comments import Comments
 from scheduler import DayPlanner, Scheduler
 from store import Store
 from streamer import Streamer
@@ -98,6 +99,7 @@ sdi = SdiOutput(engine)
 engine.sdi = sdi
 watch = WatchFolder(engine, cfg["media_dir"], loudness)
 backup = Backup(engine, cgm, streamer, cfg["media_dir"], cfg["cg_dir"], alerts)
+comments = Comments(cgm, lambda: store.data.get("comments") or {}, lambda c: store.set(comments=c))
 planner.active = lambda: backup.role != "backup"     # a backup PC takes its playlist from the main PC
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 RUN_FLAG = os.path.join(cfg["data_dir"], "running.flag")   # left behind = last run did not close normally
@@ -1243,6 +1245,43 @@ def _squeeze_cfg(name):
             "preset": p["name"]}
 
 
+# ---- live comments (YouTube / Facebook) ------------------------------------------
+@app.get("/api/comments")
+def comments_list():
+    c = comments.cfg
+    safe = {k: v for k, v in c.items() if k != "facebook_token"}
+    safe["has_token"] = bool(c.get("facebook_token"))
+    return jsonify(items=comments.list(int(request.args.get("since") or 0)), status=comments.status,
+                   cfg=safe, on=cgm.comment_on)
+
+
+@app.post("/api/comments/<action>")
+def comments_action(action):
+    b = request.get_json(silent=True) or {}
+    if action == "settings":
+        ch = {k: b[k] for k in ("youtube", "facebook", "auto", "show_secs", "look") if k in b}
+        if b.get("facebook_token"):
+            ch["facebook_token"] = str(b["facebook_token"]).strip()
+        if b.get("clear_token"):
+            ch["facebook_token"] = ""
+        if "show_secs" in ch:
+            ch["show_secs"] = max(0.0, min(120.0, float(ch["show_secs"] or 0)))
+        comments.set_cfg(ch)
+        return jsonify(ok=True)
+    if action == "show":
+        err = comments.show(int(b.get("n") or 0))
+        return jsonify(ok=not err, error=err)
+    if action == "hide":
+        comments.hide()
+        return jsonify(ok=True)
+    if action == "add":
+        if not (b.get("text") or "").strip():
+            return jsonify(error="Type the comment"), 400
+        new = comments.add_manual(str(b.get("author") or ""), str(b["text"])[:500])
+        return jsonify(ok=True, n=new[0]["n"] if new else None)
+    abort(404)
+
+
 @app.get("/api/squeeze")
 def squeeze_list():
     return jsonify(items=[{"preset": p["name"], "name": p["cfg"].get("name") or os.path.splitext(p["name"])[0],
@@ -1262,6 +1301,12 @@ def squeeze_action(action):
     if action == "in":
         err = cgm.squeeze_in(c)
         return jsonify(ok=not err, error=err)
+    if action == "delete":
+        st = cgm.squeeze_state
+        if st and st["name"] == c["name"]:
+            cgm.squeeze_out()
+        os.remove(os.path.join(cfg["cg_dir"], c["preset"]))     # the video stays in the CG folder
+        return jsonify(ok=True)
     if action == "save":
         changes = {}
         if b.get("squeeze") is not None:

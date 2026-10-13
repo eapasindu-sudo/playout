@@ -101,7 +101,7 @@ def compose(feed, overlay, ox, oy, box, keyed, opacity=255):
 class SqueezeLayer:
     """The squeeze on air: overlay video + the program moving into / out of the box."""
 
-    def __init__(self, cfg, folder, fps, width, height):
+    def __init__(self, cfg, folder, fps, width, height, delay=0.0, duration=0.0):
         self.cfg = dict(cfg)
         self.name = cfg.get("name") or cfg.get("file")
         self.width, self.height = width, height
@@ -111,7 +111,12 @@ class SqueezeLayer:
         self.frames = max(1, int(float(0.6 if st is None else st) * float(fps)))
         self.overlay = CGLayer({**self.cfg, "fade": 0, "delay": 0, "duration": 0}, folder, fps)
         self.error = self.overlay.error
-        self.state = "in"
+        self.wait = int(float(delay or 0) * float(fps))         # frames before it goes in
+        self.on_frames = int(float(duration or 0) * float(fps))  # frames squeezed, then out (0 = until OUT)
+        self.on_count = 0
+        self.next = None             # squeeze to go in once this one is out
+        self.owner = None            # playlist item that put it on air (it goes out when that item ends)
+        self.state = "wait" if self.wait > 0 else "in"
         self.pos = 0                 # 0 = full screen program .. frames = squeezed
         self._pic = None
 
@@ -119,18 +124,36 @@ class SqueezeLayer:
         if self.state in ("in", "on"):
             self.state = "out"
 
+    def cancel(self):
+        """OUT button: back to full screen, and nothing queued goes in after."""
+        if self.next is not None:
+            self.next.close()
+            self.next = None
+        if self.state == "wait":
+            self.state = "off"
+        self.take_out()
+
     def take_in(self):
-        if self.state in ("out", "off"):
+        if self.state in ("out", "off", "wait"):
             self.state = "in"
 
     @property
     def visible(self):
-        return self.state != "off"
+        return self.state not in ("off", "wait")
 
     def render(self, feed):
         """feed: program picture (H, W, 4). Returns the squeezed picture, or feed when off."""
         if self.state == "off":
             return feed
+        if self.state == "wait":
+            self.wait -= 1
+            if self.wait > 0:
+                return feed
+            self.state = "in"
+        if self.state == "on" and self.on_frames:
+            self.on_count += 1
+            if self.on_count >= self.on_frames:
+                self.state = "out"
         if self.state == "in":
             self.pos += 1
             if self.pos >= self.frames:
@@ -161,3 +184,6 @@ class SqueezeLayer:
 
     def close(self):
         self.overlay.close()
+        if self.next is not None:
+            self.next.close()
+            self.next = None
