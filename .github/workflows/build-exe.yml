@@ -34,6 +34,15 @@ jobs:
         run: |
           "VERSION = '$env:APP_VERSION'" | Set-Content -Path version.py
           Get-Content version.py
+      - name: Check the update script (PowerShell syntax)
+        shell: pwsh
+        run: |
+          python -c "import updater; open('upd.ps1','w',encoding='utf-8-sig').write(updater.UPDATE_SCRIPT)"
+          $errs = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path upd.ps1), [ref]$null, [ref]$errs) | Out-Null
+          if ($errs.Count) { $errs | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+          Write-Host "update script OK"
+
       - name: Build Playout.exe
         working-directory: build
         run: pyinstaller --noconfirm playout.spec

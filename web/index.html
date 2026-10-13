@@ -1467,6 +1467,7 @@ async function saveSettings() {
 }
 async function pollUpdate(r) {
   try { UPD = r || await api('/api/update'); } catch (e) { return; }
+  if (UPD.notice && !window.updNoticeShown) { window.updNoticeShown = true; say(UPD.notice); }
   const st = UPD.state === 'downloading' ? `Downloading ${UPD.progress}%` : UPD.state === 'ready' ? `Version ${UPD.latest} downloaded, ready to install`
     : UPD.state === 'checking' ? 'Checking...' : UPD.state === 'installing' ? 'Installing, Playout restarts by itself...'
     : UPD.available ? `Version ${UPD.latest} is available` : UPD.error ? UPD.error : UPD.checked ? 'Up to date' : 'Not checked yet';

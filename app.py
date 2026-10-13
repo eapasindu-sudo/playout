@@ -1426,6 +1426,7 @@ def start_backend():
     loudness.configure(an.get("normalize"), an.get("target"))
     up = store.data.get("update") or {}
     updater.configure(up.get("repo"), up.get("token"), up.get("auto_check"))
+    updater.last_result()        # tell the operator if the last update did not install
     al = store.data.get("alerts") or {}
     alerts.configure(al.get("enabled"), al.get("token"), al.get("chat_id"), al.get("events"))
     alerts.station = store.data.get("station_name", "")
