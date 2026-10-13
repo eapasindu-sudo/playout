@@ -33,8 +33,14 @@ from streamer import Streamer
 from loudness import Loudness
 from updater import Updater
 from version import VERSION
+from alerts import Alerts, Watcher
+from backup import Backup
+from booking import Bookings, invoice_pdf
+from sdi import SdiOutput, list_devices as sdi_devices
+from watchfolder import WatchFolder
 import importer
 import report
+import textcg
 
 import paths
 
@@ -80,6 +86,16 @@ loudness = Loudness(cfg["data_dir"], streamer.ffmpeg)
 engine.loudness = loudness
 planner = DayPlanner(engine, store, recorder)
 updater = Updater()
+engine.ffmpeg = streamer.ffmpeg
+textcg.set_font_dirs(cfg["cg_dir"])
+alerts = Alerts()
+watcher = Watcher(alerts, engine, streamer, recorder, [cfg["media_dir"], recorder.folder])
+bookings = Bookings(cfg["data_dir"])
+sdi = SdiOutput(engine)
+engine.sdi = sdi
+watch = WatchFolder(engine, cfg["media_dir"], loudness)
+backup = Backup(engine, cgm, streamer, cfg["media_dir"], cfg["cg_dir"], alerts)
+planner.active = lambda: backup.role != "backup"     # a backup PC takes its playlist from the main PC
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 RUN_FLAG = os.path.join(cfg["data_dir"], "running.flag")   # left behind = last run did not close normally
 app = Flask(__name__, static_folder=None)
@@ -125,27 +141,126 @@ def sec():
     return s
 
 
-OPEN_PATHS = ("/login", "/api/login")
+OPEN_PATHS = ("/login", "/api/login", "/api/login_info")
+LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen")   # full screen output window
+ADMIN_ONLY = ("/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
+              "/api/sdi", "/api/alerts", "/api/backup")
+
+
+def users():
+    return store.data.get("users") or []
+
+
+def current_user():
+    """Logged-in user {name, role} when users are set up, else None."""
+    name = session.get("user")
+    if not name or session.get("uepoch") != sec()["epoch"]:
+        return None
+    return next((u for u in users() if u["name"] == name), None)
+
+
+def who():
+    u = current_user()
+    if u:
+        return u["name"]
+    return "this PC" if is_local() else f"remote {request.remote_addr}"
 
 
 @app.before_request
-def remote_guard():
-    """Other PCs / phones need the remote password (when one is set). This PC never does."""
-    if is_local():
+def guard():
+    """Users set up: everyone logs in (operator / admin). Otherwise: other PCs need the remote password."""
+    path = request.path
+    if path.startswith("/api/sync") and backup.key_ok(request.headers.get("X-Playout-Key", "")):
+        return None                      # backup PC
+    local = is_local()
+    if users():
+        if path in OPEN_PATHS or (local and path in LOCAL_OPEN):
+            return None
+        if not local and not sec()["remote_enabled"]:
+            return Response("Playout remote control is turned off on the playout PC.", 403)
+        u = current_user()
+        if u is None:
+            key = request.args.get("key")
+            s = sec()
+            if key and path.startswith("/trigger/") and s["remote_hash"] and check_password_hash(s["remote_hash"], key):
+                return None
+            if path.startswith("/api/") or path.startswith("/trigger/"):
+                return jsonify(error="login"), 401
+            return redirect("/login?next=" + path)
+        if (u.get("role") != "admin" and request.method == "POST"
+                and any(path.startswith(p) for p in ADMIN_ONLY)):
+            return jsonify(error="Only an admin can change this"), 403
+        return None
+    if local:
         return None
     s = sec()
     if not s["remote_enabled"]:
         return Response("Playout remote control is turned off on the playout PC (Settings > Remote).", 403)
-    if not s["remote_hash"] or request.path in OPEN_PATHS:
+    if not s["remote_hash"] or path in OPEN_PATHS:
         return None
     if session.get("ok") == s["epoch"]:
         return None
     key = request.args.get("key")
-    if key and request.path.startswith("/trigger/") and check_password_hash(s["remote_hash"], key):
+    if key and path.startswith("/trigger/") and check_password_hash(s["remote_hash"], key):
         return None
-    if request.path.startswith("/api/") or request.path.startswith("/trigger/"):
+    if path.startswith("/api/") or path.startswith("/trigger/"):
         return jsonify(error="login"), 401
-    return redirect("/login?next=" + request.path)
+    return redirect("/login?next=" + path)
+
+
+AUDIT_SKIP = ("/api/login", "/api/cgfx/render", "/api/admin_check", "/api/textcg/render", "/api/update/check",
+              "/api/alerts/find_chat", "/api/sdi/devices")
+
+
+def _mask(v):
+    """Hide passwords, tokens and keys (also inside lists / sections) before logging."""
+    if isinstance(v, dict):
+        return {k: ("***" if ("pass" in k or k in ("token", "key", "bot_token", "github_token")) and v2 else _mask(v2))
+                for k, v2 in v.items()}
+    if isinstance(v, list):
+        return [_mask(x) for x in v]
+    return v
+
+
+@app.after_request
+def audit(resp):
+    """Activity log: who changed what (logs/activity-YYYY-MM-DD.csv)."""
+    try:
+        if request.method == "POST" and resp.status_code < 400 and request.path not in AUDIT_SKIP:
+            body = request.get_json(silent=True)
+            if isinstance(body, dict):
+                body = _mask(body)
+                detail = json.dumps(body, ensure_ascii=False)[:300]
+            elif isinstance(body, list):
+                detail = f"{len(body)} items"
+            else:
+                detail = ",".join(f.filename or "" for f in request.files.values())[:200]
+            write_activity(who(), request.path, detail)
+    except Exception:
+        pass
+    return resp
+
+
+def write_activity(user, action, detail=""):
+    import csv
+    path = os.path.join(cfg["log_dir"], f"activity-{dt.date.today():%Y-%m-%d}.csv")
+    new = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["time", "user", "action", "detail"])
+        w.writerow([dt.datetime.now().strftime("%H:%M:%S"), user, action, detail])
+
+
+@app.get("/api/activity")
+def activity():
+    import csv
+    d = request.args.get("date") or dt.date.today().isoformat()
+    path = os.path.join(cfg["log_dir"], f"activity-{dt.date.fromisoformat(d):%Y-%m-%d}.csv")
+    if not os.path.exists(path):
+        return jsonify([])
+    with open(path, newline="", encoding="utf-8") as f:
+        return jsonify(list(csv.DictReader(f))[-1000:])
 
 
 @app.get("/login")
@@ -153,16 +268,71 @@ def login_page():
     return send_from_directory(os.path.join(BUNDLE, "web"), "login.html")
 
 
+@app.get("/api/login_info")
+def login_info():
+    return jsonify(users=bool(users()))
+
+
 @app.post("/api/login")
 def login():
     s = sec()
-    pw = (request.get_json(silent=True) or request.form or {}).get("password", "")
+    b = request.get_json(silent=True) or request.form or {}
+    pw = b.get("password", "")
+    if users():
+        u = next((x for x in users() if x["name"].lower() == (b.get("user") or "").strip().lower()), None)
+        if u and check_password_hash(u["hash"], pw):
+            session.permanent = True
+            session["user"], session["uepoch"] = u["name"], s["epoch"]
+            write_activity(u["name"], "login", request.remote_addr)
+            return jsonify(ok=True, role=u["role"])
+        time.sleep(1)
+        return jsonify(ok=False, error="Wrong name or password"), 403
     if not s["remote_hash"] or check_password_hash(s["remote_hash"], pw):
         session.permanent = True
         session["ok"] = s["epoch"]
         return jsonify(ok=True)
     time.sleep(1)       # slow down guessing
     return jsonify(ok=False, error="Wrong password"), 403
+
+
+@app.post("/api/logout")
+def logout():
+    write_activity(who(), "logout")
+    session.clear()
+    return jsonify(ok=True)
+
+
+@app.get("/api/me")
+def me():
+    u = current_user()
+    return jsonify(user=u["name"] if u else None, role=u["role"] if u else "admin", users=bool(users()))
+
+
+@app.route("/api/users", methods=["GET", "POST"])
+def users_api():
+    """Admin: operators and admins. Saving the list logs everybody out (sessions start again)."""
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        old = {u["name"]: u for u in users()}
+        new = []
+        for u in b.get("users") or []:
+            name = (u.get("name") or "").strip()[:40]
+            if not name or any(x["name"].lower() == name.lower() for x in new):
+                continue
+            pw = u.get("password") or ""
+            h = generate_password_hash(pw) if pw and pw != "********" else old.get(name, {}).get("hash")
+            if not h:
+                return jsonify(error=f"Give {name} a password"), 400
+            new.append({"name": name, "role": "admin" if u.get("role") == "admin" else "operator", "hash": h})
+        if new and not any(u["role"] == "admin" for u in new):
+            return jsonify(error="Keep at least one admin"), 400
+        me_ = current_user()
+        store.set(users=new)
+        if new and (not me_ or me_["name"] not in [u["name"] for u in new]):
+            # whoever set up the users is logged in as the first admin, so this screen keeps working
+            first = next(u for u in new if u["role"] == "admin")
+            session["user"], session["uepoch"] = first["name"], sec()["epoch"]
+    return jsonify(users=[{"name": u["name"], "role": u["role"]} for u in users()])
 
 
 @app.route("/api/lock", methods=["GET", "POST"])
@@ -182,7 +352,10 @@ def lock_api():
 
 
 def check_admin(body):
-    """Settings changes need the lock password (when one is set)."""
+    """Settings changes need the lock password (when one is set) - or an admin login when users are set up."""
+    if users():
+        u = current_user()
+        return bool(u and u["role"] == "admin")
     h = sec()["lock_hash"]
     return not h or check_password_hash(h, (body or {}).get("admin_password", ""))
 
@@ -220,12 +393,29 @@ def settings_api():
             u = b["update"] or {}
             updater.configure(u.get("repo"), u.get("token"), u.get("auto_check"))
             store.set(update=updater.settings())
+        if "alerts" in b:
+            a = b["alerts"] or {}
+            store.set(alerts=alerts.configure(a.get("enabled"), a.get("token"), a.get("chat_id"), a.get("events")))
+        if "sdi" in b:
+            d = b["sdi"] or {}
+            sdi.configure(d.get("enabled"), d.get("device"), d.get("ffmpeg"))
+            store.set(sdi=sdi.settings())
+        if "watch" in b:
+            w = b["watch"] or {}
+            store.set(watch=watch.configure(w.get("enabled"), w.get("folder"), w.get("move"), w.get("add_to_playlist")))
+        if "backup" in b:
+            k = b["backup"] or {}
+            store.set(backup=backup.configure(k.get("role"), k.get("main_url"), k.get("key"),
+                                              k.get("takeover_after"), k.get("take_streams")))
+        alerts.station = store.data.get("station_name", "")
     s = sec()
     return jsonify(
         failover=engine.failover, audio=loudness.settings(), station_name=store.data.get("station_name", ""),
         security={"remote_enabled": s["remote_enabled"], "remote_password_set": bool(s["remote_hash"]),
                   "lock_password_set": bool(s["lock_hash"]), "lock_on_start": s["lock_on_start"]},
         update={"repo": updater.repo, "token_set": bool(updater.token), "auto_check": updater.auto_check},
+        alerts=alerts.info(), sdi=sdi.info(), watch=watch.info(), backup=backup.info(),
+        need_password=bool(s["lock_hash"]) and not users(), users=bool(users()),
         version=VERSION)
 
 
@@ -580,6 +770,127 @@ def asrun_csv():
     return send_file(path, as_attachment=True)
 
 
+# ---- text CG -----------------------------------------------------------------
+@app.get("/api/textcg/fonts")
+def textcg_fonts():
+    return jsonify(fonts=textcg.list_fonts(), raqm=textcg.RAQM)
+
+
+@app.post("/api/textcg/render")
+def textcg_render():
+    """Preview of a text CG over the program picture (PNG), like the CG setup preview."""
+    import numpy as np
+    from cg import composite
+    from cgfx import checker
+    b = request.get_json(silent=True) or {}
+    c = b.get("cfg") or {}
+    W, H = engine.width, engine.height
+    frame = engine.last_frame
+    canvas = np.array(frame, copy=True).reshape(H, W, 4) if b.get("bg") == "program" else checker(W, H, 24)
+    img, err = textcg.preview(c, W, H)
+    if img is not None:
+        composite(canvas, img, int(c.get("x") or 0), int(c.get("y") or 0), 255)
+    out_w = max(160, min(W, int(b.get("w") or 960)))
+    im = Image.fromarray(canvas[..., [2, 1, 0]]).resize((out_w, round(H * out_w / W)), Image.BILINEAR)
+    buf = io.BytesIO()
+    im.save(buf, "PNG", compress_level=1)
+    r = Response(buf.getvalue(), mimetype="image/png")
+    r.headers["X-Error"] = err or ""
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
+# ---- clip preview (before air) ----------------------------------------------------
+@app.get("/api/media/file/<path:name>")
+def media_file(name):
+    path = os.path.join(cfg["media_dir"], secure_filename(name))
+    if not os.path.isfile(path):
+        abort(404)
+    return send_file(path, conditional=True, max_age=0)
+
+
+# ---- alerts --------------------------------------------------------------------
+@app.post("/api/alerts/<action>")
+def alerts_action(action):
+    b = request.get_json(silent=True) or {}
+    if b.get("token") or b.get("chat_id"):
+        alerts.configure(None, b.get("token"), b.get("chat_id"))
+    if action == "test":
+        return jsonify(alerts.test())
+    if action == "find_chat":
+        return jsonify(alerts.find_chat())
+    abort(404)
+
+
+# ---- ad booking ------------------------------------------------------------------
+@app.route("/api/bookings", methods=["GET", "POST"])
+def bookings_api():
+    if request.method == "POST":
+        bookings.save((request.get_json(silent=True) or {}).get("bookings") or [])
+    a = request.args
+    d1 = dt.date.fromisoformat(a["from"]) if a.get("from") else None
+    d2 = dt.date.fromisoformat(a["to"]) if a.get("to") else d1
+    return jsonify(bookings=bookings.status(engine.asrun, d1, d2), in_playlist=bookings.in_playlist(engine.playlist),
+                   currency=store.data.get("currency", "LKR"))
+
+
+@app.get("/api/bookings/invoice.pdf")
+def invoice():
+    d1, d2 = _range()
+    client = request.args.get("client", "")
+    if not client:
+        abort(400)
+    n = int(store.data.get("invoice_no", 0)) + 1
+    store.set(invoice_no=n)
+    number = f"{dt.date.today():%Y}-{n:04d}"
+    data = invoice_pdf(bookings.status(engine.asrun, d1, d2), client, d1, d2, store.data.get("station_name", ""),
+                       number, store.data.get("currency", "LKR"))
+    who_ = "".join(ch if ch.isalnum() else "_" for ch in client)
+    name = f"Invoice_{number}_{who_}.pdf"
+    if request.args.get("save") and is_local():
+        folder = os.path.join(ROOT, "reports")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        if sys.platform == "win32":
+            os.startfile(path)
+        return jsonify(path=path)
+    return send_file(io.BytesIO(data), mimetype="application/pdf", as_attachment=True, download_name=name)
+
+
+# ---- SDI, watch folder, backup -------------------------------------------------------
+@app.post("/api/sdi/devices")
+def sdi_list():
+    path = (request.get_json(silent=True) or {}).get("ffmpeg") or sdi.ffmpeg
+    devs, err = sdi_devices(path)
+    return jsonify(devices=devs, error=err)
+
+
+@app.get("/api/status_extra")
+def status_extra():
+    """Small things the control screen shows: SDI, watch folder, backup, alerts."""
+    return jsonify(sdi=sdi.info(), watch=watch.info(), backup=backup.info(), alerts_error=alerts.last_error,
+                   me=(current_user() or {}).get("name"), role=(current_user() or {}).get("role", "admin"),
+                   users=bool(users()))
+
+
+@app.get("/api/sync")
+def sync_snapshot():
+    if backup.role == "backup":
+        return jsonify(error="this PC is a backup"), 409
+    return jsonify(backup.snapshot())
+
+
+@app.get("/api/sync/file/<kind>/<path:name>")
+def sync_file(kind, name):
+    folder = {"media": cfg["media_dir"], "cg": cfg["cg_dir"]}.get(kind)
+    path = os.path.join(folder or "", secure_filename(name))
+    if not folder or not os.path.isfile(path):
+        abort(404)
+    return send_file(path, conditional=True)
+
+
 # ---- ad report -------------------------------------------------------------
 def _range():
     a = request.args
@@ -895,6 +1206,13 @@ def start_backend():
     loudness.configure(an.get("normalize"), an.get("target"))
     up = store.data.get("update") or {}
     updater.configure(up.get("repo"), up.get("token"), up.get("auto_check"))
+    al = store.data.get("alerts") or {}
+    alerts.configure(al.get("enabled"), al.get("token"), al.get("chat_id"), al.get("events"))
+    alerts.station = store.data.get("station_name", "")
+    wf = store.data.get("watch") or {}
+    watch.configure(wf.get("enabled"), wf.get("folder"), wf.get("move"), wf.get("add_to_playlist"))
+    bk = store.data.get("backup") or {}
+    backup.configure(bk.get("role"), bk.get("main_url"), bk.get("key"), bk.get("takeover_after"), bk.get("take_streams"))
     if sec()["lock_on_start"]:
         store.set(locked=True)
     engine.set_modes(store.data.get("auto", True), store.data.get("loop", False))
@@ -920,6 +1238,11 @@ def start_backend():
     scheduler.start()
     planner.start()
     updater.start_auto()
+    watcher.start()
+    sd = store.data.get("sdi") or {}
+    sdi.configure(sd.get("enabled"), sd.get("device"), sd.get("ffmpeg"))
+    if crashed:
+        alerts.send("restart", "Playout restarted after an unexpected stop", every=30)
     air = store.data.get("air") or {}
     if crashed and air.get("id"):
         # Playout closed unexpectedly (crash / power): put the item that was on air back, where it was
@@ -960,6 +1283,7 @@ def _watchdog():
 
 def shutdown():
     planner.stop()
+    sdi.stop()
     try:
         os.remove(RUN_FLAG)
     except OSError:

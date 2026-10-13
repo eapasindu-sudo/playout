@@ -26,7 +26,7 @@ from fractions import Fraction
 import numpy as np
 
 from media import ClipPlayer, probe
-from capture import CaptureInput, make_bars
+from capture import CaptureInput, UrlInput, make_bars
 from ndi_io import CHANNELS, SAMPLE_RATE, LiveInput, NDIOutput, SourceFinder
 
 FADE = 480  # 10 ms audio fade at every cut, avoids clicks
@@ -131,6 +131,7 @@ class Engine:
         self.streamer = None         # Streamer fed with every program frame
         self.audio_out = None        # program sound on this PC's speakers
         self.recorder = None         # program recording to a file
+        self.sdi = None              # DeckLink SDI output
         self.cg = None               # CGManager keyed over the program
         self.inputs = {}             # extra live sources used by live cards: key -> input
         self._main_wanted = True
@@ -140,6 +141,7 @@ class Engine:
         self._pending = None         # [frames left, action, item id]: switch at the stinger's cut point
         self._stinger_item = None    # on-air item whose end already got its stinger
         self.loudness = None         # Loudness: audio normalize gains
+        self.ffmpeg = None           # FFmpeg program for network feeds (url: sources)
         # failover: when the live input is lost, put a filler on air instead of a frozen / black picture
         self.failover = {"enabled": True, "after": 3.0, "mode": "bars", "file": ""}
         self.failover_active = False
@@ -376,6 +378,8 @@ class Engine:
                 if key.startswith("ndi:"):
                     inp = LiveInput(self.finder, self.width, self.height)
                     inp.set_source(key[4:])
+                elif key.startswith("url:"):
+                    inp = UrlInput(key, self.width, self.height, self.ffmpeg)
                 else:
                     inp = CaptureInput(key, self.width, self.height)
                 self.inputs[key] = inp
@@ -394,12 +398,13 @@ class Engine:
                           start=_num(item.get("in")) + max(0.0, offset), end=_num(item.get("out")) or None,
                           gain=10 ** (db / 20))
 
-    def resume(self, item_id, offset):
+    def resume(self, item_id, offset, message="Resumed after restart"):
         """After a restart: put item_id back on air, offset seconds in (clips continue where they were)."""
         with self._lock:
             item = self._item(item_id)
             if item is None:
                 return False
+            self._finish("taken off")
             if item["type"] == "clip" and item.get("duration") and offset >= item["duration"] - 1:
                 self.on_air = item_id
                 self._item_done()
@@ -418,7 +423,7 @@ class Engine:
             elif self.player is not None:
                 self.player.tick = 0
                 self.item_ticks = int(offset * float(self.fps))
-            self.message = f"Resumed after restart: {item['name']}"
+            self.message = f"{message}: {item['name']}"
             return True
 
     def _start(self, item_id, depth=0):
@@ -663,6 +668,8 @@ class Engine:
             self.audio_out.push(audio)
         if self.recorder is not None:
             self.recorder.push(video, audio)
+        if self.sdi is not None:
+            self.sdi.push(video, audio)
 
     def _failover(self, ok, n):
         """Called every frame live is wanted on air. Returns the filler picture while the input is lost."""

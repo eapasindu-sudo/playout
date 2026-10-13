@@ -19,19 +19,24 @@
 <body>
 <form id="f">
   <h1>Playout</h1>
-  <p>Remote control password</p>
-  <input type="password" id="pw" autocomplete="current-password" autofocus>
+  <p id="hint">Remote control password</p>
+  <input id="user" placeholder="Name" autocomplete="username" style="display:none; margin-bottom:10px">
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password" autofocus>
   <button>Log in</button>
   <div id="err"></div>
 </form>
 <script>
+fetch('/api/login_info').then(r => r.json()).then(i => {
+  if (i.users) { document.getElementById('user').style.display = ''; document.getElementById('hint').textContent = 'Log in'; document.getElementById('user').focus(); }
+});
 document.getElementById('f').onsubmit = async e => {
   e.preventDefault();
-  const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:document.getElementById('pw').value})});
+  const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user:document.getElementById('user').value, password:document.getElementById('pw').value})});
   if (r.ok) {
-    const next = new URLSearchParams(location.search).get('next') || '/remote';
+    const local = ['127.0.0.1', 'localhost'].includes(location.hostname);
+    const next = new URLSearchParams(location.search).get('next') || (local ? '/' : '/remote');
     location.href = next.startsWith('/') && !next.startsWith('//') ? next : '/remote';
-  } else document.getElementById('err').textContent = 'Wrong password';
+  } else document.getElementById('err').textContent = (await r.json().catch(() => ({}))).error || 'Wrong password';
 };
 </script>
 </body>

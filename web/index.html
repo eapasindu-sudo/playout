@@ -176,6 +176,7 @@
   .form { display:grid; grid-template-columns: 130px 1fr; gap:8px 10px; align-items:center; }
   .hint { color:var(--dim); font-size:11px; }
   .locked .lockable { pointer-events:none; opacity:.45; }
+  .operator .adminonly { display:none; }
   /* failover / update banners */
   .banner { display:none; padding:8px 12px; font-weight:700; font-size:15px; border-top:1px solid var(--line); align-items:center; gap:10px; }
   .banner.show { display:flex; }
@@ -189,6 +190,18 @@
   .qr { background:#fff; padding:6px; border-radius:4px; width:180px; height:180px; }
   .setsec { font-weight:700; margin:14px 0 6px; padding-top:10px; border-top:1px solid var(--line); }
   .setsec:first-child { margin-top:0; border-top:0; padding-top:0; }
+  .nextbox { display:grid; grid-template-columns: 96px minmax(0,1fr) auto; gap:10px; align-items:center; padding:6px 10px 8px; border-top:1px solid #26292d; }
+  .nextbox .thumb { width:96px; height:54px; }
+  .nextbox .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #bkWarn { background:#4b2a7a; color:#ead9ff; font-size:13px; }
+  #bkWarn.down { background:var(--red); color:#fff; animation: blink 1s steps(2) infinite; }
+  .userbox { display:flex; flex-direction:column; align-items:flex-end; gap:2px; font-size:11px; color:var(--dim); }
+  .setnav { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px; position:sticky; top:-12px; background:var(--panel); padding:6px 0; z-index:1; }
+  .setnav a { color:var(--blue); font-size:12px; padding:2px 6px; border:1px solid var(--line); border-radius:3px; text-decoration:none; }
+  .booktbl input { padding:3px 5px; width:100%; min-width:0; }
+  .booktbl td { padding:3px 3px; }
+  .bk-ok { color:var(--green); } .bk-low { color:var(--orange); } .bk-over { color:#ff6b5f; }
+  .tcg-prev { width:100%; aspect-ratio:16/9; background:#000; display:block; border:1px solid #333; }
 </style>
 </head>
 <body>
@@ -208,6 +221,7 @@
           <div class="fmt" id="sApp"></div>
         </div>
         <div class="date" id="date"></div>
+        <div class="userbox" id="userBox" style="display:none"><span id="userName"></span><button class="sm" onclick="logout()">Log out</button></div>
       </div>
       <div class="onair">
         <div class="thumb" id="oaThumb"></div>
@@ -246,6 +260,7 @@
         <button class="red" onclick="T('live')" title="Stop the playlist and go to the vMix live feed (F12)">TAKE LIVE</button>
       </div>
       <div class="fbwarn" id="fbWarn"></div>
+      <div class="banner" id="bkWarn"></div>
       <div class="banner" id="foWarn">&#9888; LIVE INPUT LOST: filler on air (failover). It goes back to live by itself when the input returns.</div>
       <div class="banner" id="upWarn"><span id="upText"></span><span style="flex:1"></span><button class="sm" onclick="openSettings('update')">Update</button><button class="sm" onclick="upHide=UPD.latest; $('upWarn').classList.remove('show')">Later</button></div>
       <div class="msg" id="msg"></div>
@@ -274,6 +289,9 @@
         <div class="screen"><img id="pv" alt="Program output"><span class="tag" id="pvTag"></span></div>
         <div class="prog"><div id="pvProg"></div></div>
       </div>
+      <div class="nextbox" id="nextBox"><div class="thumb" id="nxThumb"></div>
+        <div style="min-width:0"><div class="lbl" style="text-align:left" id="nxLbl">NEXT</div><div class="nm" id="nxName">-</div><div class="hint mono" id="nxTime"></div></div>
+        <button class="sm" id="nxPrev" onclick="previewNext()" title="Watch the next clip before it goes on air">&#9654; Preview</button></div>
       <div class="srcrow lockable">
         <span class="dot" id="srcDot"></span>
         <span class="lbl" style="text-align:left">vMix NDI input</span>
@@ -302,9 +320,10 @@
         <button id="bLock" onclick="toggleLock()">Lock</button>
         <button onclick="openComposerHelp()" title="Prepare CGs in the separate CG Composer app">CG Composer</button>
         <button onclick="openReport()" title="Commercials aired per client, as PDF / Excel">Ad Report</button>
-        <button class="lockable" onclick="openSchedule()" title="Playlist for each day, scheduled recordings">Day Schedule</button>
+        <button class="lockable adminonly" onclick="openSchedule()" title="Playlist for each day, scheduled recordings">Day Schedule</button>
         <button onclick="openRemote()" title="Control Playout from a phone or tablet">Phone Remote</button>
-        <button class="lockable" onclick="openSettings()" title="Failover, audio level, passwords, updates">Settings</button>
+        <button class="lockable adminonly" onclick="openBooking()" title="Spots booked per client against spots aired, invoices">Ad Booking</button>
+        <button class="lockable adminonly" onclick="openSettings()" title="Failover, audio level, passwords, alerts, SDI, backup PC, users, updates">Settings</button>
       </div>
       <input type="file" id="upFile" multiple accept="video/*,.mxf,.ts" style="display:none" onchange="upload(this)">
 
@@ -340,6 +359,7 @@
         <div class="cglist" id="cgList"></div>
         <div class="cgbar">
           <button class="lockable" onclick="addManualCG()">+ Add CG</button>
+          <button class="lockable" onclick="openTextCG()" title="Ticker, name / title lower third, clock, text">+ Text CG</button>
           <span style="flex:1"></span>
           <button class="red" onclick="api('/api/cg/all_out', {}).then(pollCG)" title="Take every CG off air">ALL OUT</button>
         </div>
@@ -385,6 +405,8 @@
       <span style="display:flex; gap:6px"><select id="lvSrc" style="flex:1" onchange="lvSrcChanged()"></select><button class="sm" onclick="loadInputs(true)" title="Search again">&#10227;</button></span>
       <span class="lvDev">Video device</span><select class="lvDev" id="lvVid"></select>
       <span class="lvDev">Audio device</span><select class="lvDev" id="lvAud"></select>
+      <span class="lvUrl">Feed address</span><input class="lvUrl" id="lvUrl" placeholder="srt://0.0.0.0:9000  or  rtmp://0.0.0.0:1935/live/key  or  https://youtube.com/watch?v=...">
+      <span class="lvUrl"></span><span class="lvUrl hint">SRT / RTMP with 0.0.0.0 = Playout waits for the sender (vMix, OBS, a phone app) to connect to this PC. Also: srt://other-pc:9000, rtsp://camera, .m3u8 (HLS) links, YouTube / Facebook live links.</span>
       <span></span><span class="hint" id="lvHint">Main vMix input = the NDI source picked on the main screen. Plug in a USB / HDMI capture device (AverMedia, Elgato, Magewell...), press &#10227; and pick it here.</span>
     </div>
     <div class="section-t" style="margin:12px -14px 6px; display:flex; align-items:center">CGs on this live card
@@ -458,7 +480,7 @@
       <div><img id="edOutImg" alt=""><div style="display:flex; gap:6px; margin-top:6px; align-items:center">Out <input class="num" id="edOut" placeholder="end" onchange="trimPrev()">
         <button class="sm" onclick="nudge('edOut', -1)">-1s</button><button class="sm" onclick="nudge('edOut', 1)">+1s</button><button class="sm" onclick="$('edOut').value=''; trimPrev()">End</button></div></div>
     </div>
-    <div class="hint" style="margin-top:6px" id="edTrimInfo"></div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:6px"><span class="hint" id="edTrimInfo"></span><span style="flex:1"></span><button class="sm" onclick="previewClip(edItem.file, parseClock($('edIn').value))">&#9654; Preview clip</button></div>
     <div class="section-t" style="margin:12px -14px 6px; display:flex; align-items:center">CGs with this commercial (logo, bug, lower third)
       <span style="flex:1"></span><button class="sm" onclick="addItemCG()">+ Add CG</button></div>
     <table class="cardcg" id="edCG"></table>
@@ -493,6 +515,8 @@
   <div class="body">
     <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center">
       <input type="date" id="logDate" onchange="loadLogs()"><a id="logCsv" style="color:var(--blue)" href="/api/asrun.csv">Download CSV</a>
+      <span style="flex:1"></span><label><input type="radio" name="logKind" value="air" checked onchange="loadLogs()"> Air log</label>
+      <label><input type="radio" name="logKind" value="act" onchange="loadLogs()"> Activity (who did what)</label>
     </div>
     <table id="logT"></table>
   </div>
@@ -576,7 +600,10 @@
 <!-- Settings -->
 <dialog id="dSet" style="width:min(760px, 96vw)">
   <header>Settings <span class="hint" id="setVer" style="margin-left:10px; font-weight:400"></span> <button class="sm" onclick="dSet.close()">Close</button></header>
-  <div class="body">
+  <div class="body" id="setBody">
+    <div class="setnav"><a href="#" data-s="secFail">Failover</a><a href="#" data-s="secAudio">Audio</a><a href="#" data-s="secPw">Passwords</a>
+      <a href="#" data-s="secUsers">Users</a><a href="#" data-s="secAlerts">Alerts</a><a href="#" data-s="secBackup">Backup PC</a><a href="#" data-s="secSdi">SDI out</a>
+      <a href="#" data-s="secWatch">Watch folder</a><a href="#" data-s="secUpdate">Updates</a></div>
     <div class="setsec" id="secFail">Failover (live input lost)</div>
     <div class="form">
       <span>Failover</span><label><input type="checkbox" id="foOn"> When the vMix / live input is lost, put a filler on air</label>
@@ -586,15 +613,15 @@
         <select id="foFile" style="flex:1"></select></span>
       <span></span><span class="hint">Playout also starts itself again if it ever crashes or freezes, and carries on with the item that was on air.</span>
     </div>
-    <div class="setsec">Audio level</div>
+    <div class="setsec" id="secAudio">Audio level</div>
     <div class="form">
       <span>Normalize</span><label><input type="checkbox" id="anOn"> Play every commercial at the same loudness</label>
       <span>Target</span><select id="anTarget"><option value="-24">-24 LUFS (ATSC TV)</option><option value="-23">-23 LUFS (EBU TV, recommended)</option><option value="-18">-18 LUFS</option><option value="-16">-16 LUFS (web / Facebook)</option><option value="-14">-14 LUFS (loud)</option></select>
       <span></span><span class="hint">Each clip is measured once in the background; the file itself is not changed. Extra volume per clip: Edit on the playlist item.</span>
     </div>
     <div class="setsec">Station</div>
-    <div class="form"><span>Station name</span><input id="stName" placeholder="shown on the ad reports"></div>
-    <div class="setsec">Passwords</div>
+    <div class="form"><span>Station name</span><input id="stName" placeholder="shown on the ad reports and alerts"></div>
+    <div class="setsec" id="secPw">Passwords</div>
     <div class="form">
       <span>Lock password</span><span><input id="pwLock" type="password" placeholder="empty = no password" autocomplete="new-password"> <span class="hint" id="pwLockSt"></span></span>
       <span></span><span class="hint">Needed to Unlock the screen and to open Settings.</span>
@@ -602,6 +629,49 @@
       <span>Phone remote</span><label><input type="checkbox" id="rmOn"> Allow phones / tablets / other PCs on the network</label>
       <span>Remote password</span><span><input id="pwRemote" type="password" placeholder="empty = no password" autocomplete="new-password"> <span class="hint" id="pwRemoteSt"></span></span>
     </div>
+    <div class="setsec" id="secUsers">Users (operator / admin)</div>
+    <table class="tblin" id="usrT"></table>
+    <div style="display:flex; gap:6px; margin-top:6px; align-items:center"><button class="sm" onclick="addUser()">+ Add user</button>
+      <span class="hint">With users set up, everyone logs in (on this PC too). Operators run the playlist, CGs and recording; only an admin can open Settings, Day Schedule and Ad Booking. Every change goes to the Activity log. Saved with its own button:</span>
+      <button class="sm blue" onclick="saveUsers()">Save users</button></div>
+
+    <div class="setsec" id="secAlerts">Alerts to your phone (Telegram)</div>
+    <div class="form">
+      <span>Alerts</span><label><input type="checkbox" id="alOn"> Send alerts to Telegram</label>
+      <span>Bot token</span><input id="alToken" type="password" placeholder="from @BotFather in Telegram" autocomplete="off">
+      <span>Chat</span><span style="display:flex; gap:6px"><input id="alChat" placeholder="chat id" style="flex:1"><button class="sm" onclick="alFind()">Find chat</button><button class="sm" onclick="alTest()">Send test</button></span>
+      <span></span><span class="hint" id="alHint">Telegram: search @BotFather, send /newbot, copy the token here. Send "hi" to your new bot (or add it to a group), then press Find chat.</span>
+      <span>Send when</span><span id="alEvents" class="days"></span>
+    </div>
+
+    <div class="setsec" id="secBackup">Backup PC (main / backup)</div>
+    <div class="form">
+      <span>This PC is</span><select id="bkRole"><option value="off">On its own</option><option value="main">The MAIN PC</option><option value="backup">The BACKUP PC (follows the main)</option></select>
+      <span>Main PC address</span><input id="bkUrl" placeholder="e.g. 192.168.1.20 or MAIN-PC (only on the backup PC)">
+      <span>Sync key</span><input id="bkKey" type="password" placeholder="the same word on both PCs" autocomplete="off">
+      <span>Take over after</span><span><input class="num" id="bkAfter" type="number" min="2" max="60"> seconds without the main PC</span>
+      <span>Streams</span><label><input type="checkbox" id="bkStreams"> When the main PC is down, start this PC's live streams</label>
+      <span>Status</span><span id="bkSt" class="hint"></span>
+      <span></span><span class="hint">The backup copies the playlist, CGs and missing clips from the main PC and plays the same item at the same point, so vMix / the switcher can change to the backup's NDI output at any time. If the main PC stops, the backup carries on by itself and sends an alert.</span>
+    </div>
+
+    <div class="setsec" id="secSdi">SDI output (Blackmagic DeckLink)</div>
+    <div class="form">
+      <span>SDI out</span><label><input type="checkbox" id="sdiOn"> Send the program to a DeckLink card</label>
+      <span>FFmpeg</span><span style="display:flex; gap:6px"><input id="sdiFf" placeholder="C:\ffmpeg-decklink\bin\ffmpeg.exe" style="flex:1"><button class="sm" onclick="sdiFind()">Find cards</button></span>
+      <span>Output</span><select id="sdiDev"></select>
+      <span>Status</span><span id="sdiSt" class="hint"></span>
+      <span></span><span class="hint">Needs Blackmagic Desktop Video and an ffmpeg.exe built with DeckLink support (the FFmpeg inside Playout does not have it). Set the card's video format in Blackmagic Desktop Video Setup to match Playout's format (top of the screen). vMix can also send the PLAYOUT PGM NDI to its own DeckLink output.</span>
+    </div>
+
+    <div class="setsec" id="secWatch">Watch folder</div>
+    <div class="form">
+      <span>Watch folder</span><label><input type="checkbox" id="wfOn"> Bring new ad files in from a folder by themselves</label>
+      <span>Folder</span><input id="wfDir" placeholder="e.g. D:\Ads incoming  or  \\SERVER\ads">
+      <span>Then</span><span><label><input type="checkbox" id="wfMove"> Move (delete from the watch folder)</label> &nbsp; <label><input type="checkbox" id="wfAdd"> Add to the end of the playlist</label></span>
+      <span>Last files</span><span id="wfLog" class="hint" style="white-space:pre-line"></span>
+    </div>
+
     <div class="setsec" id="secUpdate">Updates</div>
     <div class="form">
       <span>Version</span><span id="upCur" class="mono"></span>
@@ -628,6 +698,61 @@
   <div class="foot"><button onclick="dPw.close('')">Cancel</button><button class="blue" onclick="dPw.close('ok')">OK</button></div>
 </dialog>
 
+<!-- Text CG -->
+<dialog id="dText" style="width:min(1100px, 97vw)">
+  <header><span id="tcTitle">Text CG</span> <button class="sm" onclick="dText.close()">Close</button></header>
+  <div class="body" style="display:grid; grid-template-columns: minmax(0, 1fr) 360px; gap:14px">
+    <div><img class="tcg-prev" id="tcPrev" alt="preview"><div class="hint" id="tcErr" style="margin-top:4px"></div>
+      <div style="display:flex; gap:6px; margin-top:6px"><label><input type="checkbox" id="tcOnPgm" onchange="tcRender()"> Show over the program</label></div></div>
+    <div class="form" style="grid-template-columns: 90px 1fr">
+      <span>Type</span><select id="tcStyle" onchange="tcShow(); tcRender()"><option value="lower3">Lower third (name / title)</option><option value="ticker">Ticker (scrolling news)</option><option value="clock">Clock / date</option><option value="text">Text box</option></select>
+      <span>Name</span><input id="tcName" placeholder="name in the CG list">
+      <span class="tc-l3">Line 1</span><input class="tc-l3" id="tcL1" placeholder="Name" oninput="tcLater()">
+      <span class="tc-l3">Line 2</span><input class="tc-l3" id="tcL2" placeholder="Title" oninput="tcLater()">
+      <span class="tc-tk tc-tx">Text</span><textarea class="tc-tk tc-tx" id="tcText" rows="5" style="font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:6px" placeholder="Ticker: one news item per line" oninput="tcLater()"></textarea>
+      <span class="tc-tk">Label</span><input class="tc-tk" id="tcLabel" placeholder="NEWS / BREAKING (optional)" oninput="tcLater()">
+      <span class="tc-tk">Text file</span><input class="tc-tk" id="tcFile" placeholder="optional: C:\news\ticker.txt (read every 10 s)" oninput="tcLater()">
+      <span class="tc-tk">Speed</span><span class="tc-tk"><input class="num" id="tcSpeed" type="number" min="20" max="600" step="10"> pixels / second</span>
+      <span class="tc-ck">Format</span><span class="tc-ck"><select id="tcFmt" onchange="tcRender()">
+        <option value="%H:%M:%S">13:45:30</option><option value="%H:%M">13:45</option><option value="%I:%M %p">01:45 PM</option>
+        <option value="%I:%M:%S %p">01:45:30 PM</option><option value="%H:%M:%S\n%d %b %Y">13:45:30 + 13 Oct 2026</option>
+        <option value="%d %B %Y">13 October 2026</option><option value="%A">Tuesday</option></select></span>
+      <span>Font</span><select id="tcFont" onchange="tcRender()"></select>
+      <span>Size</span><span><input class="num" id="tcSize" type="number" min="10" max="200" onchange="tcRender()"> <label><input type="checkbox" id="tcBold" onchange="tcRender()"> Bold</label></span>
+      <span>Colours</span><span style="display:flex; gap:6px; align-items:center">Text <input type="color" id="tcColor" onchange="tcRender()"> Box <input type="color" id="tcBg" onchange="tcRender()"> Accent <input type="color" id="tcAcc" onchange="tcRender()"></span>
+      <span>Box</span><span><input type="range" id="tcBgA" min="0" max="100" style="width:140px" onchange="tcRender()"> opacity</span>
+      <span>Position</span><span style="display:flex; gap:6px; align-items:center">X <input class="num" id="tcX" type="number" onchange="tcRender()" style="width:80px"> Y <input class="num" id="tcY" type="number" onchange="tcRender()" style="width:80px"></span>
+      <span>Width</span><span><input class="num" id="tcW" type="number" min="0" onchange="tcRender()"> px (0 = auto / full width)</span>
+      <span>Show</span><span><label><input type="checkbox" id="tcLive"> Only on live (hide during commercials)</label></span>
+      <span></span><span class="hint">Sinhala / Tamil: pick Iskoola Pota or Nirmala UI. Changing the text of a CG that is on air updates it at once.</span>
+    </div>
+  </div>
+  <div class="foot"><button id="tcDel" onclick="tcDelete()">Delete</button><span style="flex:1"></span><button class="blue" onclick="tcSave()">Save</button></div>
+</dialog>
+
+<!-- Clip preview -->
+<dialog id="dPrev" style="width:min(900px, 96vw)">
+  <header><span id="pvTitle">Preview</span> <button class="sm" onclick="closePreview()">Close</button></header>
+  <div class="body"><video id="pvVideo" controls style="width:100%; aspect-ratio:16/9; background:#000"></video>
+    <div class="hint" id="pvHint">Plays on this screen only (not on air). Sound goes to this PC's speakers.</div></div>
+</dialog>
+
+<!-- Ad booking -->
+<dialog id="dBook" style="width:min(1280px, 98vw)">
+  <header>Ad Booking <span class="hint" style="margin-left:10px; font-weight:400">spots booked against spots aired (from the air log)</span> <button class="sm" onclick="dBook.close()">Close</button></header>
+  <div class="body">
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+      Period <input type="date" id="bkFrom" onchange="loadBooking()"> to <input type="date" id="bkTo" onchange="loadBooking()">
+      <span class="hint">(for the "Period" columns and invoices)</span><span style="flex:1"></span>
+      <select id="bkInvClient"></select><button class="sm" onclick="makeInvoice()">Invoice PDF</button>
+    </div>
+    <table class="booktbl" id="bookT"></table>
+    <div style="display:flex; gap:6px; margin-top:8px"><button class="sm" onclick="addBooking()">+ Add booking</button>
+      <span class="hint">Match = commercial name(s) or file(s), comma separated; empty = every spot of that client. Spots must have the client set (Edit on the commercial, or the Client column when importing).</span></div>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveBooking()">Save</button></div>
+</dialog>
+
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -636,6 +761,7 @@ let S = {playlist:[], fps:25}, PL = [], media = [], streamInfo = null, renderedV
 async function api(url, body) {
   const opt = body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
   const r = await fetch(url, opt);
+  if (r.status === 401) { location.href = '/login?next=/'; throw new Error('login'); }
   return r.headers.get('content-type')?.includes('json') ? r.json() : r.text();
 }
 const T = (a, body) => api('/api/transport/' + a, body || {}).then(poll);
@@ -697,11 +823,13 @@ async function poll() {
   $('foWarn').classList.toggle('show', !!S.failover?.active);
   if (S.failover?.active) { tally.textContent = 'FILLER'; tally.className = 'tally pause'; }
   if (S.locked !== locked) applyLock(S.locked);
+  showNext();
 }
 function srcLabel(k) {
   if (!k) return 'vMix NDI: ' + (S.live_source || 'no source selected');
   if (k === 'bars') return 'Colour bars + tone';
   if (k.startsWith('ndi:')) return 'NDI: ' + k.slice(4);
+  if (k.startsWith('url:')) return 'Feed: ' + k.slice(4);
   if (k.startsWith('dev:')) { const [v, a] = k.slice(4).split('|'); return 'USB: ' + v + (a ? ' + ' + a : ''); }
   return k;
 }
@@ -842,9 +970,10 @@ async function loadInputs(force) {
   const opts = [['', `Main vMix input (${S.live_source || 'none picked'})`]];
   inputs.ndi.filter(n => n !== S.live_source).forEach(n => opts.push(['ndi:' + n, 'NDI: ' + n]));
   if (cur.startsWith('ndi:') && !opts.some(o => o[0] === cur)) opts.push([cur, srcLabel(cur) + ' (offline)']);
-  opts.push(['dev', 'USB / HDMI capture device'], ['bars', 'Colour bars + tone (test)']);
+  opts.push(['dev', 'USB / HDMI capture device'], ['url', 'Network feed (SRT / RTMP / HLS / YouTube)'], ['bars', 'Colour bars + tone (test)']);
   $('lvSrc').innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('');
-  $('lvSrc').value = cur.startsWith('dev:') ? 'dev' : cur;
+  $('lvSrc').value = cur.startsWith('dev:') ? 'dev' : cur.startsWith('url:') ? 'url' : cur;
+  $('lvUrl').value = cur.startsWith('url:') ? cur.slice(4) : '';
   const [wv, wa] = cur.startsWith('dev:') ? cur.slice(4).split('|') : ['', ''];
   const vids = inputs.devices.filter(d => d.kind === 'video').map(d => d.name);
   const auds = inputs.devices.filter(d => d.kind === 'audio').map(d => d.name);
@@ -856,9 +985,13 @@ async function loadInputs(force) {
   if (!wa && wv) { const guess = auds.find(a => a.toLowerCase().includes(wv.toLowerCase().split(' ')[0])); if (guess) $('lvAud').value = guess; }
   lvSrcChanged();
 }
-function lvSrcChanged() { document.querySelectorAll('.lvDev').forEach(e => e.style.display = $('lvSrc').value === 'dev' ? '' : 'none'); }
+function lvSrcChanged() {
+  document.querySelectorAll('.lvDev').forEach(e => e.style.display = $('lvSrc').value === 'dev' ? '' : 'none');
+  document.querySelectorAll('.lvUrl').forEach(e => e.style.display = $('lvSrc').value === 'url' ? '' : 'none');
+}
 function lvSource() {
   const v = $('lvSrc').value;
+  if (v === 'url') return $('lvUrl').value.trim() ? 'url:' + $('lvUrl').value.trim() : '';
   if (v !== 'dev') return v;
   return $('lvVid').value ? 'dev:' + $('lvVid').value + ($('lvAud').value ? '|' + $('lvAud').value : '') : '';
 }
@@ -896,7 +1029,7 @@ async function openLib() {
     <tr><td><input type="checkbox" data-i="${i}"></td>
       <td><img class="lib-thumb" loading="lazy" src="/api/thumb/${encodeURIComponent(m.name)}"></td>
       <td>${esc(m.name)}</td><td class="mono">${m.duration ? tc(m.duration).slice(0, 8) : '?'}</td><td class="mono hint">${m.lufs != null ? m.lufs.toFixed(1) + ' LUFS' : ''}</td>
-      <td><button class="sm" onclick="addClipsList([${i}], 'end')">Add</button></td></tr>`).join('') ||
+      <td style="white-space:nowrap"><button class="sm" onclick="previewClip(media[${i}].name)">&#9654;</button> <button class="sm" onclick="addClipsList([${i}], 'end')">Add</button></td></tr>`).join('') ||
     '<tr><td colspan="6" class="hint">No clips yet. Upload some or copy files into the media folder.</td></tr>');
   dLib.showModal();
 }
@@ -931,6 +1064,12 @@ async function delPL(n) { if (await ask(`Delete saved playlist "${n}"?`)) { awai
 async function openLogs() { $('logDate').valueAsDate = new Date(); await loadLogs(); dLogs.showModal(); }
 async function loadLogs() {
   const d = $('logDate').value; const q = d ? '?date=' + d : '';
+  if (document.querySelector('[name=logKind]:checked').value === 'act') {
+    const rows = await api('/api/activity' + q);
+    $('logT').innerHTML = '<tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>' + (rows.slice().reverse().map(r =>
+      `<tr><td class="mono">${esc(r.time)}</td><td>${esc(r.user)}</td><td class="mono">${esc(r.action)}</td><td class="hint" style="max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${esc(r.detail)}">${esc(r.detail)}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No activity on this day</td></tr>');
+    return;
+  }
   $('logCsv').href = '/api/asrun.csv' + q;
   const rows = await api('/api/asrun' + q);
   $('logT').innerHTML = '<tr><th>Start</th><th>End</th><th>Type</th><th>Item</th><th>Client</th><th>Played</th><th>Status</th></tr>' +
@@ -1117,7 +1256,7 @@ async function importPL() {
 let SET = null, NORM = {}, UPD = {}, upHide = null, adminPw = '';
 async function openSettings(focus) {
   SET = await api('/api/settings');
-  if (SET.security.lock_password_set) {
+  if (SET.need_password) {
     let err = '';
     for (;;) {
       const pw = await askPassword('Settings: lock password', err); if (pw == null) return;
@@ -1138,6 +1277,16 @@ async function openSettings(focus) {
   $('rmOn').checked = sc.remote_enabled; $('lockStart').checked = sc.lock_on_start;
   $('upRepo').value = SET.update.repo; $('upToken').value = SET.update.token_set ? '********' : ''; $('upAuto').checked = SET.update.auto_check;
   $('setVer').textContent = 'version ' + SET.version;
+  const al = SET.alerts; $('alOn').checked = al.enabled; $('alToken').value = al.token_set ? '********' : ''; $('alChat').value = al.chat_id || '';
+  $('alEvents').innerHTML = Object.entries(al.names).map(([k, n]) => `<label><input type="checkbox" data-ev="${k}" ${al.events[k] !== false ? 'checked' : ''}> ${esc(n)}</label>`).join('<br>');
+  const bk = SET.backup; $('bkRole').value = bk.role; $('bkUrl').value = bk.main_url || ''; $('bkKey').value = bk.key_set ? '********' : '';
+  $('bkAfter').value = bk.takeover_after; $('bkStreams').checked = bk.take_streams; $('bkSt').textContent = bk.status + (bk.error && bk.role === 'backup' ? ' - ' + bk.error : '');
+  const sd = SET.sdi; $('sdiOn').checked = sd.enabled; $('sdiFf').value = sd.ffmpeg || '';
+  $('sdiDev').innerHTML = sd.device ? `<option selected>${esc(sd.device)}</option>` : '<option value="">(press Find cards)</option>';
+  $('sdiSt').textContent = sd.enabled ? sd.status + (sd.error ? ' - ' + sd.error : '') : 'off';
+  const wf = SET.watch; $('wfOn').checked = wf.enabled; $('wfDir').value = wf.folder || ''; $('wfMove').checked = wf.move; $('wfAdd').checked = wf.add_to_playlist;
+  $('wfLog').textContent = (wf.error ? 'Problem: ' + wf.error + '\n' : '') + (wf.log.slice(0, 6).map(l => l.time.slice(5, 16) + '  ' + l.text).join('\n') || 'nothing yet');
+  loadUsers();
   pollUpdate();
   dSet.showModal();
   if (focus === 'update') $('secUpdate').scrollIntoView();
@@ -1150,10 +1299,17 @@ async function saveSettings() {
     station_name: $('stName').value.trim(),
     security: {lock_password:$('pwLock').value, remote_password:$('pwRemote').value, remote_enabled:$('rmOn').checked, lock_on_start:$('lockStart').checked},
     update: {repo:$('upRepo').value.trim(), token:$('upToken').value, auto_check:$('upAuto').checked},
+    alerts: {enabled:$('alOn').checked, token:$('alToken').value, chat_id:$('alChat').value.trim(),
+             events:Object.fromEntries([...document.querySelectorAll('[data-ev]')].map(x => [x.dataset.ev, x.checked]))},
+    backup: {role:$('bkRole').value, main_url:$('bkUrl').value.trim(), key:$('bkKey').value, takeover_after:+$('bkAfter').value || 5, take_streams:$('bkStreams').checked},
+    sdi: {enabled:$('sdiOn').checked, ffmpeg:$('sdiFf').value.trim(), device:$('sdiDev').value},
+    watch: {enabled:$('wfOn').checked, folder:$('wfDir').value.trim(), move:$('wfMove').checked, add_to_playlist:$('wfAdd').checked},
   };
+  if (body.backup.role === 'backup' && (!body.backup.main_url || !body.backup.key)) { say('A backup PC needs the main PC address and the sync key.'); return; }
+  if (body.backup.role === 'main' && !body.backup.key) { say('Set a sync key on the main PC (the same one goes on the backup PC).'); return; }
   if (body.failover.mode === 'clip' && !body.failover.file) { say('Pick the filler clip.'); return; }
   const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (!r.ok) { say('Settings were not saved: wrong password'); return; }
+  if (!r.ok) { say('Settings were not saved: ' + (r.status === 403 ? 'wrong password or not an admin' : 'error ' + r.status)); return; }
   SET = await r.json(); NORM = SET.audio; if ($('pwLock').value !== '********') adminPw = $('pwLock').value;
   dSet.close(); $('msg').textContent = 'Settings saved';
 }
@@ -1178,6 +1334,173 @@ async function upInstall() {
   if (!await ask((onAir ? 'WARNING: Playout is on air / streaming / recording. Installing stops the output for about a minute.\n\n' : '') + `Install Playout ${UPD.latest} now? Playout closes, updates and starts again.`)) return;
   const r = await api('/api/update/install', {}); if (!r.ok) say(r.error); else pollUpdate();
 }
+
+
+// ---------------------------------------------------------------- settings: nav, users, alerts, SDI
+document.querySelectorAll('.setnav a').forEach(a => a.onclick = e => { e.preventDefault(); $(a.dataset.s).scrollIntoView({block:'start'}); });
+let USERS = [];
+async function loadUsers() { try { USERS = (await api('/api/users')).users.map(u => ({...u, password:'********'})); } catch (e) { USERS = []; } renderUsers(); }
+function renderUsers() {
+  $('usrT').innerHTML = '<tr><th>Name</th><th>Password</th><th>Role</th><th></th></tr>' + (USERS.map((u, i) => `<tr data-u="${i}">
+    <td><input data-k="name" value="${esc(u.name)}"></td><td><input data-k="password" type="password" value="${esc(u.password)}" autocomplete="new-password"></td>
+    <td><select data-k="role"><option value="operator" ${u.role === 'operator' ? 'selected' : ''}>Operator</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option></select></td>
+    <td><button class="sm" onclick="readUsers(); USERS.splice(${i}, 1); renderUsers()">Remove</button></td></tr>`).join('') || '<tr><td colspan="4" class="hint">No users: Playout opens without a login.</td></tr>');
+}
+function readUsers() { document.querySelectorAll('#usrT tr[data-u]').forEach(tr => { const u = USERS[+tr.dataset.u]; tr.querySelectorAll('[data-k]').forEach(el => u[el.dataset.k] = el.value); }); }
+function addUser() { readUsers(); USERS.push({name:'', password:'', role: USERS.length ? 'operator' : 'admin'}); renderUsers(); }
+async function saveUsers() {
+  readUsers();
+  if (USERS.length && !USERS.some(u => u.role === 'admin')) { say('Keep at least one admin.'); return; }
+  if (USERS.length && !await ask('Save users? From now on everyone logs in with a name and password (on this PC too). Do not forget the admin password.')) return;
+  if (!USERS.length && !await ask('Remove all users? Playout then opens without a login.')) return;
+  const r = await fetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({users:USERS})});
+  const j = await r.json(); if (!r.ok) { say(j.error || 'Not saved'); return; }
+  USERS = j.users.map(u => ({...u, password:'********'})); renderUsers(); pollExtra(); say('Users saved.');
+}
+async function alFind() {
+  const r = await api('/api/alerts/find_chat', {token:$('alToken').value});
+  if (!r.ok) { say(r.error); return; }
+  $('alChat').value = r.chats[0].id; $('alHint').textContent = 'Found: ' + r.chats.map(c => `${c.name} (${c.id})`).join(', ');
+}
+async function alTest() {
+  const r = await api('/api/alerts/test', {token:$('alToken').value, chat_id:$('alChat').value.trim()});
+  say(r.ok ? 'Test alert sent. Check Telegram.' : r.error);
+}
+async function sdiFind() {
+  const r = await api('/api/sdi/devices', {ffmpeg:$('sdiFf').value.trim()});
+  $('sdiDev').innerHTML = r.devices.length ? r.devices.map(d => `<option>${esc(d)}</option>`).join('') : '<option value="">(none found)</option>';
+  $('sdiSt').textContent = r.error || `${r.devices.length} DeckLink output(s) found`;
+}
+
+// ---------------------------------------------------------------- user, backup / SDI status
+let EXTRA = {};
+async function pollExtra() {
+  try { EXTRA = await api('/api/status_extra'); } catch (e) { return; }
+  $('userBox').style.display = EXTRA.users ? '' : 'none';
+  $('userName').textContent = EXTRA.me ? `${EXTRA.me} (${EXTRA.role})` : '';
+  document.body.classList.toggle('operator', EXTRA.users && EXTRA.role !== 'admin');
+  const b = EXTRA.backup, el = $('bkWarn');
+  el.classList.toggle('show', b.role === 'backup'); el.classList.toggle('down', !!b.main_down);
+  el.textContent = b.role === 'backup' ? (b.main_down ? '⚠ MAIN PC DOWN: this backup PC is on air by itself' : `BACKUP PC: ${b.status}` + (b.error ? ` (${b.error})` : '') + ' - change the playlist on the main PC') : '';
+}
+async function logout() { await api('/api/logout', {}); location.href = '/login'; }
+
+// ---------------------------------------------------------------- next item + clip preview
+function showNext() {
+  const r = S.playlist.find(x => x.status === 'NEXT') || S.playlist.find(x => x.status === 'CUED');
+  $('nxLbl').textContent = r ? (r.status === 'CUED' ? 'CUED (Play starts it)' : 'NEXT') : 'NEXT';
+  $('nxName').textContent = r ? r.name : 'nothing (end of playlist)';
+  $('nxTime').textContent = r ? (r.start != null ? `in ${short(r.start - S.now)}  at ${hms(r.start)}` : '') + (r.duration ? `  -  ${tc(r.duration).slice(0, 8)}` : '') : '';
+  setThumb($('nxThumb'), r ? PL.find(x => x.id === r.id) : null);
+  $('nxPrev').disabled = !(r && r.type === 'clip');
+}
+function previewNext() { const r = S.playlist.find(x => x.status === 'NEXT') || S.playlist.find(x => x.status === 'CUED'); if (r && r.type === 'clip') previewClip(r.file, r.in || 0); }
+function previewClip(file, t) {
+  const v = $('pvVideo'); $('pvTitle').textContent = 'Preview: ' + file;
+  $('pvHint').textContent = 'Plays on this screen only (not on air). Sound goes to this PC\'s speakers.';
+  v.onerror = () => { $('pvHint').textContent = 'This file type does not play in the preview (MXF / TS / some MOV). It still plays on air.'; };
+  v.src = '/api/media/file/' + encodeURIComponent(file) + (t ? '#t=' + t : ''); v.play().catch(() => {});
+  dPrev.onclose = () => { v.pause(); v.removeAttribute('src'); v.load(); };
+  dPrev.showModal();
+}
+function closePreview() { dPrev.close(); }
+
+// ---------------------------------------------------------------- text CG
+let tcEdit = null, tcTimer = null, FONTS = null;
+const TC_DEF = {kind:'text', style:'lower3', line1:'Name Surname', line2:'Title', text:'', label:'', text_file:'', fmt:'%H:%M:%S', font:'Arial', size:44, bold:true,
+  color:'#ffffff', bg:'#0f2252', bg_alpha:85, accent:'#e0261b', x:120, y:820, width:0, speed:120, live_only:false, fade:8};
+const TC_POS = {lower3:[120, 0.76], ticker:[0, 0.93], clock:[0.86, 0.04], text:[80, 0.06]};
+async function openTextCG(c) {
+  if (!FONTS) { try { FONTS = (await api('/api/textcg/fonts')).fonts; } catch (e) { FONTS = ['Arial']; } }
+  tcEdit = c || null;
+  const cfg = {...TC_DEF, ...(c || {})};
+  if (!c) { cfg.y = Math.round(S.height * 0.76); }
+  $('tcTitle').textContent = c ? 'Edit text CG' : 'New text CG'; $('tcDel').style.display = c ? '' : 'none';
+  $('tcFont').innerHTML = [...new Set([cfg.font, ...FONTS])].map(f => `<option ${f === cfg.font ? 'selected' : ''}>${esc(f)}</option>`).join('');
+  $('tcStyle').value = cfg.style; $('tcName').value = cfg.name || ''; $('tcL1').value = cfg.line1 || ''; $('tcL2').value = cfg.line2 || '';
+  $('tcText').value = cfg.text || ''; $('tcLabel').value = cfg.label || ''; $('tcFile').value = cfg.text_file || ''; $('tcSpeed').value = cfg.speed;
+  $('tcFmt').value = cfg.fmt; $('tcSize').value = cfg.size; $('tcBold').checked = cfg.bold !== false;
+  $('tcColor').value = cfg.color; $('tcBg').value = cfg.bg; $('tcAcc').value = cfg.accent; $('tcBgA').value = cfg.bg_alpha;
+  $('tcX').value = cfg.x; $('tcY').value = cfg.y; $('tcW').value = cfg.width || 0; $('tcLive').checked = !!cfg.live_only;
+  $('tcStyle').dataset.prev = cfg.style;
+  tcShow(); dText.showModal(); tcRender();
+}
+function tcShow() {
+  const st = $('tcStyle').value, prev = $('tcStyle').dataset.prev;
+  if (prev && prev !== st && !tcEdit) {        // new CG: sensible place and size for the type
+    const [px, py] = TC_POS[st]; $('tcX').value = px < 1 ? Math.round(S.width * px) : px; $('tcY').value = Math.round(S.height * py);
+    $('tcSize').value = st === 'ticker' ? 36 : st === 'clock' ? 34 : 44;
+  }
+  $('tcStyle').dataset.prev = st;
+  const show = (cls, on) => document.querySelectorAll(cls).forEach(e => e.style.display = on ? '' : 'none');
+  show('.tc-l3', st === 'lower3'); show('.tc-tk', st === 'ticker'); show('.tc-ck', st === 'clock');
+  document.querySelectorAll('.tc-tx').forEach(e => e.style.display = (st === 'ticker' || st === 'text') ? '' : 'none');
+}
+function tcCfg() {
+  const st = $('tcStyle').value;
+  const c = {...(tcEdit || {}), kind:'text', style:st, name:$('tcName').value.trim(), line1:$('tcL1').value, line2:$('tcL2').value, text:$('tcText').value,
+    label:$('tcLabel').value.trim(), text_file:$('tcFile').value.trim(), fmt:$('tcFmt').value, font:$('tcFont').value, size:+$('tcSize').value || 40,
+    bold:$('tcBold').checked, color:$('tcColor').value, bg:$('tcBg').value, accent:$('tcAcc').value, bg_alpha:+$('tcBgA').value,
+    x:+$('tcX').value || 0, y:+$('tcY').value || 0, width:+$('tcW').value || 0, speed:+$('tcSpeed').value || 120, live_only:$('tcLive').checked};
+  if (!c.name) c.name = st === 'lower3' ? (c.line1 || 'Lower third') : st === 'ticker' ? 'Ticker' : st === 'clock' ? 'Clock' : (c.text.split('\n')[0] || 'Text').slice(0, 30);
+  return c;
+}
+function tcLater() { clearTimeout(tcTimer); tcTimer = setTimeout(tcRender, 250); }
+async function tcRender() {
+  const r = await fetch('/api/textcg/render', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cfg:tcCfg(), bg:$('tcOnPgm').checked ? 'program' : 'checker', w:960})});
+  const b = await r.blob(); const old = $('tcPrev').src; $('tcPrev').src = URL.createObjectURL(b); if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+  $('tcErr').textContent = r.headers.get('X-Error') || '';
+}
+function tcSave() {
+  const c = tcCfg();
+  if (tcEdit) { const i = cgManual.findIndex(x => x.id === tcEdit.id); if (i >= 0) cgManual[i] = c; } else cgManual.push(c);
+  dText.close(); saveManual();
+}
+async function tcDelete() {
+  if (!tcEdit || !await ask('Delete this text CG?')) return;
+  const i = cgManual.findIndex(x => x.id === tcEdit.id); if (i >= 0) { cgTake(tcEdit.id, 'out'); cgManual.splice(i, 1); saveManual(); }
+  dText.close();
+}
+
+// ---------------------------------------------------------------- ad booking
+let BK = [], BKCUR = 'LKR', BKPL = {};
+async function openBooking() {
+  if (!$('bkFrom').value) { const t = new Date(); t.setDate(1); $('bkFrom').value = isoDay(t); $('bkTo').value = isoDay(new Date()); }
+  await loadBooking(); dBook.showModal();
+}
+async function loadBooking() {
+  const r = await api(`/api/bookings?from=${$('bkFrom').value}&to=${$('bkTo').value}`);
+  BK = r.bookings; BKCUR = r.currency; BKPL = r.in_playlist; renderBooking();
+}
+function renderBooking() {
+  const cls = (a, b) => !b ? '' : a >= b ? 'bk-ok' : 'bk-low';
+  $('bookT').innerHTML = `<tr><th>Client</th><th>Campaign</th><th>Match (commercials)</th><th>From</th><th>To</th><th>Per day</th><th>Total</th><th>Rate</th>
+    <th title="aired / booked today">Today</th><th title="spots in the current playlist">In playlist</th><th title="aired / booked in the period">Period</th><th>Amount</th><th title="aired / booked in all">All</th><th>Left</th><th></th></tr>` +
+    (BK.map((b, i) => `<tr data-b="${i}">
+      <td><input data-k="client" value="${esc(b.client)}" list="clientList" style="width:110px"></td><td><input data-k="campaign" value="${esc(b.campaign)}" style="width:100px"></td>
+      <td><input data-k="match" value="${esc(b.match)}" style="width:130px"></td>
+      <td><input data-k="start" type="date" value="${b.start}"></td><td><input data-k="end" type="date" value="${b.end}"></td>
+      <td><input data-k="per_day" type="number" min="0" value="${b.per_day}" style="width:55px"></td><td><input data-k="total" type="number" min="0" value="${b.total}" style="width:60px"></td>
+      <td><input data-k="rate" type="number" min="0" step="0.01" value="${b.rate}" style="width:80px"></td>
+      <td class="mono ${cls(b.aired_today, b.booked_today)}">${b.active ? `${b.aired_today ?? 0}/${b.booked_today ?? 0}` : '-'}</td>
+      <td class="mono ${b.booked_today ? (BKPL[b.id] >= b.booked_today - (b.aired_today || 0) ? 'bk-ok' : 'bk-low') : ''}">${b.id ? BKPL[b.id] ?? 0 : ''}</td>
+      <td class="mono ${cls(b.aired_period, b.booked_period)}">${b.aired_period ?? 0}/${b.booked_period ?? 0}</td>
+      <td class="mono">${(b.amount_period ?? 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+      <td class="mono ${b.aired_total > b.booked_total ? 'bk-over' : ''}">${b.aired_total ?? 0}/${b.booked_total ?? 0}</td><td class="mono">${b.remaining ?? ''}</td>
+      <td><button class="sm" onclick="readBooking(); BK.splice(${i}, 1); renderBooking()">&#10005;</button></td></tr>`).join('') ||
+     '<tr><td colspan="15" class="hint">No bookings yet. Press + Add booking.</td></tr>');
+  const clients = [...new Set(BK.map(b => b.client).filter(Boolean))].sort();
+  $('bkInvClient').innerHTML = clients.map(c => `<option>${esc(c)}</option>`).join('') || '<option value="">(no clients)</option>';
+  fillClients();
+}
+function readBooking() { document.querySelectorAll('#bookT tr[data-b]').forEach(tr => { const b = BK[+tr.dataset.b]; tr.querySelectorAll('[data-k]').forEach(el => b[el.dataset.k] = el.value); }); }
+function addBooking() { readBooking(); const t = isoDay(new Date()); BK.push({client:'', campaign:'', match:'', start:t, end:t, per_day:4, total:0, rate:0}); renderBooking(); }
+async function saveBooking() {
+  readBooking();
+  if (BK.some(b => !b.client.trim())) { say('Every booking needs a client.'); return; }
+  await api('/api/bookings', {bookings:BK}); await loadBooking(); $('msg').textContent = 'Bookings saved';
+}
+function makeInvoice() { const c = $('bkInvClient').value; if (!c) return; getFile(`/api/bookings/invoice.pdf?client=${encodeURIComponent(c)}&from=${$('bkFrom').value}&to=${$('bkTo').value}`); }
 
 // ---------------------------------------------------------------- phone remote
 async function openRemote() {
@@ -1269,7 +1592,7 @@ async function pollCG() {
     el.className = 'cgrow ' + st;
     const live = st === 'on' || st === 'in';
     el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
-      (c.live_only ? ' - live only' : '') + ` - ${c.x}, ${c.y}, ${c.zoom}%`;
+      (c.live_only ? ' - live only' : '') + (c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
     el.querySelector('.in').classList.toggle('red', live);
   }
   const card = r.card || [];
@@ -1277,7 +1600,8 @@ async function pollCG() {
 }
 function renderManual() {
   $('cgList').innerHTML = cgManual.map(c => `<div class="cgrow" id="mc_${c.id}">
-    <img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}">
+    ${c.kind === 'text' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#ffb36b">${{lower3:'NAME', ticker:'TICKER', clock:'CLOCK', text:'TEXT'}[c.style] || 'TEXT'}</div>`
+      : `<img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}">`}
     <div style="min-width:0"><div class="nm">${esc(c.name || c.file)}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
       <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button></div></div>`).join('')
@@ -1288,6 +1612,7 @@ const saveManual = () => api('/api/cg/manual', cgManual).then(() => { cgShown = 
 function addManualCG(file) { openCG('manual', file ? {file} : null, cfg => { cgManual.push(cfg); saveManual(); }); }
 function editManualCG(id) {
   const i = cgManual.findIndex(c => c.id === id); if (i < 0) return;
+  if (cgManual[i].kind === 'text') return openTextCG(cgManual[i]);
   openCG('manual', cgManual[i], cfg => { cgManual[i] = {...cfg, id}; saveManual(); }, () => { cgTake(id, 'out'); cgManual.splice(i, 1); saveManual(); });
 }
 
@@ -1433,6 +1758,7 @@ pollRec(); setInterval(() => pollRec(), 1000);
 pollAO(); setInterval(() => pollAO(), 5000);
 pollCG(); setInterval(pollCG, 500);
 pollUpdate(); setInterval(() => pollUpdate(), 3000);
+pollExtra(); setInterval(pollExtra, 2000);
 api('/api/settings').then(r => { NORM = r.audio; }).catch(() => {});
 </script>
 </body>

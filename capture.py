@@ -5,6 +5,8 @@ Source keys used by live cards:
     "ndi:<NDI source name>" another NDI source
     "dev:<video>|<audio>"   a capture device (DirectShow on Windows, V4L2/ALSA on Linux)
     "bars"                  SMPTE colour bars + 1 kHz tone
+    "url:<address>"         a network feed: SRT, RTMP, RTSP, HLS (.m3u8), UDP or a YouTube live link
+                            srt://0.0.0.0:9000 / rtmp://0.0.0.0:1935/live/key = wait for a sender (listener)
 """
 import collections
 import re
@@ -181,3 +183,94 @@ class CaptureInput:
 
     def close(self):
         self._stop.set()
+
+
+def _resolve_youtube(url):
+    """Direct stream address of a YouTube (or Facebook) live page, via yt-dlp."""
+    import yt_dlp
+    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "format": "best[height<=1080]/best"}) as y:
+        info = y.extract_info(url, download=False)
+    return info.get("url") or info["formats"][-1]["url"]
+
+
+def url_command(ffmpeg, url):
+    """ffmpeg command that receives a network feed and passes it on, unchanged, as MPEG-TS on stdout."""
+    low = url.lower()
+    pre = ["-hide_banner", "-loglevel", "error", "-fflags", "+nobuffer+genpts", "-probesize", "2M",
+           "-analyzeduration", "2M"]
+    if low.startswith("rtmp://0.0.0.0") or low.startswith("rtmp://localhost"):
+        pre += ["-listen", "1", "-timeout", "-1"]
+    elif low.startswith("srt://") and "mode=" not in low:
+        host = low[6:].split(":")[0]
+        url += ("&" if "?" in url else "?") + ("mode=listener" if host in ("", "0.0.0.0") else "mode=caller")
+    elif low.startswith("rtsp://"):
+        pre += ["-rtsp_transport", "tcp"]
+    elif low.startswith(("http://", "https://")) and not low.split("?")[0].endswith((".m3u8", ".ts", ".flv", ".mp4")):
+        url = _resolve_youtube(url)
+    elif not low.startswith(("http", "udp://", "rtp://", "srt://", "rtmp", "rtsp")):
+        pre += ["-re"]           # a file: play it at normal speed (loops in the card)
+    return [ffmpeg] + pre + ["-i", url, "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-f", "mpegts", "pipe:1"]
+
+
+class UrlInput(CaptureInput):
+    """Network feed as a live card source (FFmpeg receives it, PyAV decodes it)."""
+
+    def __init__(self, key, width, height, ffmpeg=None):
+        self.ffmpeg = ffmpeg or _ffmpeg()
+        self._proc = None
+        super().__init__(key, width, height)
+
+    def _run(self):
+        url = self.key[4:]
+        while not self._stop.is_set():
+            proc = None
+            try:
+                cmd = url_command(self.ffmpeg, url)
+                flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                proc = self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                     stdin=subprocess.DEVNULL, creationflags=flags)
+                threading.Thread(target=self._read_err, args=(proc,), daemon=True).start()
+                with av.open(proc.stdout, format="mpegts", options={"fflags": "nobuffer"}) as c:
+                    self.error = ""
+                    vs = c.streams.video[0] if c.streams.video else None
+                    aus = c.streams.audio[0] if c.streams.audio else None
+                    if vs is not None:
+                        vs.thread_type = "AUTO"
+                    resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE) if aus else None
+                    for packet in c.demux(*[s for s in (vs, aus) if s is not None]):
+                        if self._stop.is_set():
+                            break
+                        for frame in packet.decode():
+                            if packet.stream is vs:
+                                img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
+                                with self._lock:
+                                    self._video = np.ascontiguousarray(img).reshape(-1)
+                                self._last_frame_time = time.time()
+                            elif resampler is not None:
+                                for rf in resampler.resample(frame):
+                                    self._push_audio(rf.to_ndarray().reshape(-1, CHANNELS).T)
+            except Exception as e:
+                if not self.error:
+                    self.error = str(e)
+            finally:
+                if proc is not None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            if self._stop.wait(2.0):
+                return
+
+    def _read_err(self, proc):
+        for line in proc.stderr:
+            t = line.decode("utf-8", "replace").strip()
+            if t:
+                self.error = t[-200:]
+
+    def close(self):
+        self._stop.set()
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+            except Exception:
+                pass

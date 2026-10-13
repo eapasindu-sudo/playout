@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image
 
 from cgfx import FxGraph, render_still
+from textcg import TextLayer
 from media import ClipPlayer, open_video, probe
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp"}
@@ -267,6 +268,11 @@ class CGManager:
         self.stinger_audio = None
         self.on_change = None
 
+    def _layer(self, cfg):
+        if cfg.get("kind") == "text":
+            return TextLayer(cfg, self.width, self.height, self.fps)
+        return CGLayer(cfg, self.folder, self.fps)
+
     # manual CG list
     def set_manual(self, cfgs):
         with self._lock:
@@ -282,9 +288,11 @@ class CGManager:
                 if cfg is None:
                     layer.close()
                     del self._manual_layers[cid]
+                elif isinstance(layer, TextLayer) and cfg.get("kind") == "text":
+                    layer.update(cfg)      # new ticker / name text goes on air at once
                 elif _changed(layer.cfg, cfg) and layer.visible:
                     layer.close()
-                    new = CGLayer({**cfg, "fade": 0}, self.folder, self.fps)
+                    new = self._layer({**cfg, "fade": 0})
                     new.fade = int(cfg.get("fade", 8))
                     new.level = new.fade
                     self._manual_layers[cid] = new
@@ -304,7 +312,7 @@ class CGManager:
                 return True
             if layer:
                 layer.close()
-            self._manual_layers[cid] = CGLayer(cfg, self.folder, self.fps)
+            self._manual_layers[cid] = self._layer(cfg)
             return True
 
     def take_out(self, cid):
@@ -326,7 +334,7 @@ class CGManager:
             for layer in self._card_layers:
                 layer.close()
             self._card_id = item_id
-            self._card_layers = [CGLayer(c, self.folder, self.fps) for c in (cfgs or []) if c.get("file")]
+            self._card_layers = [self._layer(c) for c in (cfgs or []) if c.get("file") or c.get("kind") == "text"]
 
     def stop_card(self):
         with self._lock:
@@ -397,7 +405,7 @@ class CGManager:
     def status(self):
         with self._lock:
             on = {cid: l.state for cid, l in self._manual_layers.items() if l.visible or l.state == "wait"}
-            card = [{"file": l.cfg.get("file"), "state": l.state} for l in self._card_layers]
+            card = [{"file": l.cfg.get("file") or l.cfg.get("name"), "state": l.state} for l in self._card_layers]
             return {"manual_on": on, "card": card, "card_id": self._card_id}
 
 

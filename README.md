@@ -184,6 +184,63 @@ Every build publishes a GitHub release. Playout checks for a newer one every 6 h
 installs by itself). The repository is private, so put a GitHub access token with read access to it in
 Settings > Updates (or make the repository public).
 
+## Text CG (ticker, lower third, clock)
+
+**+ Text CG** in the manual CG bar makes graphics from typed text, no image file needed: a **lower third**
+(name + title), a scrolling **news ticker** (text typed in, or read from a .txt file that is re-read while on
+air), a **clock / date**, or plain text. Pick the font (Iskoola Pota / Nirmala UI for Sinhala and Tamil),
+size, colours, box opacity and position. Changing the text of a CG that is on air updates it at once.
+
+## Alerts to your phone (Telegram)
+
+Settings > Alerts: make a bot with @BotFather, paste its token, send "hi" to the bot, press **Find chat**,
+then **Send test**. Pick which events send a message: backup PC took over, disk almost full, live input lost,
+Facebook 8-hour limit, missing clip, recording failed, Playout restarted after a crash, stream dropped.
+
+## Ad booking and invoices
+
+**Ad Booking**: per client and campaign, the dates, spots per day (or in all) and rate. The table shows
+booked against aired (from the air log, so it is proof of play) today, in the period and in all, how many
+spots of today's booking are in the playlist, and the amount. **Invoice PDF** makes an invoice for one
+client and period.
+
+## Network feeds (SRT / RTMP / YouTube)
+
+Live card > **Network feed**: `srt://0.0.0.0:9000` (listen for a sender) or `srt://host:port` (call),
+`rtmp://0.0.0.0:1935/live/key` (OBS / a phone app pushes to this PC), `rtsp://camera`, an `.m3u8` link, or
+a YouTube / Facebook live page link.
+
+## SDI output (Blackmagic DeckLink)
+
+Settings > SDI out: install Blackmagic Desktop Video and point Playout at an `ffmpeg.exe` built with
+DeckLink support (`--enable-decklink`; the FFmpeg inside Playout does not have it), press **Find cards**
+and pick the output.
+
+## Next clip preview
+
+Under the program monitor the **NEXT** item is shown with its time; **Preview** plays it (or any clip)
+in a window, without touching the program output.
+
+## Watch folder
+
+Settings > Watch folder: ad files copied into that folder (or a network share) come into the media folder
+by themselves once they finish copying, get their loudness measured and can be added to the end of the
+playlist. Files that do not play go to a `rejected` folder with a note.
+
+## Users and activity log
+
+Settings > Users: once users are added everybody logs in by name. **Operators** run the playlist, CGs and
+streams; only **admins** can open Settings, Day Schedule and Ad Booking. Air Logs > **Activity** shows who
+changed what (also saved in `logs/activity-<date>.csv`).
+
+## Backup PC
+
+Install Playout on a second PC. On the main PC: Settings > Backup PC > "The MAIN PC" and a sync key. On
+the second PC: "The BACKUP PC", the main PC's address and the same key. The backup copies the playlist,
+CGs and missing clips and plays the same thing at the same point, so a switcher can change to its NDI
+output at any time. If the main PC stops answering, the backup carries on by itself, sends an alert and can
+start its own live streams; when the main is back the backup follows it again.
+
 ## Install (Windows)
 
 1. Download **Playout-Setup.exe** (GitHub > Releases > latest, or Actions > latest "Build Playout installer" run > Artifacts).
@@ -255,6 +312,12 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `importer.py` | playlist import from Excel / CSV |
 | `updater.py` | update check, download and install |
 | `web/remote.html` | phone remote |
+| `textcg.py` | text CGs: lower third, ticker, clock |
+| `alerts.py` | Telegram alerts and what they watch |
+| `booking.py` | ad bookings and invoices |
+| `sdi.py` | DeckLink SDI output |
+| `watchfolder.py` | watch folder import |
+| `backup.py` | main / backup PC sync and takeover |
 | `audio_out.py` | program sound on the PC's speakers |
 | `recorder.py` | program recording to MP4 |
 | `system.py` | CPU / GPU / RAM usage |

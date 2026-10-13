@@ -61,6 +61,7 @@ class DayPlanner:
         self.store = store
         self.recorder = recorder
         self.rec_by_schedule = None      # id of the schedule entry that started the running recording
+        self.active = lambda: True       # day playlists off on a backup PC
         self._running = False
         self.last_error = ""
 
@@ -102,7 +103,7 @@ class DayPlanner:
     # ---- daily playlist ------------------------------------------------
     def check_day(self, now):
         d = self.day_lists
-        if not d.get("enabled"):
+        if not d.get("enabled") or not self.active():
             return
         try:
             at = dt.time.fromisoformat(d.get("time") or "00:00")
