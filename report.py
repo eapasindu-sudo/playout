@@ -17,6 +17,11 @@ def _days(d1, d2):
         d += dt.timedelta(days=1)
 
 
+def is_commercial(r):
+    """Clips are commercials unless their type says otherwise (Program, Theme, Starting Soon...)."""
+    return (r.get("category") or "Commercial").strip().lower() == "commercial"
+
+
 def collect(asrun, d1, d2, client="", text="", ads_only=True):
     """Rows of the as-run logs between two dates (inclusive), filtered."""
     client = (client or "").strip().lower()
@@ -24,7 +29,7 @@ def collect(asrun, d1, d2, client="", text="", ads_only=True):
     rows = []
     for day in _days(d1, d2):
         for r in asrun.read(day):
-            if ads_only and r.get("type") != "clip":
+            if ads_only and (r.get("type") != "clip" or not is_commercial(r)):
                 continue
             if client and (r.get("client") or "").strip().lower() != client:
                 continue

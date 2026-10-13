@@ -483,10 +483,12 @@
 
 <!-- Edit item -->
 <dialog id="dEdit" style="width:min(820px, 96vw)">
-  <header>Edit commercial <button class="sm" onclick="dEdit.close()">Close</button></header>
+  <header>Edit clip <button class="sm" onclick="dEdit.close()">Close</button></header>
   <div class="body">
     <div class="form">
       <span>Name</span><input id="edName">
+      <span>Type</span><span style="display:flex; gap:6px; align-items:center"><select id="edCat" onchange="newCat(this)"></select>
+        <span class="hint">Only Commercial clips go into the ad report and ad booking.</span></span>
       <span>Client</span><input id="edClient" list="clientList" placeholder="advertiser, for the ad report">
       <span>Fixed start</span><span style="display:flex; gap:6px"><input id="edFixed" type="time" step="1"><button class="sm" onclick="$('edFixed').value=''">Clear</button>
         <span class="hint" style="align-self:center">"Exact time": goes on air at that time even if something else is playing.</span></span>
@@ -670,6 +672,7 @@
       <span>Sync key</span><input id="bkKey" type="password" placeholder="the same word on both PCs" autocomplete="off">
       <span>Take over after</span><span><input class="num" id="bkAfter" type="number" min="2" max="60"> seconds without the main PC</span>
       <span>Streams</span><label><input type="checkbox" id="bkStreams"> When the main PC is down, start this PC's live streams</label>
+      <span>Files</span><label><input type="checkbox" id="bkMirror"> Mirror every clip and CG file of the main PC (not only the ones in the playlist). Files are only added, never deleted here.</label>
       <span>Status</span><span id="bkSt" class="hint"></span>
       <span></span><span class="hint">The backup copies the playlist, CGs and missing clips from the main PC and plays the same item at the same point, so vMix / the switcher can change to the backup's NDI output at any time. If the main PC stops, the backup carries on by itself and sends an alert.</span>
     </div>
@@ -837,7 +840,7 @@ async function poll() {
   $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
   if (S.live_source !== shownSource) fillSources();
   meters(S.meters);
-  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, file_duration, in: tin, out: tout}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || [], client: client || '', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || [], client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
   $('foWarn').classList.toggle('show', !!S.failover?.active);
   if (S.failover?.active) { tally.textContent = 'FILLER'; tally.className = 'tally pause'; }
@@ -859,6 +862,21 @@ function srcStatus(k) {
 function meters(m) {
   [['mL', m[0]], ['mR', m[1]]].forEach(([id, db]) => { const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100)); $(id).style.height = pct + '%'; });
 }
+// clip types (Commercial is the default; only Commercials go into the ad report / booking)
+const CATS = ['Commercial', 'Program', 'Starting Soon', 'Theme', 'Promo', 'Station ID', 'Filler', 'News', 'Song'];
+const CAT_COLORS = {'Commercial': '', 'Program': '#7c3aed', 'Starting Soon': '#0e9f6e', 'Theme': '#c2410c', 'Promo': '#db2777',
+  'Station ID': '#0369a1', 'Filler': '#555', 'News': '#b91c1c', 'Song': '#a16207'};
+const catShort = it => { const c = it.category || 'Commercial'; return c === 'Commercial' ? 'AD' : esc(c.toUpperCase()); };
+const catColor = it => { const c = CAT_COLORS[it.category] ?? (it.category && it.category !== 'Commercial' ? '#475569' : ''); return c ? `style="background:${c}"` : ''; };
+function fillCats(pick) {
+  const all = [...new Set([...CATS, ...PL.map(x => x.category).filter(Boolean), pick])];
+  $('edCat').innerHTML = all.map(c => `<option ${c === pick ? 'selected' : ''}>${esc(c)}</option>`).join('') + '<option value="__new">+ New type...</option>';
+}
+function newCat(sel) {
+  if (sel.value !== '__new') return;
+  const n = (prompt('Name of the new clip type (e.g. Interview, Weather)') || '').trim().slice(0, 30);
+  fillCats(n || 'Commercial');
+}
 function setThumb(el, it, idx) {
   const key = (it && it.type === 'clip' ? it.file : 'LIVE') + '|' + (idx || '');
   if (el.dataset.k === key) return;
@@ -878,7 +896,7 @@ function renderPlaylist() {
       <div class="thumb" id="t_${it.id}"></div>
       <div style="min-width:0">
         <div style="display:flex; gap:8px; align-items:center; min-width:0">
-          <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}">${it.type === 'live' ? 'LIVE' : 'AD'}</span>
+          <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}" ${catColor(it)}>${it.type === 'live' ? 'LIVE' : catShort(it)}</span>
           <span class="name">${esc(it.name)}</span>
         </div>
         <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}</div>
@@ -888,7 +906,7 @@ function renderPlaylist() {
           <div><div class="lbl">End</div><div class="v" data-f="end">--:--:--</div></div>
           <div><div class="lbl">Time to start</div><div class="v" data-f="ttg">--:--:--</div></div>
           <div><div class="lbl">Scheduler</div><div class="v">${it.fixed ? 'Fixed ' + esc(it.fixed) : 'Sequential'}</div></div>
-          <div><div class="lbl">Type</div><div class="v">${it.type === 'live' ? 'Live card' : 'Commercial'}</div></div>
+          <div><div class="lbl">Type</div><div class="v">${it.type === 'live' ? 'Live card' : esc(it.category || 'Commercial')}</div></div>
         </div>
       </div>
       <div class="acts lockable">
@@ -939,6 +957,7 @@ async function openEdit(id) {
   if (it.type === 'live') return openLive(it);
   editId = id; edItem = it; $('edName').value = it.name; $('edFixed').value = it.fixed || '';
   $('edClient').value = it.client || ''; $('edGain').value = it.gain_db || 0;
+  fillCats(it.category || 'Commercial');
   $('edIn').value = it.in ? clockShort(it.in) : ''; $('edOut').value = it.out ? clockShort(it.out) : '';
   $('edFull').textContent = it.file_duration ? `- file is ${clockShort(it.file_duration)} long` : '';
   edCGs = JSON.parse(JSON.stringify(it.cgs || [])); renderItemCG(); trimPrev(); loadCGFiles();
@@ -963,6 +982,7 @@ function saveEdit() {
   it.name = $('edName').value.trim() || it.name;
   let f = $('edFixed').value; if (f && f.length === 5) f += ':00'; it.fixed = f;
   it.client = $('edClient').value.trim(); it.gain_db = +$('edGain').value || 0;
+  it.category = $('edCat').value === '__new' ? (it.category || 'Commercial') : $('edCat').value || 'Commercial';
   it.in = parseClock($('edIn').value); it.out = parseClock($('edOut').value);
   it.cgs = edCGs;
   dEdit.close(); savePlaylist();
@@ -1299,7 +1319,8 @@ async function openSettings(focus) {
   const al = SET.alerts; $('alOn').checked = al.enabled; $('alToken').value = al.token_set ? '********' : ''; $('alChat').value = al.chat_id || '';
   $('alEvents').innerHTML = Object.entries(al.names).map(([k, n]) => `<label><input type="checkbox" data-ev="${k}" ${al.events[k] !== false ? 'checked' : ''}> ${esc(n)}</label>`).join('<br>');
   const bk = SET.backup; $('bkRole').value = bk.role; $('bkUrl').value = bk.main_url || ''; $('bkKey').value = bk.key_set ? '********' : '';
-  $('bkAfter').value = bk.takeover_after; $('bkStreams').checked = bk.take_streams; $('bkSt').textContent = bk.status + (bk.error && bk.role === 'backup' ? ' - ' + bk.error : '');
+  $('bkAfter').value = bk.takeover_after; $('bkStreams').checked = bk.take_streams; $('bkMirror').checked = !!bk.mirror;
+  $('bkSt').textContent = bk.status + (bk.error && bk.role === 'backup' ? ' - ' + bk.error : '') + (bk.mirror && bk.mirror_info ? ' - files: ' + bk.mirror_info : '');
   const sd = SET.sdi; $('sdiOn').checked = sd.enabled; $('sdiFf').value = sd.ffmpeg || '';
   $('sdiDev').innerHTML = sd.device ? `<option selected>${esc(sd.device)}</option>` : '<option value="">(press Find cards)</option>';
   $('sdiSt').textContent = sd.enabled ? sd.status + (sd.error ? ' - ' + sd.error : '') : 'off';
@@ -1320,7 +1341,7 @@ async function saveSettings() {
     update: {repo:$('upRepo').value.trim(), token:$('upToken').value, auto_check:$('upAuto').checked},
     alerts: {enabled:$('alOn').checked, token:$('alToken').value, chat_id:$('alChat').value.trim(),
              events:Object.fromEntries([...document.querySelectorAll('[data-ev]')].map(x => [x.dataset.ev, x.checked]))},
-    backup: {role:$('bkRole').value, main_url:$('bkUrl').value.trim(), key:$('bkKey').value, takeover_after:+$('bkAfter').value || 5, take_streams:$('bkStreams').checked},
+    backup: {role:$('bkRole').value, main_url:$('bkUrl').value.trim(), key:$('bkKey').value, takeover_after:+$('bkAfter').value || 5, take_streams:$('bkStreams').checked, mirror:$('bkMirror').checked},
     sdi: {enabled:$('sdiOn').checked, ffmpeg:$('sdiFf').value.trim(), device:$('sdiDev').value},
     watch: {enabled:$('wfOn').checked, folder:$('wfDir').value.trim(), move:$('wfMove').checked, add_to_playlist:$('wfAdd').checked},
   };
@@ -1443,8 +1464,21 @@ function previewNext() { const r = S.playlist.find(x => x.status === 'NEXT') || 
 function previewClip(file, t) {
   const v = $('pvVideo'); $('pvTitle').textContent = 'Preview: ' + file;
   $('pvHint').textContent = 'Plays on this screen only (not on air). Sound goes to this PC\'s speakers.';
-  v.onerror = () => { $('pvHint').textContent = 'This file type does not play in the preview (MXF / TS / some MOV). It still plays on air.'; };
-  v.src = '/api/media/file/' + encodeURIComponent(file) + (t ? '#t=' + t : ''); v.play().catch(() => {});
+  // MP4 / WebM play directly (with seeking); anything the window cannot play (MXF, TS, ProRes, HEVC...)
+  // is converted on the fly by FFmpeg into a small stream
+  const direct = /\.(mp4|m4v|webm)$/i.test(file);
+  const viaFFmpeg = () => {
+    v.onerror = () => { $('pvHint').textContent = 'This clip could not be previewed. It still plays on air.'; };
+    v.onloadedmetadata = null;
+    $('pvHint').textContent = 'Preview converted on the fly (no seeking; Preview again to restart). Not on air.';
+    v.src = '/api/media/preview/' + encodeURIComponent(file) + '?t=' + (t || 0); v.play().catch(() => {});
+  };
+  if (!direct) viaFFmpeg();
+  else {
+    v.onerror = viaFFmpeg;
+    v.onloadedmetadata = () => { if (!v.videoWidth) viaFFmpeg(); };     // e.g. HEVC: sound only
+    v.src = '/api/media/file/' + encodeURIComponent(file) + (t ? '#t=' + t : ''); v.play().catch(() => {});
+  }
   dPrev.onclose = () => { v.pause(); v.removeAttribute('src'); v.load(); };
   dPrev.showModal();
 }

@@ -16,7 +16,6 @@ import time
 from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory, session
 from PIL import Image
 from werkzeug.security import check_password_hash, generate_password_hash
-from werkzeug.utils import secure_filename
 
 from audio_out import AudioOut
 from recorder import Recorder
@@ -27,6 +26,7 @@ import media as media_mod
 from engine import Engine
 from system import SystemMonitor
 from media import MEDIA_EXT, list_media, thumbnail
+from paths import safe_name
 from scheduler import DayPlanner, Scheduler
 from store import Store
 from streamer import Streamer
@@ -406,7 +406,7 @@ def settings_api():
         if "backup" in b:
             k = b["backup"] or {}
             store.set(backup=backup.configure(k.get("role"), k.get("main_url"), k.get("key"),
-                                              k.get("takeover_after"), k.get("take_streams")))
+                                              k.get("takeover_after"), k.get("take_streams"), k.get("mirror")))
         alerts.station = store.data.get("station_name", "")
     s = sec()
     return jsonify(
@@ -688,7 +688,7 @@ def stinger():
         b = request.get_json(silent=True) or {}
         f = b.get("file")
         if f is not None:      # a CG library video, or one picked with Browse (kept in cg/stingers)
-            f = ("stingers/" if f.startswith("stingers/") else "") + secure_filename(os.path.basename(f))
+            f = ("stingers/" if f.startswith("stingers/") else "") + safe_name(os.path.basename(f))
             f = "" if f in ("", "stingers/") else f
         st = engine.set_stinger(f, b.get("cut"), b.get("auto"))
         store.set(stinger=st)
@@ -708,7 +708,7 @@ def stinger_files():
 def stinger_browse():
     """Browse: a stinger video from anywhere on the PC is copied into cg/stingers and picked."""
     f = request.files.get("file")
-    name = secure_filename((f and f.filename) or "")
+    name = safe_name((f and f.filename) or "")
     if not name or cg_kind(name) != "video":
         return jsonify(error="Pick a video file (MOV with alpha, ProRes 4444 / Animation, WebM)"), 400
     folder = os.path.join(cfg["cg_dir"], "stingers")
@@ -751,7 +751,7 @@ def media():
 def clip_frame(name):
     """A picture of a clip at t seconds (trim in / out preview)."""
     import av
-    path = os.path.join(cfg["media_dir"], secure_filename(name))
+    path = os.path.join(cfg["media_dir"], safe_name(name))
     if not os.path.isfile(path):
         abort(404)
     t = max(0.0, float(request.args.get("t") or 0))
@@ -783,7 +783,7 @@ def clip_frame(name):
 def upload():
     saved = []
     for f in request.files.getlist("files"):
-        name = secure_filename(f.filename or "")
+        name = safe_name(f.filename or "")
         if name and os.path.splitext(name)[1].lower() in MEDIA_EXT:
             f.save(os.path.join(cfg["media_dir"], name))
             saved.append(name)
@@ -792,7 +792,7 @@ def upload():
 
 @app.get("/api/thumb/<path:name>")
 def thumb(name):
-    path = os.path.join(cfg["media_dir"], secure_filename(name))
+    path = os.path.join(cfg["media_dir"], safe_name(name))
     if not os.path.isfile(path):
         abort(404)
     try:
@@ -853,10 +853,38 @@ def textcg_render():
 # ---- clip preview (before air) ----------------------------------------------------
 @app.get("/api/media/file/<path:name>")
 def media_file(name):
-    path = os.path.join(cfg["media_dir"], secure_filename(name))
+    path = os.path.join(cfg["media_dir"], safe_name(name))
     if not os.path.isfile(path):
         abort(404)
     return send_file(path, conditional=True, max_age=0)
+
+
+@app.get("/api/media/preview/<path:name>")
+def media_preview(name):
+    """Any clip (MXF, TS, ProRes, HEVC...) made into a small WebM (VP8 / Opus) stream that every
+    browser and the app window can play, starting at ?t= seconds."""
+    import subprocess
+    path = os.path.join(cfg["media_dir"], safe_name(name))
+    if not os.path.isfile(path) or not streamer.ffmpeg:
+        abort(404)
+    t = max(0.0, float(request.args.get("t") or 0))
+    cmd = [streamer.ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", path,
+           "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:360", "-c:v", "libvpx", "-deadline", "realtime",
+           "-cpu-used", "8", "-b:v", "1M", "-g", "50", "-c:a", "libopus", "-b:a", "96k", "-ac", "2", "-ar", "48000",
+           "-f", "webm", "pipe:1"]
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=flags)
+
+    def gen():
+        try:
+            while True:
+                chunk = proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            proc.kill()
+    return Response(gen(), mimetype="video/webm", headers={"Cache-Control": "no-store"})
 
 
 # ---- alerts --------------------------------------------------------------------
@@ -932,10 +960,15 @@ def sync_snapshot():
     return jsonify(backup.snapshot())
 
 
+@app.get("/api/sync/files")
+def sync_files():
+    return jsonify(backup.files())
+
+
 @app.get("/api/sync/file/<kind>/<path:name>")
 def sync_file(kind, name):
     folder = {"media": cfg["media_dir"], "cg": cfg["cg_dir"]}.get(kind)
-    path = os.path.join(folder or "", secure_filename(name))
+    path = os.path.join(folder or "", safe_name(name))
     if not folder or not os.path.isfile(path):
         abort(404)
     return send_file(path, conditional=True)
@@ -1177,7 +1210,7 @@ def cg_files():
 def cg_upload():
     saved, rejected = [], []
     for f in request.files.getlist("files"):
-        name = secure_filename(f.filename or "")
+        name = safe_name(f.filename or "")
         ext = os.path.splitext(name)[1].lower()
         if name and ext != PRESET_EXT:       # only CG Composer files come into the CG library
             rejected.append(name)
@@ -1195,7 +1228,7 @@ def cg_upload():
 
 @app.get("/api/cg/preview/<path:name>")
 def cg_preview_png(name):
-    path = os.path.join(cfg["cg_dir"], secure_filename(name))
+    path = os.path.join(cfg["cg_dir"], safe_name(name))
     if not os.path.isfile(path):
         abort(404)
     try:
@@ -1262,7 +1295,8 @@ def start_backend():
     wf = store.data.get("watch") or {}
     watch.configure(wf.get("enabled"), wf.get("folder"), wf.get("move"), wf.get("add_to_playlist"))
     bk = store.data.get("backup") or {}
-    backup.configure(bk.get("role"), bk.get("main_url"), bk.get("key"), bk.get("takeover_after"), bk.get("take_streams"))
+    backup.configure(bk.get("role"), bk.get("main_url"), bk.get("key"), bk.get("takeover_after"), bk.get("take_streams"),
+                     bk.get("mirror"))
     if sec()["lock_on_start"]:
         store.set(locked=True)
     engine.set_modes(store.data.get("auto", True), store.data.get("loop", False))

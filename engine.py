@@ -11,6 +11,7 @@ Playlist item (dict):
     client    advertiser name (clips), for the ad report
     in, out   clip trim points in seconds (0 / empty = start / end of the file)
     gain_db   extra volume for this clip
+    category  clip type: Commercial (default), Program, Starting Soon, Theme, Promo, ...
     cgs       CGs (logo, bug, lower third) that go on air with this item
 """
 import csv
@@ -50,7 +51,8 @@ def _num(v):
 
 
 class AsRunLog:
-    FIELDS = ["date", "start", "end", "type", "item", "planned_sec", "played_sec", "status", "client", "file"]
+    FIELDS = ["date", "start", "end", "type", "item", "planned_sec", "played_sec", "status", "client", "file",
+              "category"]
 
     def __init__(self, folder):
         self.folder = folder
@@ -72,7 +74,7 @@ class AsRunLog:
             for r in rows[1:]:
                 w.writerow((r + [""] * len(self.FIELDS))[:len(self.FIELDS)])
 
-    def write(self, kind, name, started, ended, planned, status, client="", file=""):
+    def write(self, kind, name, started, ended, planned, status, client="", file="", category=""):
         path = self.path_for(started.date())
         with self._lock:
             new = not os.path.exists(path)
@@ -87,7 +89,7 @@ class AsRunLog:
                     w.writerow(self.FIELDS)
                 w.writerow([f"{started:%Y-%m-%d}", f"{started:%H:%M:%S}", f"{ended:%H:%M:%S}", kind, name,
                             f"{planned:.1f}" if planned else "", f"{(ended - started).total_seconds():.1f}", status,
-                            client or "", file or ""])
+                            client or "", file or "", category or ""])
 
     def read(self, day):
         path = self.path_for(day)
@@ -196,6 +198,7 @@ class Engine:
                     it["duration"] = ((t_out or full) - t_in) if full else None
                     it["gain_db"] = _num(it.get("gain_db"))
                     it["client"] = (it.get("client") or "").strip()
+                    it["category"] = (it.get("category") or "Commercial").strip()[:30] or "Commercial"
                     it["name"] = it.get("name") or os.path.splitext(it["file"])[0]
                     if self.loudness is not None and full:
                         self.loudness.request(path)
@@ -439,7 +442,7 @@ class Engine:
             if player is None:
                 now = dt.datetime.now()
                 self.asrun.write("clip", item["name"], now, now, item.get("duration"), "missing file",
-                                 item.get("client", ""), item.get("file", ""))
+                                 item.get("client", ""), item.get("file", ""), item.get("category", ""))
                 self.message = f"Missing file: {item.get('file')}"
                 self.on_air = item_id
                 if depth < len(self.playlist):
@@ -486,7 +489,8 @@ class Engine:
             if self.player and self.player.error:
                 st = "error: " + self.player.error
             self.asrun.write(item["type"], item["name"], self.item_started, dt.datetime.now(),
-                             item.get("duration"), st, item.get("client", ""), item.get("file", ""))
+                             item.get("duration"), st, item.get("client", ""), item.get("file", ""),
+                             item.get("category", ""))
         self.played.add(self.on_air)
         if self.cg is not None and item.get("cgs"):
             self.cg.stop_card()

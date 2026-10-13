@@ -17,7 +17,7 @@ import time
 import urllib.parse
 import urllib.request
 
-SYNC_FIELDS = ("id", "type", "name", "file", "duration", "fixed", "source", "cgs", "client", "in", "out", "gain_db")
+SYNC_FIELDS = ("id", "type", "name", "file", "duration", "fixed", "source", "cgs", "client", "in", "out", "gain_db", "category")
 
 
 class Backup:
@@ -33,6 +33,10 @@ class Backup:
         self.key = ""
         self.takeover_after = 5.0
         self.take_streams = False
+        self.mirror = False            # copy every media / CG file of the main PC, not only the playlist's
+        self.mirror_info = ""
+        self._mirror_at = 0.0
+        self._mirror_left = 0
         self.status = "off"
         self.error = ""
         self.last_ok = 0.0
@@ -44,7 +48,7 @@ class Backup:
         self._cg_sig = None
         threading.Thread(target=self._run, daemon=True, name="backup sync").start()
 
-    def configure(self, role=None, main_url=None, key=None, takeover_after=None, take_streams=None):
+    def configure(self, role=None, main_url=None, key=None, takeover_after=None, take_streams=None, mirror=None):
         if role in ("off", "main", "backup"):
             self.role = role
         if main_url is not None:
@@ -60,18 +64,21 @@ class Backup:
             self.takeover_after = max(2.0, min(60.0, float(takeover_after)))
         if take_streams is not None:
             self.take_streams = bool(take_streams)
+        if mirror is not None:
+            self.mirror = bool(mirror)
+            self._mirror_at = 0.0
         self.status = {"off": "off", "main": "main PC (a backup can follow it)", "backup": "connecting to main..."}[self.role]
         self.main_down = False
         return self.settings()
 
     def settings(self):
         return {"role": self.role, "main_url": self.main_url, "key": self.key,
-                "takeover_after": self.takeover_after, "take_streams": self.take_streams}
+                "takeover_after": self.takeover_after, "take_streams": self.take_streams, "mirror": self.mirror}
 
     def info(self):
         return {**{k: v for k, v in self.settings().items() if k != "key"}, "key_set": bool(self.key),
                 "status": self.status, "error": self.error, "main_down": self.main_down,
-                "lag": self.lag, "downloading": sorted(self._downloading)}
+                "lag": self.lag, "downloading": sorted(self._downloading), "mirror_info": self.mirror_info}
 
     def key_ok(self, given):
         return bool(self.key) and given == self.key
@@ -112,6 +119,9 @@ class Backup:
                     self.main_down = False
                     self._alert("Main PC is back - backup follows it again")
                 self.follow(snap)
+                if self.mirror and time.time() - self._mirror_at > (5 if self._mirror_left else 30):
+                    self._mirror_at = time.time()
+                    self.mirror_files()
                 self.status = "following main" + (f" - downloading {len(self._downloading)} file(s)" if self._downloading else "")
             except Exception as ex:
                 self.error = str(ex)[:200]
@@ -193,10 +203,44 @@ class Backup:
             self._streams_started = False
             self._alert("Main PC streams are live again - backup streams stopped")
 
-    def _fetch(self, kind, name, folder):
+    def files(self):
+        """Main PC side: every media and CG file (name, size) for a backup that mirrors them all."""
+        out = {}
+        for kind, folder in (("media", self.media_dir), ("cg", self.cg_dir)):
+            items = []
+            for n in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+                p = os.path.join(folder, n)
+                if os.path.isfile(p) and not n.endswith(".part"):
+                    items.append({"name": n, "size": os.path.getsize(p)})
+            out[kind] = items
+        return out
+
+    def mirror_files(self):
+        """Backup PC side: download every file the main PC has that this PC does not (or has a different
+        size of). Nothing is ever deleted on the backup PC."""
+        try:
+            with self._get("/api/sync/files", timeout=10) as r:
+                lists = json.load(r)
+        except Exception as ex:
+            self.mirror_info = f"file list not read: {ex}"[:200]
+            return
+        missing = 0
+        for kind, folder in (("media", self.media_dir), ("cg", self.cg_dir)):
+            for f in lists.get(kind) or []:
+                p = os.path.join(folder, f["name"])
+                if not os.path.exists(p) or os.path.getsize(p) != f["size"]:
+                    missing += 1
+                    if len(self._downloading) < 2:          # two at a time, the rest on the next round
+                        self._fetch(kind, f["name"], folder, replace=True)
+        self._mirror_left = missing
+        total = sum(len(v or []) for v in lists.values())
+        self.mirror_info = (f"copying {missing} of {total} files" if missing
+                            else f"all {total} files copied ({time.strftime('%H:%M:%S')})")
+
+    def _fetch(self, kind, name, folder, replace=False):
         """Download a file the backup does not have (in the background)."""
         dest = os.path.join(folder, name)
-        if os.path.exists(dest) or name in self._downloading or os.sep in name or "/" in name:
+        if (os.path.exists(dest) and not replace) or name in self._downloading or os.sep in name or "/" in name:
             return
         self._downloading.add(name)
 

@@ -245,7 +245,8 @@ Install Playout on a second PC. On the main PC: Settings > Backup PC > "The MAIN
 the second PC: "The BACKUP PC", the main PC's address and the same key. The backup copies the playlist,
 CGs and missing clips and plays the same thing at the same point, so a switcher can change to its NDI
 output at any time. If the main PC stops answering, the backup carries on by itself, sends an alert and can
-start its own live streams; when the main is back the backup follows it again.
+start its own live streams; when the main is back the backup follows it again. Tick **Mirror every
+clip and CG file** to copy the main PC's whole media and CG folders (files are only added, never deleted).
 
 ## Install (Windows)
 

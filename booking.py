@@ -16,7 +16,7 @@ import os
 import threading
 import uuid
 
-from report import AIRED, _days
+from report import AIRED, _days, is_commercial
 
 
 class Bookings:
@@ -83,7 +83,7 @@ class Bookings:
 
         def rows(day):
             if day not in cache:
-                cache[day] = [r for r in asrun.read(day) if r.get("type") == "clip"
+                cache[day] = [r for r in asrun.read(day) if r.get("type") == "clip" and is_commercial(r)
                               and (r.get("status") or "").startswith(AIRED)]
             return cache[day]
 
@@ -112,7 +112,7 @@ class Bookings:
         """Spots of each booking in the current playlist (to check today's playlist has enough)."""
         out = {}
         for b in self.items:
-            out[b["id"]] = sum(1 for it in playlist if it.get("type") == "clip" and self._matches(
+            out[b["id"]] = sum(1 for it in playlist if it.get("type") == "clip" and is_commercial(it) and self._matches(
                 b, {"client": it.get("client"), "item": it.get("name"), "file": it.get("file")}))
         return out
 

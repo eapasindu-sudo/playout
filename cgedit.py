@@ -15,10 +15,10 @@ import zipfile
 import numpy as np
 from flask import Blueprint, Response, abort, jsonify, request, send_file
 from PIL import Image
-from werkzeug.utils import secure_filename
 
 from cg import CG_EXT, cg_info, cg_kind, composite
 from cgfx import checker, render_still
+from paths import safe_name
 
 PRESET_EXT = ".cgp"
 KEEP = ("name", "x", "y", "zoom", "zoom_x", "zoom_y", "rotate", "crop", "fade", "loop", "live_only",
@@ -45,7 +45,7 @@ def read_cgp(path_or_file, folder):
     """Open a .cgp: puts its media into folder (renamed if a different file has that name) -> cfg."""
     with zipfile.ZipFile(path_or_file) as z:
         meta = json.loads(z.read("cg.json"))
-        name = secure_filename(meta.get("file") or "")
+        name = safe_name(meta.get("file") or "")
         if not name or not cg_kind(name):
             raise ValueError("not a CG preset")
         data = z.read("media/" + meta["file"])
@@ -83,7 +83,7 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
     bp = Blueprint("cgedit", __name__)
 
     def path_of(name):
-        p = os.path.join(folder_fn(), secure_filename(name or ""))
+        p = os.path.join(folder_fn(), safe_name(name or ""))
         if not os.path.isfile(p) or not cg_kind(p):
             abort(404)
         return p
@@ -140,7 +140,7 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
         buf = io.BytesIO()
         write_cgp(buf, folder_fn(), cfg)
         buf.seek(0)
-        name = secure_filename((cfg.get("name") or os.path.splitext(cfg["file"])[0])) + PRESET_EXT
+        name = safe_name((cfg.get("name") or os.path.splitext(cfg["file"])[0])) + PRESET_EXT
         return send_file(buf, mimetype="application/octet-stream", as_attachment=True, download_name=name)
 
     @bp.post("/api/cgfx/import")
@@ -149,7 +149,7 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
         f = request.files.get("file")
         if not f:
             abort(400)
-        name = secure_filename(f.filename or "")
+        name = safe_name(f.filename or "")
         folder = folder_fn()
         if name.lower().endswith(PRESET_EXT):
             data = f.read()
@@ -172,7 +172,7 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
     @bp.post("/api/cgfx/preset/<path:name>")
     def open_preset(name):
         """Load a .cgp from the CG folder -> cfg (its media goes into the CG folder)."""
-        p = os.path.join(folder_fn(), secure_filename(name))
+        p = os.path.join(folder_fn(), safe_name(name))
         if not os.path.isfile(p):
             abort(404)
         try:
@@ -185,7 +185,7 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
         """Save the editor's CG as <name>.cgp in the CG folder (the Playout CG library)."""
         cfg = request.get_json(silent=True) or {}
         path_of(cfg.get("file"))
-        name = secure_filename(cfg.get("name") or os.path.splitext(cfg["file"])[0]) or "cg"
+        name = safe_name(cfg.get("name") or os.path.splitext(cfg["file"])[0]) or "cg"
         dest = os.path.join(folder_fn(), name + PRESET_EXT)
         write_cgp(dest, folder_fn(), cfg)
         return jsonify(saved=os.path.basename(dest), path=dest)

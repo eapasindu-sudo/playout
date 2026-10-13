@@ -254,22 +254,23 @@ class ClipPlayer:
 
 
 def thumbnail(path, cache_dir, width=192):
-    """JPEG thumbnail (frame at 1 s, or the first frame), cached by path + mtime."""
+    """JPEG thumbnail (frame at 2 s, or the middle of a shorter clip), cached by path + mtime."""
     from PIL import Image
     os.makedirs(cache_dir, exist_ok=True)
-    key = f"{os.path.basename(path)}.{int(os.path.getmtime(path))}.{width}.jpg"
+    key = f"{os.path.basename(path)}.{int(os.path.getmtime(path))}.{width}.t2.jpg"
     out = os.path.join(cache_dir, key)
     if os.path.exists(out):
         return out
     img = None
     with av.open(path) as c:
         vs = c.streams.video[0]
-        target = 1.0
-        if c.duration and c.duration / 1_000_000 < 2:
-            target = 0.0
+        target = 2.0
+        if c.duration and c.duration / 1_000_000 < 2.5:
+            target = c.duration / 1_000_000 / 2
+        base = float(vs.start_time * vs.time_base) if vs.start_time is not None and vs.time_base else 0.0
         for frame in c.decode(vs):
             img = frame.to_image()
-            if frame.time is None or frame.time >= target:
+            if frame.time is None or frame.time - base >= target:
                 break
     if img is None:
         raise RuntimeError("no frames")

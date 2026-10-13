@@ -15,11 +15,11 @@ import threading
 import time
 
 from flask import Flask, jsonify, request, send_from_directory
-from werkzeug.utils import secure_filename
 
 import paths
 from cg import CG_EXT, list_cg
 from cgedit import PRESET_EXT, make_blueprint, read_cgp, write_cgp
+from paths import safe_name
 
 HOME = paths.user_home()
 BUNDLE = paths.bundle_dir()
@@ -61,7 +61,7 @@ def files():
 def upload():
     saved = []
     for f in request.files.getlist("files"):
-        name = secure_filename(f.filename or "")
+        name = safe_name(f.filename or "")
         if name and os.path.splitext(name)[1].lower() in CG_EXT:
             f.save(os.path.join(FOLDER, name))
             saved.append(name)
@@ -72,12 +72,12 @@ class Api:
     """Called from the page through window.pywebview.api (desktop window only)."""
 
     def __init__(self):
-        self.window = None
+        self._window = None      # underscore: pywebview must not walk into the window object (it freezes)
 
     def export_cgp(self, cfg):
         import webview
-        name = secure_filename(cfg.get("name") or os.path.splitext(cfg.get("file") or "cg")[0]) or "cg"
-        res = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name + PRESET_EXT,
+        name = safe_name(cfg.get("name") or os.path.splitext(cfg.get("file") or "cg")[0]) or "cg"
+        res = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name + PRESET_EXT,
                                              file_types=("CG preset (*.cgp)",))
         if not res:
             return None
@@ -114,9 +114,9 @@ def main():
     def boot():
         splash.status(loading, "Loading CG Composer...")
         time.sleep(1.6)                                      # let the logo be seen
-        api.window = webview.create_window("CG Composer", f"http://127.0.0.1:{port}/", js_api=api,
+        api._window = webview.create_window("CG Composer", f"http://127.0.0.1:{port}/", js_api=api,
                                            width=1280, height=900, min_size=(1000, 700), background_color="#0c0d0f")
-        api.window.events.shown += lambda: threading.Timer(0.5, _set_icon).start()
+        api._window.events.shown += lambda: threading.Timer(0.5, _set_icon).start()
         loading.destroy()
 
     webview.start(boot)

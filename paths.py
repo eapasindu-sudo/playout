@@ -5,6 +5,7 @@ works from Program Files without admin rights. Source checkout: next to the code
 PLAYOUT_HOME overrides both.
 """
 import os
+import re
 import sys
 
 FROZEN = getattr(sys, "frozen", False)
@@ -27,3 +28,13 @@ def user_home():
         home = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(home, exist_ok=True)
     return home
+
+
+def safe_name(name):
+    """A file name as it is (spaces, Sinhala / Tamil letters kept), without folders or characters
+    Windows does not allow. Used instead of werkzeug's secure_filename, which turns "My Ad.mp4"
+    into "My_Ad.mp4" (file not found) and drops Sinhala letters."""
+    name = os.path.basename(str(name or "").replace("\\", "/"))
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name).strip().strip(".")
+    return "" if name in ("", ".", "..") else name
+
