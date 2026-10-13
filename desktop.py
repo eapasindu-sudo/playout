@@ -68,7 +68,7 @@ def supervise():
         print(f"launcher: Playout stopped unexpectedly (exit code {code}) after {now - started:.0f}s - restarting")
         recent = [t for t in recent if now - t < 600] + [now]
         if len(recent) > 5:
-            message_box("Playout", "Playout stopped unexpectedly 6 times in 10 minutes and was not started again.\n\n"
+            message_box("Endora Playout", "Playout stopped unexpectedly 6 times in 10 minutes and was not started again.\n\n"
                                    "See Documents\\Playout\\logs\\playout.log")
             return code
         time.sleep(2)
@@ -82,18 +82,75 @@ def main():
     if paths.FROZEN and not ({"--app", "--headless", "--no-launcher"} & set(sys.argv)):
         return supervise()
 
+    if "--headless" in sys.argv:
+        r = start_server()
+        if isinstance(r, int):
+            return r
+        server, port = r
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        server.shutdown()
+        return 0
+
+    import webview
+    import splash
+
+    # the loading screen shows at once; the engine starts behind it, then the control screen opens
+    w, h = splash.SIZE
+    loading = webview.create_window("Endora Playout", html=splash.html("playout"), width=w, height=h,
+                                    frameless=True, resizable=False, on_top=True, background_color="#0c0c0e")
+    result = {"code": 0, "server": None}
+
+    def boot():
+        try:
+            _boot()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            message_box("Endora Playout", "Playout did not start. See Documents\\Playout\\logs\\playout.log")
+            result["code"] = EXIT_START_FAILED
+            loading.destroy()
+
+    def _boot():
+        t0 = time.time()
+        r = start_server(lambda text: splash.status(loading, text))
+        if isinstance(r, int):
+            result["code"] = r
+            loading.destroy()
+            return
+        server, port = r
+        result["server"] = server
+        splash.status(loading, "Opening the control screen...")
+        time.sleep(max(0.0, 1.5 - (time.time() - t0)))      # let the logo be seen
+        open_control_screen(webview, server, port)
+        loading.destroy()
+
+    webview.start(boot)       # returns when every window is closed
+    if result["server"] is not None:
+        result["server"].shutdown()
+    return result["code"]
+
+
+def start_server(say=print):
+    """Engine + web server. (server module, port), or an exit code when it cannot start."""
+    say("Loading the engine...")
     import app as server
 
     port = int(server.cfg.get("web_port", 8080))
     if port_in_use(port):
-        message_box("Playout", f"Playout is already running (port {port} is in use).\n\n"
-                               "Close the other Playout window first.")
+        message_box("Endora Playout", f"Playout is already running (port {port} is in use).\n\n"
+                                      "Close the other Playout window first.")
         return EXIT_ALREADY_RUNNING
 
+    say("Starting playout, NDI and the playlist...")
     server.start_backend()
+    say("Starting the control screen...")
     threading.Thread(target=server.serve, kwargs={"port": port}, daemon=True, name="web").start()
     if not wait_for_server(port):
-        message_box("Playout", "The control screen did not start. See Documents\\Playout\\logs\\playout.log")
+        message_box("Endora Playout", "The control screen did not start. See Documents\\Playout\\logs\\playout.log")
         server.shutdown()
         return EXIT_START_FAILED
 
@@ -104,20 +161,12 @@ def main():
 
     server.updater.on_install = install_update
     print(f"Control screen on http://localhost:{port}")
+    return server, port
 
-    if "--headless" in sys.argv:
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
-        server.shutdown()
-        return 0
 
-    import webview
-
+def open_control_screen(webview, server, port):
     main_win = webview.create_window(
-        "Playout", f"http://127.0.0.1:{port}/",
+        "Endora Playout", f"http://127.0.0.1:{port}/",
         width=1600, height=950, min_size=(1100, 700),
         background_color="#0c0d0f", confirm_close=True,
     )
@@ -136,16 +185,14 @@ def main():
         screens = webview.screens
         idx = int(screen) if screen not in (None, "") else len(screens) - 1
         sc = screens[max(0, min(idx, len(screens) - 1))]
-        win = webview.create_window("Playout output", f"http://127.0.0.1:{port}/output?w={sc.width}",
+        win = webview.create_window("Endora Playout output", f"http://127.0.0.1:{port}/output?w={sc.width}",
                                     screen=sc, fullscreen=True, frameless=True, background_color="#000000")
         win.events.closed += lambda: out.update(win=None) if out["win"] is win else None
         out["win"] = win
 
     server.fullscreen_hook = fullscreen
     main_win.events.closed += lambda: fullscreen(False)
-    webview.start()       # returns when the window is closed
-    server.shutdown()
-    return 0
+    return main_win
 
 
 if __name__ == "__main__":

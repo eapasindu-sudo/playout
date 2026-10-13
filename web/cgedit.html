@@ -48,6 +48,7 @@
 </head>
 <body>
 <div class="bar">
+  <img id="cgLogo" src="/img/logo-composer.png" alt="" style="height:30px; display:none">
   <span class="t" id="title">CG Composer</span>
   <span class="hint" id="fileInfo"></span>
   <span style="flex:1"></span>
@@ -182,6 +183,7 @@ function show() {
   $('chromaBox').style.display = key === 'chroma' ? '' : 'none';
   $('lumaBox').style.display = key === 'luma' ? '' : 'none';
   $('composerBtns').style.display = EMBED ? 'none' : 'inline-flex';
+  if (!EMBED) { $('cgLogo').style.display = ''; $('title').style.display = 'none'; }
   $('embedBtns').style.display = EMBED ? 'inline-flex' : 'none';
   $('bgProg').disabled = !EMBED;
   $('title').textContent = EMBED ? (MODE === 'card' ? 'Live card CG' : 'Manual CG') : 'CG Composer';

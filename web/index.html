@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Playout</title>
+<title>Endora Playout</title>
 <style>
   :root {
     --bg:#0c0d0f; --panel:#1a1c1f; --panel2:#232529; --line:#33363b; --text:#e9eaec; --dim:#8d9299;
@@ -151,6 +151,11 @@
   .recrow { display:flex; gap:6px; align-items:center; padding:4px 10px 8px; }
   .recrow select { flex:1; min-width:0; }
   #bRec.on { background:linear-gradient(#f0362a, #b5170e); animation: blink 1s steps(2) infinite; }
+  #recPanel { border-left:4px solid transparent; transition:background .3s; }
+  #recPanel.recoff { background:rgba(230,40,40,.10); border-left-color:#e02a2a; }
+  #recPanel.recoff #recSt { color:#ff4d4d; font-weight:700; }
+  #recPanel.recon { background:rgba(40,190,80,.12); border-left-color:#2fbf5a; }
+  #recPanel.recon #recSt { color:#45e07a; }
   #recSt { font:600 13px Consolas, monospace; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* confirm / message box */
   #dAsk { width:min(440px, 92vw); }
@@ -221,7 +226,7 @@
   <div class="col" style="display:flex; flex-direction:column; gap:10px; min-width:0">
     <div class="box">
       <div class="top">
-        <div class="logo">Playout</div>
+        <div class="logo"><img src="/img/logo-playout.png" alt="Endora Playout" style="height:46px; display:block"></div>
         <div class="clockbox mono" id="clock">--:--:--</div>
         <div class="fmt" id="fmt"></div>
         <div class="sys" id="sys" title="Usage of this PC">
@@ -346,6 +351,7 @@
         <button style="flex:1" onclick="streamAll('stop')">STOP ALL</button>
       </div>
 
+      <div id="recPanel" class="recoff">
       <div class="section-t">Recording <span class="hint" id="recFmt" style="text-transform:none; letter-spacing:0"></span></div>
       <div class="recrow lockable">
         <select id="recRes" onchange="setRec()"><option value="1080p">1080p</option><option value="720p">720p</option></select>
@@ -354,8 +360,9 @@
       </div>
       <div class="recrow">
         <button id="bRec" class="lockable" onclick="toggleRec()" title="Record the program output (with CGs and sound) to an MP4 file">&#9679; REC</button>
-        <span id="recSt" class="hint">not recording</span>
+        <span id="recSt">NOT RECORDING</span>
         <button class="sm" onclick="api('/api/record/folder', {}).then(r => $('msg').textContent = 'Recordings: ' + r.path).catch(() => {})">Folder</button>
+      </div>
       </div>
     </div>
 
@@ -437,7 +444,7 @@
 
 <!-- Playout message / confirm box -->
 <dialog id="dAsk">
-  <header>Playout</header>
+  <header>Endora Playout</header>
   <div class="body" id="askText"></div>
   <div class="foot"><button id="askNo" onclick="dAsk.close('no')">No</button><button class="blue" id="askYes" onclick="dAsk.close('yes')">Yes</button></div>
 </dialog>
@@ -1762,10 +1769,10 @@ async function pollRec(r) {
     $('recRes').value = REC.resolution; $('recMbps').value = String(REC.mbps); $('recEnc').value = REC.encoder;
   }
   $('recFmt').textContent = `- ${REC.resolution} ${REC.mbps} Mbps MP4`;
-  $('recSt').className = on ? '' : 'hint';
+  $('recPanel').className = on ? 'recon' : 'recoff';
   $('recSt').style.color = REC.error ? 'var(--orange)' : '';
   $('recSt').textContent = on ? `${fmtUp(REC.elapsed)}  ${REC.size_mb >= 1024 ? (REC.size_mb / 1024).toFixed(2) + ' GB' : REC.size_mb + ' MB'}  ${REC.file}`
-                              : (REC.error || (REC.file ? 'Saved ' + REC.file : 'not recording'));
+                              : (REC.error || (REC.file ? 'NOT RECORDING - last: ' + REC.file : 'NOT RECORDING'));
   $('recSt').title = (REC.error ? REC.error + '\n' : '') + (REC.folder || '') + (REC.dropped ? `\n${REC.dropped} frames dropped (try a GPU encoder)` : '');
 }
 const setRec = () => api('/api/record', {resolution:$('recRes').value, mbps:+$('recMbps').value, encoder:$('recEnc').value}).then(pollRec);

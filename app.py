@@ -141,7 +141,7 @@ def sec():
     return s
 
 
-OPEN_PATHS = ("/login", "/api/login", "/api/login_info")
+OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png")
 LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen")   # full screen output window
 ADMIN_ONLY = ("/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
               "/api/sdi", "/api/alerts", "/api/backup")
@@ -476,6 +476,11 @@ def index():
 @app.get("/cgedit")
 def cgedit_page():
     return send_from_directory(os.path.join(BUNDLE, "web"), "cgedit.html")
+
+
+@app.get("/img/<any('logo-playout.png', 'logo-composer.png'):name>")
+def logo_img(name):
+    return send_from_directory(os.path.join(BUNDLE, "web"), name, max_age=86400)
 
 
 @app.get("/output")

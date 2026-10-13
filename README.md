@@ -1,4 +1,4 @@
-# Playout
+# Endora Playout
 
 A playout server in the style of AxelTech XPlayout. It runs a **playlist** of
 **commercials** and **live cards**. A live card puts the vMix NDI output on air. The

@@ -71,7 +71,7 @@ def _hms(sec):
 
 def _title(station, d1, d2, client):
     period = f"{d1:%d %b %Y}" if d1 == d2 else f"{d1:%d %b %Y} - {d2:%d %b %Y}"
-    return (station or "Playout"), f"Commercial air report{' - ' + client if client else ''}", period
+    return (station or "Endora Playout"), f"Commercial air report{' - ' + client if client else ''}", period
 
 
 DETAIL_COLS = ["Date", "Start", "End", "Client", "Commercial", "Planned", "Aired", "Status"]
