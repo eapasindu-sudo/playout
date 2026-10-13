@@ -34,8 +34,8 @@ Keyboard: **Space** = Next, **F1** = Play, **F2** = Pause, **F12** = Take live.
 again, or Esc on that display, to close it.
 
 ### Stinger transitions
-Put a stinger (a short QuickTime MOV with alpha, with or without sound) in the CG library, then
-press the gear next to **Auto Stinger** and pick it. **Cut point** is when the stinger covers the
+Press the gear next to **Auto Stinger**, then **Browse...** and pick the stinger (a short QuickTime
+MOV with alpha, with or without sound) from any folder; it is copied into `cg/stingers`. **Cut point** is when the stinger covers the
 screen (empty = half way).
 - **Stinger ▶** plays it now and changes to the next item at the cut point.
 - **Auto Stinger** uses it for every change: Next, playing a playlist item, and clip to clip in
@@ -70,7 +70,9 @@ Each live card picks its own source in **+ Live Card** (or **Edit** on a live ca
 
 ## CG (graphics with alpha)
 
-CG files go in `Documents\Playout\cg` (**CG Library > Upload CG** or **CG Folder**). Supported:
+CGs are made in **CG Composer** (**Save to Playout**). The CG Library tab lists only CG Composer
+files; **Import CG (.cgp)** brings in one exported on another PC (PNG / MOV / MP4 files are not added
+to the library directly). Files CG Composer can use:
 **PNG** (with alpha), **JPEG** (opaque), and **QuickTime MOV** (ProRes 4444, QT Animation and
 PNG-in-MOV keep their alpha). Video CGs can loop or take themselves out at the end.
 
@@ -94,7 +96,7 @@ PNG-in-MOV keep their alpha). Video CGs can loop or take themselves out at the e
 A separate app (Start menu > **CG Composer**) with the same three tabs. Open a PNG / JPEG / MOV / MP4,
 key it and place it, then **Save to Playout**: it is saved as a `.cgp` file in the Playout CG
 library and shows in the **CG Library** tab, where **+ Manual** adds it with all its settings.
-**Export .cgp** saves the file anywhere (to use on another PC: upload it in the CG Library tab).
+**Export .cgp** saves the file anywhere (to use on another PC: Import CG (.cgp) in the CG Library tab).
 A `.cgp` is a zip holding the settings and the CG file.
 
 ## Live streaming (3 destinations)

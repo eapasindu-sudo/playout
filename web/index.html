@@ -318,7 +318,7 @@
         <button class="lockable" onclick="openMediaFolder()" title="Open the media folder on this PC">Media Folder</button>
         <button id="bFull" onclick="toggleFull()" title="Program output full screen on the second display (Esc on that screen closes it)">Full Screen</button>
         <button id="bLock" onclick="toggleLock()">Lock</button>
-        <button onclick="openComposerHelp()" title="Prepare CGs in the separate CG Composer app">CG Composer</button>
+        <button onclick="openComposerHelp()" title="Open CG Composer to make CGs">CG Composer</button>
         <button onclick="openReport()" title="Commercials aired per client, as PDF / Excel">Ad Report</button>
         <button class="lockable adminonly" onclick="openSchedule()" title="Playlist for each day, scheduled recordings">Day Schedule</button>
         <button onclick="openRemote()" title="Control Playout from a phone or tablet">Phone Remote</button>
@@ -367,12 +367,12 @@
       <div id="cgLib" style="display:none">
         <div class="cglist" id="cgFiles"></div>
         <div class="cgbar lockable">
-          <button onclick="$('upCG').click()">Upload CG</button>
+          <button onclick="$('upCG').click()">Import CG (.cgp)</button>
           <button onclick="openCGFolder()">CG Folder</button>
-          <span class="hint" style="align-self:center">PNG / JPEG / MOV / MP4 / .cgp</span>
+          <span class="hint" style="align-self:center">CG Composer files (.cgp) only</span>
         </div>
       </div>
-      <input type="file" id="upCG" multiple accept=".cgp,.png,.jpg,.jpeg,.tga,.bmp,.gif,.webp,.mov,.mp4,.webm,.avi,.mkv,.mxf" style="display:none" onchange="uploadCG(this)">
+      <input type="file" id="upCG" multiple accept=".cgp" style="display:none" onchange="uploadCG(this)">
     </div>
   </div>
 </div>
@@ -435,10 +435,11 @@
 <dialog id="dSting" style="width:min(560px, 94vw)">
   <header>Stinger <button class="sm" onclick="dSting.close()">Close</button></header>
   <div class="body form">
-    <span>Stinger file</span><select id="stFile"></select>
+    <span>Stinger file</span><span style="display:flex; gap:6px"><select id="stFile" style="flex:1"></select><button class="sm" onclick="$('stBrowse').click()">Browse...</button>
+      <input type="file" id="stBrowse" accept=".mov,.webm,.mp4,.avi,.mkv,.mxf" style="display:none" onchange="browseStinger(this)"></span>
     <span>Cut point</span><span><input class="num" id="stCut" type="number" min="0" step="0.04"> seconds after the stinger starts (empty = half way)</span>
     <span>Auto Stinger</span><label><input type="checkbox" id="stAuto"> Play it on every change between items (Next, playlist, clip to clip)</label>
-    <span></span><span class="hint">A stinger is a short video with transparency (QuickTime MOV with alpha, ProRes 4444 or Animation) in the CG library. It plays over the picture with its sound; at the cut point, when it covers the screen, the next item goes on air. <b>Stinger &#9654;</b> plays it once now and changes to the next item.</span>
+    <span></span><span class="hint">A stinger is a short video with transparency (QuickTime MOV with alpha, ProRes 4444 or Animation). Pick it with <b>Browse...</b> from any folder (it is copied into Playout). It plays over the picture with its sound; at the cut point, when it covers the screen, the next item goes on air. <b>Stinger &#9654;</b> plays it once now and changes to the next item.</span>
   </div>
   <div class="foot"><button class="blue" onclick="saveStinger()">Save</button></div>
 </dialog>
@@ -1559,12 +1560,8 @@ function renderCGFiles() {
     <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(p.file)}">
     <div style="min-width:0"><div class="nm">${esc(p.name)}</div>
       <div class="st">CG Composer preset - ${esc(p.file)}${p.cfg.key && p.cfg.key !== 'none' ? ' - ' + p.cfg.key + ' key' : ''}</div></div>
-    <div class="bt lockable"><button class="sm" onclick="addPreset(${i})">+ Manual</button></div></div>`).join('') + cgFiles.map((f, i) => `<div class="cgrow">
-    <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(f.name)}">
-    <div style="min-width:0"><div class="nm">${esc(f.name)}</div>
-      <div class="st">${f.kind === 'video' ? 'QuickTime / video' : 'Image'} ${f.w}x${f.h}${f.duration ? ', ' + f.duration.toFixed(1) + 's' : ''} - ${f.alpha ? 'alpha' : 'no alpha (opaque)'}</div></div>
-    <div class="bt lockable"><button class="sm" onclick="addManualCG(cgFiles[${i}].name)">+ Manual</button></div></div>`).join('')
-    || '<div class="empty" style="padding:20px">No CG files yet. Upload PNG / JPEG / QuickTime MOV, or copy them into the CG folder.</div>';
+    <div class="bt lockable"><button class="sm" onclick="addPreset(${i})">+ Manual</button></div></div>`).join('')
+    || '<div class="empty" style="padding:20px">No CGs yet. Make one in CG Composer and press Save to Playout, or Import a .cgp file.</div>';
 }
 async function addPreset(i) {
   const r = await api('/api/cgfx/preset/' + encodeURIComponent(cgPresets[i].name), {});
@@ -1574,8 +1571,9 @@ async function addPreset(i) {
 async function uploadCG(input) {
   const fd = new FormData(); for (const f of input.files) fd.append('files', f);
   $('msg').textContent = 'Uploading CG...';
-  await fetch('/api/cg/files', {method:'POST', body:fd}); input.value = '';
+  const r = await (await fetch('/api/cg/files', {method:'POST', body:fd})).json().catch(() => ({})); input.value = '';
   $('msg').textContent = 'CG upload done';
+  if ((r.rejected || []).length) say(`Only CG Composer files (.cgp) go into the CG library. Not added: ${r.rejected.join(', ')}. Make the CG in CG Composer (it takes PNG / MOV / MP4) and save it, or pick a stinger with Stinger setup > Browse.`);
   await loadCGFiles(); renderCGFiles();
 }
 async function openCGFolder() {
@@ -1654,11 +1652,23 @@ function showStinger() {
 }
 const setStinger = b => api('/api/stinger', b).then(r => { STG = {...STG, ...r}; showStinger(); });
 async function openStinger() {
-  await loadCGFiles();
-  const vids = cgFiles.filter(f => f.kind === 'video');
-  $('stFile').innerHTML = '<option value="">(none)</option>' + vids.map(f => `<option ${f.name === STG.file ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+  await fillStingerFiles(STG.file);
   $('stCut').value = STG.cut || ''; $('stAuto').checked = !!STG.auto;
   dSting.showModal();
+}
+async function fillStingerFiles(pick) {
+  const files = await api('/api/stinger/files');
+  $('stFile').innerHTML = '<option value="">(none)</option>' + files.map(f => `<option value="${esc(f)}" ${f === pick ? 'selected' : ''}>${esc(f.replace(/^stingers\//, ''))}</option>`).join('');
+}
+async function browseStinger(input) {
+  const f = input.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  $('msg').textContent = 'Copying stinger ' + f.name + '...';
+  const r = await fetch('/api/stinger/file', {method:'POST', body:fd}); input.value = '';
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { $('msg').textContent = j.error || 'Stinger upload failed'; return say(j.error || 'Stinger upload failed'); }
+  STG = {...STG, ...j}; showStinger(); await fillStingerFiles(j.file);
+  $('msg').textContent = 'Stinger: ' + f.name;
 }
 async function saveStinger() { await setStinger({file:$('stFile').value, cut:+$('stCut').value || 0, auto:$('stAuto').checked}); dSting.close(); }
 
@@ -1670,8 +1680,10 @@ async function toggleFull() {
   else if (r.error === 'browser') window.open('/output', 'playout_output', 'popup');
   else say('Full screen output did not open: ' + r.error);
 }
-function openComposerHelp() {
-  say('CG Composer is its own app: Start menu > CG Composer (or desktop shortcut).\n\nOpen a CG, key the green screen, set position, then press "Save to Playout". It appears in the CG Library tab here as a .cgp; press + Manual or add it to a live card.');
+async function openComposerHelp() {
+  let r = {}; try { r = await api('/api/open_composer', {}); } catch (e) {}
+  if (r.ok) { $('msg').textContent = 'Opening CG Composer... make the CG, then press "Save to Playout"'; return; }
+  say((r.error ? r.error + '.\n\n' : '') + 'CG Composer is its own app: Start menu > CG Composer (or desktop shortcut).\n\nOpen a CG, key the green screen, set position, then press "Save to Playout". It appears in the CG Library tab here as a .cgp; press + Manual or add it to a live card.');
 }
 
 // Facebook ends a live video after 8 hours: count down and warn 30, 10 and 5 minutes before

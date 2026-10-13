@@ -21,7 +21,7 @@ from werkzeug.utils import secure_filename
 from audio_out import AudioOut
 from recorder import Recorder
 from capture import list_capture_devices
-from cg import CG_EXT, CGManager, cg_preview, list_cg
+from cg import CGManager, cg_kind, cg_preview, list_cg
 from cgedit import PRESET_EXT, list_presets, make_blueprint, read_cgp
 import media as media_mod
 from engine import Engine
@@ -633,6 +633,23 @@ def fullscreen():
     return jsonify(ok=True, on=fullscreen_on)
 
 
+@app.post("/api/open_composer")
+def open_composer():
+    """Functions > CG Composer: start the CG Composer app on this PC."""
+    if not is_local():
+        return jsonify(ok=False, error="CG Composer opens only on the playout PC")
+    import subprocess
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--composer"]
+    else:
+        cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop.py"), "--composer"]
+    try:
+        subprocess.Popen(cmd, close_fds=True)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+    return jsonify(ok=True)
+
+
 # ---- recording ---------------------------------------------------------
 @app.route("/api/record", methods=["GET", "POST"])
 def record_info():
@@ -664,9 +681,37 @@ def record_action(action):
 def stinger():
     if request.method == "POST":
         b = request.get_json(silent=True) or {}
-        st = engine.set_stinger(b.get("file"), b.get("cut"), b.get("auto"))
+        f = b.get("file")
+        if f is not None:      # a CG library video, or one picked with Browse (kept in cg/stingers)
+            f = ("stingers/" if f.startswith("stingers/") else "") + secure_filename(os.path.basename(f))
+            f = "" if f in ("", "stingers/") else f
+        st = engine.set_stinger(f, b.get("cut"), b.get("auto"))
         store.set(stinger=st)
     return jsonify(engine.stinger)
+
+
+@app.get("/api/stinger/files")
+def stinger_files():
+    """Stinger videos: ones picked with Browse (cg/stingers) and video CGs of the library."""
+    folder = os.path.join(cfg["cg_dir"], "stingers")
+    own = sorted(n for n in os.listdir(folder) if cg_kind(n) == "video") if os.path.isdir(folder) else []
+    lib = [c["name"] for c in list_cg(cfg["cg_dir"]) if c["kind"] == "video"]
+    return jsonify(["stingers/" + n for n in own] + lib)
+
+
+@app.post("/api/stinger/file")
+def stinger_browse():
+    """Browse: a stinger video from anywhere on the PC is copied into cg/stingers and picked."""
+    f = request.files.get("file")
+    name = secure_filename((f and f.filename) or "")
+    if not name or cg_kind(name) != "video":
+        return jsonify(error="Pick a video file (MOV with alpha, ProRes 4444 / Animation, WebM)"), 400
+    folder = os.path.join(cfg["cg_dir"], "stingers")
+    os.makedirs(folder, exist_ok=True)
+    f.save(os.path.join(folder, name))
+    st = engine.set_stinger("stingers/" + name)
+    store.set(stinger=st)
+    return jsonify(st)
 
 
 # ---- live input --------------------------------------------------------
@@ -1125,14 +1170,13 @@ def cg_files():
 
 @app.post("/api/cg/files")
 def cg_upload():
-    saved = []
+    saved, rejected = [], []
     for f in request.files.getlist("files"):
         name = secure_filename(f.filename or "")
         ext = os.path.splitext(name)[1].lower()
-        if name and ext in CG_EXT:
-            f.save(os.path.join(cfg["cg_dir"], name))
-            saved.append(name)
-        elif name and ext == PRESET_EXT:      # CG Composer preset: unpack its media next to it
+        if name and ext != PRESET_EXT:       # only CG Composer files come into the CG library
+            rejected.append(name)
+        elif name:      # CG Composer preset: unpack its media next to it
             path = os.path.join(cfg["cg_dir"], name)
             f.save(path)
             try:
@@ -1140,7 +1184,8 @@ def cg_upload():
                 saved.append(name)
             except Exception:
                 os.remove(path)
-    return jsonify(saved=saved)
+                rejected.append(name)
+    return jsonify(saved=saved, rejected=rejected)
 
 
 @app.get("/api/cg/preview/<path:name>")
