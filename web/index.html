@@ -14,6 +14,17 @@
   body { margin:0; background:var(--bg); color:var(--text); font:13px/1.35 "Segoe UI", system-ui, sans-serif; user-select:none; }
   .app { display:grid; grid-template-columns: minmax(0, 1fr) 440px; gap:10px; padding:10px; min-height:100%; }
   @media (max-width: 1150px) { .app { grid-template-columns: 1fr; } }
+  /* wide screens: the page itself does not scroll; each column scrolls on its own, the monitor stays put */
+  @media (min-width: 1151px) {
+    html, body { overflow:hidden; }
+    .app { height:100vh; box-sizing:border-box; min-height:0; }
+    .col { overflow-y:auto; overflow-x:hidden; min-height:0; scrollbar-width:thin; }
+    .col > .sticky { position:sticky; top:0; z-index:3; }
+  }
+  .fold { cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .fold::after { content:"\25BE"; margin-left:auto; font-size:12px; color:var(--dim); }
+  .folded .fold::after { content:"\25B8"; }
+  .folded .fn { display:none; }
   .box { background:var(--panel); border:1px solid var(--line); border-radius:4px; }
   .mono { font-family: "Consolas", "Cascadia Mono", ui-monospace, monospace; }
   button { font:inherit; color:var(--text); background:linear-gradient(#45484e, #2f3236); border:1px solid #0006; border-radius:3px;
@@ -207,7 +218,7 @@
 <body>
 <div class="app" id="app">
   <!-- LEFT -->
-  <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
+  <div class="col" style="display:flex; flex-direction:column; gap:10px; min-width:0">
     <div class="box">
       <div class="top">
         <div class="logo">Playout</div>
@@ -262,7 +273,7 @@
       <div class="fbwarn" id="fbWarn"></div>
       <div class="banner" id="bkWarn"></div>
       <div class="banner" id="foWarn">&#9888; LIVE INPUT LOST: filler on air (failover). It goes back to live by itself when the input returns.</div>
-      <div class="banner" id="upWarn"><span id="upText"></span><span style="flex:1"></span><button class="sm" onclick="openSettings('update')">Update</button><button class="sm" onclick="upHide=UPD.latest; $('upWarn').classList.remove('show')">Later</button></div>
+      <div class="banner" id="upWarn"><span id="upText"></span><span style="flex:1"></span><button class="sm" onclick="upAsk()">Update</button><button class="sm" onclick="upHide=UPD.latest; $('upWarn').classList.remove('show')">Later</button></div>
       <div class="msg" id="msg"></div>
     </div>
 
@@ -282,8 +293,8 @@
   </div>
 
   <!-- RIGHT -->
-  <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
-    <div class="box">
+  <div class="col" id="rightCol" style="display:flex; flex-direction:column; gap:10px; min-width:0">
+    <div class="box sticky">
       <div class="mon">
         <div class="meters"><div class="meter"><div id="mL"></div></div><div class="meter"><div id="mR"></div></div></div>
         <div class="screen"><img id="pv" alt="Program output"><span class="tag" id="pvTag"></span></div>
@@ -307,8 +318,8 @@
       <div class="hint" style="padding:0 10px 8px" id="liveInfo"></div>
     </div>
 
-    <div class="box">
-      <div class="section-t" style="border-top:0">Functions</div>
+    <div class="box" id="fnBox">
+      <div class="section-t fold" style="border-top:0" onclick="foldFn()" title="Show / hide the Functions buttons">Functions</div>
       <div class="fn">
         <button class="lockable" onclick="openLib()">Add Media to Playlist</button>
         <button class="lockable" onclick="openPM()">Playlist Manager</button>
@@ -1324,15 +1335,41 @@ async function pollUpdate(r) {
     $('upDl').style.display = UPD.available && UPD.state !== 'ready' && UPD.state !== 'downloading' ? '' : 'none';
     $('upInst').style.display = UPD.state === 'ready' ? '' : 'none';
   }
+  if (upAuto && UPD.error && !['downloading', 'ready', 'installing'].includes(UPD.state)) { upAuto = null; say('Update download failed: ' + UPD.error); }
+  if (upAuto === UPD.latest && UPD.state === 'ready') { upAuto = null; upInstall(true); }
+  if (UPD.available && upAsked !== UPD.latest && !locked && !dAsk.open && !document.body.classList.contains('operator')
+      && ['127.0.0.1', 'localhost'].includes(location.hostname)) { upAsked = UPD.latest; upAsk(); }
   const show = UPD.available && upHide !== UPD.latest && !locked;
   $('upWarn').classList.toggle('show', !!show);
   $('upText').textContent = `Playout ${UPD.latest} is available (you have ${UPD.current}).`;
 }
 const upCheck = async () => { $('upSt').textContent = 'Checking...'; pollUpdate(await api('/api/update/check', {})); };
 const upDownload = async () => pollUpdate(await api('/api/update/download', {}));
-async function upInstall() {
-  const onAir = S.state === 'PLAYING' || streamInfo?.destinations.some(d => d.enabled) || REC.recording;
-  if (!await ask((onAir ? 'WARNING: Playout is on air / streaming / recording. Installing stops the output for about a minute.\n\n' : '') + `Install Playout ${UPD.latest} now? Playout closes, updates and starts again.`)) return;
+function foldFn(set) {
+  const on = set ?? !$('fnBox').classList.contains('folded');
+  $('fnBox').classList.toggle('folded', on);
+  try { localStorage.setItem('fnFolded', on ? '1' : ''); } catch (e) {}
+}
+try { if (localStorage.getItem('fnFolded')) foldFn(true); } catch (e) {}
+let upAuto = null, upAsked = null;
+const onAirNow = () => S.state === 'PLAYING' || streamInfo?.destinations.some(d => d.enabled) || REC.recording;
+async function upAsk() {
+  // a new version: ask once whether to update now (download, then install and restart by itself)
+  if (UPD.state === 'downloading' || UPD.state === 'installing') return;
+  const warn = onAirNow() ? '\n\nWARNING: Playout is on air / streaming / recording. Installing stops the output for about a minute; press No to update later (banner > Update).' : '';
+  if (!await ask(`Playout ${UPD.latest} is available (you have ${UPD.current}).\n\nUpdate now? It downloads, then Playout closes, updates and starts again by itself.${warn}`, 'Update now', 'Later')) {
+    upHide = UPD.latest; $('upWarn').classList.remove('show'); return;
+  }
+  upAuto = UPD.latest;
+  $('msg').textContent = `Downloading Playout ${UPD.latest}... it installs by itself when the download finishes`;
+  if (UPD.state === 'ready') { upAuto = null; upInstall(true); return; }
+  const r = await api('/api/update/download', {}).catch(e => ({error: String(e)}));
+  if (r.error && !r.state) { upAuto = null; say('Update download failed: ' + r.error); return; }
+  pollUpdate(r);
+}
+async function upInstall(confirmed) {
+  const onAir = onAirNow();
+  if (!confirmed && !await ask((onAir ? 'WARNING: Playout is on air / streaming / recording. Installing stops the output for about a minute.\n\n' : '') + `Install Playout ${UPD.latest} now? Playout closes, updates and starts again.`)) return;
   const r = await api('/api/update/install', {}); if (!r.ok) say(r.error); else pollUpdate();
 }
 

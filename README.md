@@ -30,6 +30,9 @@ vMix --NDI--> Playout --NDI "PLAYOUT PGM"--> anything that takes NDI
 
 Keyboard: **Space** = Next, **F1** = Play, **F2** = Pause, **F12** = Take live.
 
+On a wide screen the page does not scroll: the playlist side and the monitor side scroll on their own
+(the program monitor stays at the top). Click **Functions** to fold its buttons away.
+
 **Full Screen** (Functions) shows the program output full screen on the second display. Press it
 again, or Esc on that display, to close it.
 
@@ -182,8 +185,9 @@ Playout can start locked). Stream Deck / Companion triggers then need `?key=<rem
 ## Updates
 
 Every build publishes a GitHub release. Playout checks for a newer one every 6 hours and shows
-"Update available"; **Settings > Updates > Download** then **Install & restart** updates it (it never
-installs by itself). The repository is private, so put a GitHub access token with read access to it in
+"Update available" and asks **Update now?** (only on the playout PC, and only an admin when users are
+set up). **Update now** downloads it, then Playout closes, updates and starts again by itself; **Later**
+leaves it for the banner's **Update** button or **Settings > Updates**. It never installs without asking. The repository is private, so put a GitHub access token with read access to it in
 Settings > Updates (or make the repository public).
 
 ## Text CG (ticker, lower third, clock)
