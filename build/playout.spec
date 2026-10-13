@@ -15,10 +15,10 @@ for pkg in pkgs:
 hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths",
            "capture", "cg", "system", "audio_out", "psutil", "cgfx", "cgedit", "composer", "recorder",
            "loudness", "report", "importer", "updater", "version",
-           "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash"]
+           "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon"]
 
 import glob, os
-datas += [(os.path.join(SPECPATH, "cgcomposer.ico"), ".")]                          # CG Composer window icon
+datas += [(os.path.join(SPECPATH, n), ".") for n in ("endora-cgcomposer.ico", "endora-playout.ico")]   # window icons
 binaries += [(f, ".") for f in glob.glob(os.path.join(SPECPATH, "dlls", "*.dll"))]   # libfribidi-0.dll (CI)
 
 a = Analysis(["../desktop.py"], pathex=[".."], binaries=binaries, datas=datas, hiddenimports=hidden)

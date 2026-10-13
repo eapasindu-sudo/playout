@@ -97,10 +97,12 @@ def main():
 
     import webview
     import splash
+    import winicon
 
+    winicon.own_taskbar_button("Endora.Playout")
     # the loading screen shows at once; the engine starts behind it, then the control screen opens
     w, h = splash.SIZE
-    loading = webview.create_window("Endora Playout", html=splash.html("playout"), width=w, height=h,
+    loading = webview.create_window("Endora Playout loading", html=splash.html("playout"), width=w, height=h,
                                     frameless=True, resizable=False, on_top=True, background_color="#0c0c0e")
     result = {"code": 0, "server": None}
 
@@ -192,6 +194,8 @@ def open_control_screen(webview, server, port):
 
     server.fullscreen_hook = fullscreen
     main_win.events.closed += lambda: fullscreen(False)
+    import winicon
+    main_win.events.shown += lambda: threading.Timer(0.5, winicon.set_icon, ("Endora Playout", "endora-playout.ico")).start()
     return main_win
 
 

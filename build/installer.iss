@@ -14,7 +14,9 @@ DefaultGroupName=Endora Playout
 OutputDir=output
 OutputBaseFilename=Playout-Setup
 SetupIconFile=playout.ico
-UninstallDisplayIcon={app}\Playout.exe
+WizardImageFile=wizard.bmp
+WizardSmallImageFile=wizard-small.bmp
+UninstallDisplayIcon={app}\endora-playout.ico
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -29,9 +31,11 @@ Name: "autostart"; Description: "Start Endora Playout when Windows starts (recom
 
 [Files]
 Source: "dist\Playout\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "cgcomposer.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "endora-playout.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "endora-cgcomposer.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
+Type: files; Name: "{app}\cgcomposer.ico"
 ; shortcuts from before the name changed to Endora Playout
 Type: files; Name: "{group}\Playout.lnk"
 Type: files; Name: "{group}\Playout media folder.lnk"
@@ -43,13 +47,13 @@ Type: files; Name: "{commonstartup}\Playout.lnk"
 Name: "{userdocs}\Playout\media"
 
 [Icons]
-Name: "{group}\Endora Playout"; Filename: "{app}\Playout.exe"
-Name: "{group}\CG Composer"; Filename: "{app}\Playout.exe"; Parameters: "--composer"; IconFilename: "{app}\cgcomposer.ico"
+Name: "{group}\Endora Playout"; Filename: "{app}\Playout.exe"; IconFilename: "{app}\endora-playout.ico"
+Name: "{group}\CG Composer"; Filename: "{app}\Playout.exe"; Parameters: "--composer"; IconFilename: "{app}\endora-cgcomposer.ico"
 Name: "{group}\Endora Playout media folder"; Filename: "{userdocs}\Playout\media"
 Name: "{group}\Uninstall Endora Playout"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Endora Playout"; Filename: "{app}\Playout.exe"; Tasks: desktopicon
-Name: "{autodesktop}\CG Composer"; Filename: "{app}\Playout.exe"; Parameters: "--composer"; IconFilename: "{app}\cgcomposer.ico"; Tasks: desktopicon
-Name: "{commonstartup}\Endora Playout"; Filename: "{app}\Playout.exe"; Tasks: autostart
+Name: "{autodesktop}\Endora Playout"; Filename: "{app}\Playout.exe"; IconFilename: "{app}\endora-playout.ico"; Tasks: desktopicon
+Name: "{autodesktop}\CG Composer"; Filename: "{app}\Playout.exe"; Parameters: "--composer"; IconFilename: "{app}\endora-cgcomposer.ico"; Tasks: desktopicon
+Name: "{commonstartup}\Endora Playout"; Filename: "{app}\Playout.exe"; IconFilename: "{app}\endora-playout.ico"; Tasks: autostart
 
 [Run]
 ; let NDI and the remote control page through Windows Firewall without a prompt
@@ -58,6 +62,9 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""P
 Filename: "{app}\Playout.exe"; Description: "Start Endora Playout now"; Flags: nowait postinstall skipifsilent
 ; after an update from inside Playout (setup started with /AUTOSTART): start Playout again
 Filename: "{app}\Playout.exe"; Flags: nowait runasoriginaluser; Check: AutoStart
+
+; Windows keeps old icons in a cache: refresh it so the new Endora logos show at once
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden skipifdoesntexist
 
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Playout"""; Flags: runhidden; RunOnceId: "DelFirewallRule"

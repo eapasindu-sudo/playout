@@ -17,6 +17,7 @@ import time
 from flask import Flask, jsonify, request, send_from_directory
 
 import paths
+import winicon
 from cg import CG_EXT, list_cg
 from cgedit import PRESET_EXT, make_blueprint, read_cgp, write_cgp
 from paths import safe_name
@@ -105,7 +106,7 @@ def main():
         return 0
     import webview
     import splash
-    _own_taskbar_button()
+    winicon.own_taskbar_button("Endora.CGComposer")
     w, h = splash.SIZE
     loading = webview.create_window("CG Composer loading", html=splash.html("composer"), width=w, height=h,
                                     frameless=True, resizable=False, on_top=True, background_color="#0c0c0e")
@@ -116,46 +117,12 @@ def main():
         time.sleep(1.6)                                      # let the logo be seen
         api._window = webview.create_window("CG Composer", f"http://127.0.0.1:{port}/", js_api=api,
                                            width=1280, height=900, min_size=(1000, 700), background_color="#0c0d0f")
-        api._window.events.shown += lambda: threading.Timer(0.5, _set_icon).start()
+        api._window.events.shown += lambda: threading.Timer(0.5, winicon.set_icon, ("CG Composer", "endora-cgcomposer.ico")).start()
         loading.destroy()
 
     webview.start(boot)
     return 0
 
-
-def _icon_path():
-    base = getattr(sys, "_MEIPASS", None) or os.path.join(os.path.dirname(os.path.abspath(__file__)), "build")
-    return os.path.join(base, "cgcomposer.ico")
-
-
-def _own_taskbar_button():
-    """Windows: CG Composer gets its own taskbar button (not grouped under Playout)."""
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Endora.CGComposer")
-        except Exception:
-            pass
-
-
-def _set_icon():
-    """Windows: the CG Composer logo on the window and its taskbar button."""
-    if sys.platform != "win32" or not os.path.isfile(_icon_path()):
-        return
-    try:
-        import ctypes
-        u = ctypes.windll.user32
-        u.FindWindowW.restype = ctypes.c_void_p
-        u.LoadImageW.restype = ctypes.c_void_p
-        hwnd = u.FindWindowW(None, "CG Composer")
-        if not hwnd:
-            return
-        for size, which in ((32, 1), (16, 0)):         # ICON_BIG, ICON_SMALL
-            h = u.LoadImageW(None, _icon_path(), 1, size, size, 0x10)   # IMAGE_ICON, LR_LOADFROMFILE
-            if h:
-                u.SendMessageW(ctypes.c_void_p(hwnd), 0x80, which, ctypes.c_void_p(h))   # WM_SETICON
-    except Exception:
-        pass
 
 
 def _have_webview():
