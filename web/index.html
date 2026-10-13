@@ -176,6 +176,19 @@
   .form { display:grid; grid-template-columns: 130px 1fr; gap:8px 10px; align-items:center; }
   .hint { color:var(--dim); font-size:11px; }
   .locked .lockable { pointer-events:none; opacity:.45; }
+  /* failover / update banners */
+  .banner { display:none; padding:8px 12px; font-weight:700; font-size:15px; border-top:1px solid var(--line); align-items:center; gap:10px; }
+  .banner.show { display:flex; }
+  #foWarn { background:var(--red); color:#fff; animation: blink 1s steps(2) infinite; }
+  #upWarn { background:#10305e; color:#cfe2ff; font-weight:600; font-size:13px; }
+  .fn button { white-space:normal; line-height:1.2; }
+  .trim { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+  .trim img { width:100%; aspect-ratio:16/9; background:#000; object-fit:contain; display:block; border:1px solid #333; }
+  .days label { margin-right:6px; font-size:12px; white-space:nowrap; }
+  .tblin input, .tblin select { padding:3px 5px; }
+  .qr { background:#fff; padding:6px; border-radius:4px; width:180px; height:180px; }
+  .setsec { font-weight:700; margin:14px 0 6px; padding-top:10px; border-top:1px solid var(--line); }
+  .setsec:first-child { margin-top:0; border-top:0; padding-top:0; }
 </style>
 </head>
 <body>
@@ -233,6 +246,8 @@
         <button class="red" onclick="T('live')" title="Stop the playlist and go to the vMix live feed (F12)">TAKE LIVE</button>
       </div>
       <div class="fbwarn" id="fbWarn"></div>
+      <div class="banner" id="foWarn">&#9888; LIVE INPUT LOST: filler on air (failover). It goes back to live by itself when the input returns.</div>
+      <div class="banner" id="upWarn"><span id="upText"></span><span style="flex:1"></span><button class="sm" onclick="openSettings('update')">Update</button><button class="sm" onclick="upHide=UPD.latest; $('upWarn').classList.remove('show')">Later</button></div>
       <div class="msg" id="msg"></div>
     </div>
 
@@ -286,6 +301,10 @@
         <button id="bFull" onclick="toggleFull()" title="Program output full screen on the second display (Esc on that screen closes it)">Full Screen</button>
         <button id="bLock" onclick="toggleLock()">Lock</button>
         <button onclick="openComposerHelp()" title="Prepare CGs in the separate CG Composer app">CG Composer</button>
+        <button onclick="openReport()" title="Commercials aired per client, as PDF / Excel">Ad Report</button>
+        <button class="lockable" onclick="openSchedule()" title="Playlist for each day, scheduled recordings">Day Schedule</button>
+        <button onclick="openRemote()" title="Control Playout from a phone or tablet">Phone Remote</button>
+        <button class="lockable" onclick="openSettings()" title="Failover, audio level, passwords, updates">Settings</button>
       </div>
       <input type="file" id="upFile" multiple accept="video/*,.mxf,.ts" style="display:none" onchange="upload(this)">
 
@@ -422,16 +441,31 @@
 </dialog>
 
 <!-- Edit item -->
-<dialog id="dEdit">
-  <header>Edit item <button class="sm" onclick="dEdit.close()">Close</button></header>
-  <div class="body form">
-    <span>Name</span><input id="edName">
-    <span id="edDurL">Duration</span><input id="edDur" placeholder="mm:ss (empty = until Next)">
-    <span>Fixed start</span><span style="display:flex; gap:6px"><input id="edFixed" type="time" step="1"><button class="sm" onclick="$('edFixed').value=''">Clear</button></span>
-    <span></span><span class="hint">Fixed start = "exact time": the item goes on air at that time even if something else is playing.</span>
+<dialog id="dEdit" style="width:min(820px, 96vw)">
+  <header>Edit commercial <button class="sm" onclick="dEdit.close()">Close</button></header>
+  <div class="body">
+    <div class="form">
+      <span>Name</span><input id="edName">
+      <span>Client</span><input id="edClient" list="clientList" placeholder="advertiser, for the ad report">
+      <span>Fixed start</span><span style="display:flex; gap:6px"><input id="edFixed" type="time" step="1"><button class="sm" onclick="$('edFixed').value=''">Clear</button>
+        <span class="hint" style="align-self:center">"Exact time": goes on air at that time even if something else is playing.</span></span>
+      <span>Volume</span><span style="display:flex; gap:8px; align-items:center"><input class="num" id="edGain" type="number" step="0.5" min="-20" max="12"> dB <span class="hint" id="edLufs"></span></span>
+    </div>
+    <div class="section-t" style="margin:12px -14px 8px">Trim (in / out point) <span class="hint" id="edFull" style="text-transform:none; letter-spacing:0"></span></div>
+    <div class="trim">
+      <div><img id="edInImg" alt=""><div style="display:flex; gap:6px; margin-top:6px; align-items:center">In <input class="num" id="edIn" placeholder="00:00.00" onchange="trimPrev()">
+        <button class="sm" onclick="nudge('edIn', -1)">-1s</button><button class="sm" onclick="nudge('edIn', 1)">+1s</button><button class="sm" onclick="$('edIn').value=''; trimPrev()">Start</button></div></div>
+      <div><img id="edOutImg" alt=""><div style="display:flex; gap:6px; margin-top:6px; align-items:center">Out <input class="num" id="edOut" placeholder="end" onchange="trimPrev()">
+        <button class="sm" onclick="nudge('edOut', -1)">-1s</button><button class="sm" onclick="nudge('edOut', 1)">+1s</button><button class="sm" onclick="$('edOut').value=''; trimPrev()">End</button></div></div>
+    </div>
+    <div class="hint" style="margin-top:6px" id="edTrimInfo"></div>
+    <div class="section-t" style="margin:12px -14px 6px; display:flex; align-items:center">CGs with this commercial (logo, bug, lower third)
+      <span style="flex:1"></span><button class="sm" onclick="addItemCG()">+ Add CG</button></div>
+    <table class="cardcg" id="edCG"></table>
   </div>
   <div class="foot"><button class="blue" onclick="saveEdit()">Save</button></div>
 </dialog>
+<datalist id="clientList"></datalist>
 
 <!-- Playlist manager -->
 <dialog id="dPM">
@@ -441,7 +475,16 @@
       <input id="pmName" placeholder="Playlist name, e.g. Evening news" style="flex:1"><button class="blue" onclick="savePL()">Save current</button>
     </div>
     <table id="pmT"></table>
+    <div class="section-t" style="margin:14px -14px 8px">Import from Excel / CSV</div>
+    <div class="form">
+      <span>File</span><input type="file" id="impFile" accept=".xlsx,.xlsm,.csv,.txt">
+      <span>Then</span><select id="impMode"><option value="replace">Replace the playlist</option><option value="append">Add to the end of the playlist</option><option value="none">Only save it (for a day schedule)</option></select>
+      <span>Save as</span><input id="impSave" placeholder="playlist name (optional), e.g. 2026-10-14">
+      <span></span><span class="hint">Columns: Time, File, Name, Client, Type (clip / live), Duration, In, Out. Only File is needed. <a href="#" style="color:var(--blue)" onclick="getFile('/api/import/template.csv'); return false">Download a template</a></span>
+    </div>
+    <div class="hint" id="impMsg" style="margin-top:8px; white-space:pre-line"></div>
   </div>
+  <div class="foot"><button class="blue" onclick="importPL()">Import</button></div>
 </dialog>
 
 <!-- Air logs -->
@@ -481,6 +524,108 @@
     <span></span><span class="hint" id="dsKeyHint">Facebook: Live Producer &gt; Streaming software &gt; copy Server URL and Stream key. The key is saved on this PC only.</span>
   </div>
   <div class="foot"><button class="blue" onclick="saveDest()">Save</button></div>
+</dialog>
+
+<!-- Ad report -->
+<dialog id="dRep" style="width:min(980px, 97vw)">
+  <header>Ad Report (proof of play) <button class="sm" onclick="dRep.close()">Close</button></header>
+  <div class="body">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">
+      From <input type="date" id="repFrom"> to <input type="date" id="repTo">
+      <select id="repClient"><option value="">All clients</option></select>
+      <input id="repQ" placeholder="search commercial" style="width:160px">
+      <button onclick="loadReport()">Show</button>
+      <span class="hint">
+        <a href="#" style="color:var(--blue)" onclick="repRange(0); return false">Today</a> &middot;
+        <a href="#" style="color:var(--blue)" onclick="repRange(1); return false">Yesterday</a> &middot;
+        <a href="#" style="color:var(--blue)" onclick="repRange(7); return false">Last 7 days</a> &middot;
+        <a href="#" style="color:var(--blue)" onclick="repRange(30); return false">This month</a></span>
+    </div>
+    <table id="repSum"></table>
+    <div class="hint" id="repInfo" style="margin-top:8px"></div>
+  </div>
+  <div class="foot">
+    <span class="hint" style="margin-right:auto">Client name comes from Edit on each commercial (or the Client column of an imported Excel playlist).</span>
+    <button onclick="repFile('csv')">CSV</button><button onclick="repFile('xlsx')">Excel</button><button class="blue" onclick="repFile('pdf')">PDF</button>
+  </div>
+</dialog>
+
+<!-- Day schedule: playlists per day, scheduled recordings -->
+<dialog id="dSch" style="width:min(900px, 97vw)">
+  <header>Day Schedule <button class="sm" onclick="dSch.close()">Close</button></header>
+  <div class="body">
+    <div class="setsec">Playlist for each day</div>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+      <label><input type="checkbox" id="dlOn"> Load the day's playlist by itself at</label><input type="time" id="dlTime">
+      <span class="hint" id="dlToday"></span><button class="sm" onclick="loadToday()">Load today's now</button>
+    </div>
+    <table class="tblin" style="margin-top:8px"><tr id="dlWeek"></tr></table>
+    <div style="margin-top:8px"><b style="font-size:12px">Special dates</b> <span class="hint">(a date overrides the weekday)</span></div>
+    <table class="tblin" id="dlDates"></table>
+    <div style="display:flex; gap:6px; margin-top:6px"><input type="date" id="dlNewDate"><select id="dlNewList"></select><button class="sm" onclick="addDate()">+ Add date</button></div>
+    <div class="hint" style="margin-top:6px">Make the playlists in Playlist Manager (Save current, or Import from Excel). At the load time the on-air item finishes, then the new day's playlist starts from its first item.</div>
+
+    <div class="setsec">Scheduled recording</div>
+    <table class="tblin" id="rtT"></table>
+    <button class="sm" style="margin-top:6px" onclick="addRecTime()">+ Add recording time</button>
+    <div class="hint" style="margin-top:6px">Records the program output with the quality chosen under Recording. No days ticked = every day. A date = that day only.</div>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveSchedule()">Save</button></div>
+</dialog>
+
+<!-- Settings -->
+<dialog id="dSet" style="width:min(760px, 96vw)">
+  <header>Settings <span class="hint" id="setVer" style="margin-left:10px; font-weight:400"></span> <button class="sm" onclick="dSet.close()">Close</button></header>
+  <div class="body">
+    <div class="setsec" id="secFail">Failover (live input lost)</div>
+    <div class="form">
+      <span>Failover</span><label><input type="checkbox" id="foOn"> When the vMix / live input is lost, put a filler on air</label>
+      <span>After</span><span><input class="num" id="foAfter" type="number" min="0.5" max="60" step="0.5"> seconds without a picture</span>
+      <span>Filler</span><span style="display:flex; gap:6px"><select id="foMode" onchange="$('foFile').style.display = this.value === 'clip' ? '' : 'none'">
+        <option value="bars">Colour bars</option><option value="black">Black</option><option value="clip">A clip (loops), e.g. "We'll be right back"</option></select>
+        <select id="foFile" style="flex:1"></select></span>
+      <span></span><span class="hint">Playout also starts itself again if it ever crashes or freezes, and carries on with the item that was on air.</span>
+    </div>
+    <div class="setsec">Audio level</div>
+    <div class="form">
+      <span>Normalize</span><label><input type="checkbox" id="anOn"> Play every commercial at the same loudness</label>
+      <span>Target</span><select id="anTarget"><option value="-24">-24 LUFS (ATSC TV)</option><option value="-23">-23 LUFS (EBU TV, recommended)</option><option value="-18">-18 LUFS</option><option value="-16">-16 LUFS (web / Facebook)</option><option value="-14">-14 LUFS (loud)</option></select>
+      <span></span><span class="hint">Each clip is measured once in the background; the file itself is not changed. Extra volume per clip: Edit on the playlist item.</span>
+    </div>
+    <div class="setsec">Station</div>
+    <div class="form"><span>Station name</span><input id="stName" placeholder="shown on the ad reports"></div>
+    <div class="setsec">Passwords</div>
+    <div class="form">
+      <span>Lock password</span><span><input id="pwLock" type="password" placeholder="empty = no password" autocomplete="new-password"> <span class="hint" id="pwLockSt"></span></span>
+      <span></span><span class="hint">Needed to Unlock the screen and to open Settings.</span>
+      <span>Lock at start</span><label><input type="checkbox" id="lockStart"> Start Playout locked</label>
+      <span>Phone remote</span><label><input type="checkbox" id="rmOn"> Allow phones / tablets / other PCs on the network</label>
+      <span>Remote password</span><span><input id="pwRemote" type="password" placeholder="empty = no password" autocomplete="new-password"> <span class="hint" id="pwRemoteSt"></span></span>
+    </div>
+    <div class="setsec" id="secUpdate">Updates</div>
+    <div class="form">
+      <span>Version</span><span id="upCur" class="mono"></span>
+      <span>Status</span><span id="upSt"></span>
+      <span></span><span style="display:flex; gap:6px"><button class="sm" onclick="upCheck()">Check now</button><button class="sm" id="upDl" onclick="upDownload()">Download</button><button class="sm red" id="upInst" onclick="upInstall()">Install &amp; restart</button></span>
+      <span>Auto check</span><label><input type="checkbox" id="upAuto"> Check for updates every 6 hours (never installs by itself)</label>
+      <span>Update from</span><input id="upRepo" placeholder="github user/repository">
+      <span>Access token</span><input id="upToken" type="password" placeholder="only for a private repository" autocomplete="off">
+    </div>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveSettings()">Save</button></div>
+</dialog>
+
+<!-- Phone remote -->
+<dialog id="dRemote" style="width:min(560px, 94vw)">
+  <header>Phone Remote <button class="sm" onclick="dRemote.close()">Close</button></header>
+  <div class="body" id="rmBody"></div>
+</dialog>
+
+<!-- password prompt -->
+<dialog id="dPw" style="width:min(380px, 92vw)">
+  <header id="pwTitle">Password</header>
+  <form class="body" onsubmit="dPw.close('ok'); return false"><input id="pwIn" type="password" style="width:100%" autocomplete="off"><div class="hint" id="pwErr" style="color:var(--orange); margin-top:6px"></div></form>
+  <div class="foot"><button onclick="dPw.close('')">Cancel</button><button class="blue" onclick="dPw.close('ok')">OK</button></div>
 </dialog>
 
 <script>
@@ -547,8 +692,11 @@ async function poll() {
   $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
   if (S.live_source !== shownSource) fillSources();
   meters(S.meters);
-  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || []})); renderPlaylist(); renderedVersion = S.version; }
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, file_duration, in: tin, out: tout}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || [], client: client || '', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
+  $('foWarn').classList.toggle('show', !!S.failover?.active);
+  if (S.failover?.active) { tally.textContent = 'FILLER'; tally.className = 'tally pause'; }
+  if (S.locked !== locked) applyLock(S.locked);
 }
 function srcLabel(k) {
   if (!k) return 'vMix NDI: ' + (S.live_source || 'no source selected');
@@ -586,7 +734,7 @@ function renderPlaylist() {
           <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}">${it.type === 'live' ? 'LIVE' : 'AD'}</span>
           <span class="name">${esc(it.name)}</span>
         </div>
-        <div class="path">${it.type === 'clip' ? 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}</div>
+        <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}</div>
         <div class="metrics">
           <div><div class="lbl">Duration</div><div class="v">${it.duration ? tc(it.duration).slice(0, 11) : 'until Next'}</div></div>
           <div><div class="lbl">Start</div><div class="v" data-f="start">--:--:--</div></div>
@@ -635,20 +783,55 @@ async function del(i) { if (PL[i].id === S.on_air?.id && !await ask('This item i
 function dup(i) { const c = {...PL[i]}; delete c.id; PL.splice(i + 1, 0, c); savePlaylist(); }
 async function clearPlaylist() { if (await ask('Clear the whole playlist? (On-air item keeps playing)')) { PL = []; savePlaylist(); } }
 
-function openEdit(id) {
+// commercial: name, client, fixed time, volume, trim, CGs
+let edCGs = [], edItem = null;
+const clockShort = sec => { sec = +sec || 0; const m = Math.floor(sec / 60), r = sec - m * 60; return `${String(m).padStart(2, '0')}:${r.toFixed(2).padStart(5, '0')}`; };
+function parseClock(t) { t = (t || '').trim().replace(',', '.'); if (!t) return 0; const p = t.split(':').map(Number); if (p.some(isNaN)) return 0; return p.reduce((a, b) => a * 60 + b, 0); }
+async function openEdit(id) {
   const it = PL.find(x => x.id === id); if (!it) return;
   if (it.type === 'live') return openLive(it);
-  editId = id; $('edName').value = it.name; $('edFixed').value = it.fixed || '';
-  $('edDur').value = durText(it.duration); $('edDur').disabled = it.type === 'clip';
-  $('edDurL').textContent = it.type === 'clip' ? 'Duration (from file)' : 'Duration';
+  editId = id; edItem = it; $('edName').value = it.name; $('edFixed').value = it.fixed || '';
+  $('edClient').value = it.client || ''; $('edGain').value = it.gain_db || 0;
+  $('edIn').value = it.in ? clockShort(it.in) : ''; $('edOut').value = it.out ? clockShort(it.out) : '';
+  $('edFull').textContent = it.file_duration ? `- file is ${clockShort(it.file_duration)} long` : '';
+  edCGs = JSON.parse(JSON.stringify(it.cgs || [])); renderItemCG(); trimPrev(); loadCGFiles();
+  fillClients();
+  $('edLufs').textContent = '';
+  api('/api/media').then(list => { const m = list.find(x => x.name === it.file);
+    $('edLufs').textContent = m && m.lufs != null ? `measured loudness ${m.lufs.toFixed(1)} LUFS` + (NORM.normalize ? `, normalize brings it to ${NORM.target} LUFS` : '') : (NORM.normalize ? 'loudness not measured yet' : ''); }).catch(() => {});
   dEdit.showModal();
+}
+function nudge(id, d) { const v = Math.max(0, parseClock($(id).value) + d); $(id).value = clockShort(v); trimPrev(); }
+function trimPrev() {
+  const it = edItem; if (!it) return;
+  const tin = parseClock($('edIn').value), tout = parseClock($('edOut').value) || (it.file_duration || 0);
+  const f = encodeURIComponent(it.file);
+  $('edInImg').src = `/api/frame/${f}?t=${tin.toFixed(2)}`;
+  $('edOutImg').src = `/api/frame/${f}?t=${Math.max(0, tout - 0.08).toFixed(2)}`;
+  const len = Math.max(0, tout - tin);
+  $('edTrimInfo').textContent = it.file_duration ? `Plays ${clockShort(tin)} to ${clockShort(tout)} = ${clockShort(len)} on air` : '';
 }
 function saveEdit() {
   const it = PL.find(x => x.id === editId); if (!it) return;
   it.name = $('edName').value.trim() || it.name;
   let f = $('edFixed').value; if (f && f.length === 5) f += ':00'; it.fixed = f;
-  if (it.type === 'live') it.duration = parseDur($('edDur').value);
+  it.client = $('edClient').value.trim(); it.gain_db = +$('edGain').value || 0;
+  it.in = parseClock($('edIn').value); it.out = parseClock($('edOut').value);
+  it.cgs = edCGs;
   dEdit.close(); savePlaylist();
+}
+function renderItemCG() {
+  $('edCG').innerHTML = '<tr><th></th><th>CG</th><th>X, Y</th><th>Zoom</th><th>Delay</th><th>On for</th><th></th></tr>' + (edCGs.map((c, i) => `<tr>
+    <td><img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}"></td><td>${esc(c.name || c.file)}</td>
+    <td class="mono">${c.x}, ${c.y}</td><td class="mono">${c.zoom}%</td><td class="mono">${c.delay || 0}s</td><td class="mono">${c.duration ? c.duration + 's' : 'whole clip'}</td>
+    <td style="text-align:right"><button class="sm" onclick="editItemCG(${i})">Edit</button> <button class="sm" onclick="edCGs.splice(${i},1); renderItemCG()">Remove</button></td></tr>`).join('')
+    || '<tr><td colspan="7" class="hint">No CGs. Add a logo or bug that shows only while this commercial plays.</td></tr>');
+}
+function addItemCG() { openCG('card', null, cfg => { edCGs.push(cfg); renderItemCG(); }); }
+function editItemCG(i) { openCG('card', edCGs[i], cfg => { edCGs[i] = cfg; renderItemCG(); }, () => { edCGs.splice(i, 1); renderItemCG(); }); }
+function fillClients() {
+  const names = [...new Set(PL.map(x => x.client).filter(Boolean))].sort();
+  $('clientList').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
 }
 
 // live card (add / edit): source + its own CGs
@@ -709,12 +892,12 @@ function editCardCG(i) { openCG('card', lvCGs[i], cfg => { lvCGs[i] = cfg; rende
 async function loadMedia() { media = await api('/api/media'); }
 async function openLib() {
   await loadMedia();
-  $('libT').innerHTML = '<tr><th></th><th></th><th>Clip</th><th>Length</th><th></th></tr>' + (media.map((m, i) => `
+  $('libT').innerHTML = '<tr><th></th><th></th><th>Clip</th><th>Length</th><th>Loudness</th><th></th></tr>' + (media.map((m, i) => `
     <tr><td><input type="checkbox" data-i="${i}"></td>
       <td><img class="lib-thumb" loading="lazy" src="/api/thumb/${encodeURIComponent(m.name)}"></td>
-      <td>${esc(m.name)}</td><td class="mono">${m.duration ? tc(m.duration).slice(0, 8) : '?'}</td>
+      <td>${esc(m.name)}</td><td class="mono">${m.duration ? tc(m.duration).slice(0, 8) : '?'}</td><td class="mono hint">${m.lufs != null ? m.lufs.toFixed(1) + ' LUFS' : ''}</td>
       <td><button class="sm" onclick="addClipsList([${i}], 'end')">Add</button></td></tr>`).join('') ||
-    '<tr><td colspan="5" class="hint">No clips yet. Upload some or copy files into the media folder.</td></tr>');
+    '<tr><td colspan="6" class="hint">No clips yet. Upload some or copy files into the media folder.</td></tr>');
   dLib.showModal();
 }
 function addClipsList(idxs, where) {
@@ -750,10 +933,10 @@ async function loadLogs() {
   const d = $('logDate').value; const q = d ? '?date=' + d : '';
   $('logCsv').href = '/api/asrun.csv' + q;
   const rows = await api('/api/asrun' + q);
-  $('logT').innerHTML = '<tr><th>Start</th><th>End</th><th>Type</th><th>Item</th><th>Played</th><th>Status</th></tr>' +
-    (rows.slice().reverse().map(r => `<tr><td class="mono">${r.start}</td><td class="mono">${r.end}</td><td>${esc(r.type)}</td><td>${esc(r.item)}</td>
+  $('logT').innerHTML = '<tr><th>Start</th><th>End</th><th>Type</th><th>Item</th><th>Client</th><th>Played</th><th>Status</th></tr>' +
+    (rows.slice().reverse().map(r => `<tr><td class="mono">${r.start}</td><td class="mono">${r.end}</td><td>${esc(r.type)}</td><td>${esc(r.item)}</td><td>${esc(r.client)}</td>
       <td class="mono">${r.played_sec}s</td><td style="color:${r.status === 'played' ? 'var(--green)' : 'var(--orange)'}">${esc(r.status)}</td></tr>`).join('') ||
-     '<tr><td colspan="6" class="hint">Nothing played on this day</td></tr>');
+     '<tr><td colspan="7" class="hint">Nothing played on this day</td></tr>');
 }
 
 // live source
@@ -823,8 +1006,191 @@ async function openMediaFolder() {
   catch (e) { $('msg').textContent = 'The media folder can only be opened on the playout PC'; }
 }
 
-// lock
-function toggleLock() { locked = !locked; $('app').classList.toggle('locked', locked); $('bLock').textContent = locked ? 'Unlock' : 'Lock'; $('bLock').classList.toggle('red', locked); }
+// lock (kept on the server, so it stays locked after a restart; unlocking may need the lock password)
+function applyLock(on) { locked = !!on; $('app').classList.toggle('locked', locked); $('bLock').textContent = locked ? 'Unlock' : 'Lock'; $('bLock').classList.toggle('red', locked); }
+async function toggleLock() {
+  if (!locked) { const r = await api('/api/lock', {lock:true}); applyLock(r.locked); return; }
+  const info = await api('/api/lock');
+  let pw = '';
+  if (info.has_password) { pw = await askPassword('Unlock: lock password'); if (pw == null) return; }
+  const r = await fetch('/api/lock', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({lock:false, password:pw})}).then(x => x.json());
+  if (r.ok) applyLock(false); else say(r.error || 'Wrong password');
+}
+function askPassword(title, err) {
+  return new Promise(res => {
+    $('pwTitle').textContent = title; $('pwIn').value = ''; $('pwErr').textContent = err || '';
+    dPw.returnValue = ''; dPw.onclose = () => res(dPw.returnValue === 'ok' ? $('pwIn').value : null); dPw.showModal(); $('pwIn').focus();
+  });
+}
+
+// files (reports, templates): saved in Documents\Playout\reports and opened on this PC; downloaded elsewhere
+const IS_LOCAL = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+async function getFile(url) {
+  if (!IS_LOCAL) { location.href = url; return; }
+  try { const r = await api(url + (url.includes('?') ? '&' : '?') + 'save=1'); $('msg').textContent = 'Saved: ' + r.path; say('Saved and opened:\n' + r.path); }
+  catch (e) { location.href = url; }
+}
+
+// ---------------------------------------------------------------- ad report
+const isoDay = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+function repRange(n) {
+  const t = new Date(); let a = new Date(t), b = new Date(t);
+  if (n === 1) { a.setDate(a.getDate() - 1); b = new Date(a); }
+  else if (n === 7) a.setDate(a.getDate() - 6);
+  else if (n === 30) a.setDate(1);
+  $('repFrom').value = isoDay(a); $('repTo').value = isoDay(b); loadReport();
+}
+async function openReport() { if (!$('repFrom').value) { $('repFrom').value = $('repTo').value = isoDay(new Date()); } dRep.showModal(); loadReport(); }
+const repQuery = () => `from=${$('repFrom').value}&to=${$('repTo').value}&client=${encodeURIComponent($('repClient').value)}&q=${encodeURIComponent($('repQ').value)}`;
+async function loadReport() {
+  const r = await api('/api/report?' + repQuery());
+  const cur = $('repClient').value;
+  $('repClient').innerHTML = '<option value="">All clients</option>' + r.clients.map(c => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  const tot = r.summary.reduce((a, s) => a + s.plays, 0), sec = r.summary.reduce((a, s) => a + s.seconds, 0);
+  $('repSum').innerHTML = '<tr><th>Client</th><th>Commercial</th><th>Plays</th><th>Air time</th><th>First</th><th>Last</th></tr>' +
+    (r.summary.map(s => `<tr><td>${esc(s.client) || '<span class="hint">(no client)</span>'}</td><td>${esc(s.item)}</td><td class="mono">${s.plays}</td><td class="mono">${tc(s.seconds).slice(0, 8)}</td><td class="mono">${esc(s.first)}</td><td class="mono">${esc(s.last)}</td></tr>`).join('') ||
+     '<tr><td colspan="6" class="hint">No commercials aired in this period</td></tr>') +
+    (r.summary.length ? `<tr><td><b>Total</b></td><td></td><td class="mono"><b>${tot}</b></td><td class="mono"><b>${tc(sec).slice(0, 8)}</b></td><td></td><td></td></tr>` : '');
+  const bad = r.rows.filter(x => !/^(played|skipped|stopped|taken off)/.test(x.status)).length;
+  $('repInfo').textContent = `${r.rows.length} spots in the log` + (bad ? `, ${bad} did not air (missing file / error) - listed in the report` : '');
+}
+const repFile = kind => getFile(`/api/report.${kind}?` + repQuery());
+
+// ---------------------------------------------------------------- day schedule
+const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
+let SCH = null;
+async function openSchedule() { SCH = await api('/api/schedule'); renderSchedule(); dSch.showModal(); }
+const plOpts = (cur, none = '(none)') => `<option value="">${none}</option>` + SCH.playlists.map(n => `<option ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('') +
+  (cur && !SCH.playlists.includes(cur) ? `<option selected>${esc(cur)}</option>` : '');
+function renderSchedule() {
+  const d = SCH.day_lists;
+  $('dlOn').checked = d.enabled; $('dlTime').value = d.time || '00:00';
+  $('dlToday').textContent = `Today: ${SCH.today_list || 'no playlist set'}` + (SCH.loaded === SCH.today ? ' (loaded)' : '');
+  $('dlWeek').innerHTML = DAYS.map(([k, n]) => `<td><div class="lbl" style="text-align:left">${n}</div><select data-wd="${k}" style="width:100%">${plOpts(d.weekdays[k] || '')}</select></td>`).join('');
+  $('dlNewList').innerHTML = plOpts('', 'pick playlist');
+  const dates = Object.keys(d.dates).sort();
+  $('dlDates').innerHTML = dates.map(k => `<tr><td class="mono">${k}</td><td>${esc(d.dates[k])}</td><td style="text-align:right"><button class="sm" onclick="delete SCH.day_lists.dates['${k}']; renderSchedule()">Remove</button></td></tr>`).join('') || '<tr><td class="hint">None</td></tr>';
+  $('rtT').innerHTML = '<tr><th>On</th><th>Name</th><th>Start</th><th>Stop</th><th>Days</th><th>Only on</th><th></th></tr>' + SCH.rec_times.map((e, i) => `<tr data-i="${i}">
+    <td><input type="checkbox" data-k="enabled" ${e.enabled ? 'checked' : ''}></td><td><input data-k="name" value="${esc(e.name)}" style="width:110px"></td>
+    <td><input type="time" data-k="start" value="${e.start}"></td><td><input type="time" data-k="end" value="${e.end}"></td>
+    <td class="days">${DAYS.map(([k, n]) => `<label><input type="checkbox" data-day="${k}" ${e.days.includes(k) ? 'checked' : ''}>${n}</label>`).join('')}</td>
+    <td><input type="date" data-k="date" value="${e.date || ''}"></td><td><button class="sm" onclick="readRec(); SCH.rec_times.splice(${i}, 1); renderSchedule()">Remove</button></td></tr>`).join('');
+}
+function readRec() {
+  document.querySelectorAll('#rtT tr[data-i]').forEach(tr => {
+    const e = SCH.rec_times[+tr.dataset.i];
+    tr.querySelectorAll('[data-k]').forEach(el => e[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value);
+    e.days = [...tr.querySelectorAll('[data-day]:checked')].map(x => x.dataset.day);
+  });
+}
+function addRecTime() { readRec(); SCH.rec_times.push({name:'', start:'20:00', end:'21:00', days:[], date:'', enabled:true}); renderSchedule(); }
+function addDate() { const d = $('dlNewDate').value, l = $('dlNewList').value; if (!d || !l) return; readDays(); SCH.day_lists.dates[d] = l; renderSchedule(); }
+function readDays() {
+  const d = SCH.day_lists; d.enabled = $('dlOn').checked; d.time = $('dlTime').value || '00:00';
+  document.querySelectorAll('[data-wd]').forEach(el => d.weekdays[el.dataset.wd] = el.value);
+}
+async function saveSchedule() {
+  readDays(); readRec();
+  const bad = SCH.rec_times.find(e => !e.start || !e.end || e.start === e.end);
+  if (bad) { say('Each recording needs a start and a stop time.'); return; }
+  SCH = await api('/api/schedule', {day_lists:SCH.day_lists, rec_times:SCH.rec_times}); dSch.close(); $('msg').textContent = 'Day schedule saved';
+}
+async function loadToday() {
+  if (!await ask(`Replace the playlist with today's playlist (${SCH.today_list || 'none'}) now?`)) return;
+  const r = await api('/api/schedule/load_today', {}); if (!r.ok) say(r.error); else { SCH = await api('/api/schedule'); renderSchedule(); poll(); }
+}
+
+// ---------------------------------------------------------------- import
+async function importPL() {
+  const f = $('impFile').files[0]; if (!f) { say('Pick an Excel or CSV file.'); return; }
+  const mode = $('impMode').value, save = $('impSave').value.trim();
+  if (mode === 'none' && !save) { say('Give the playlist a name to save it.'); return; }
+  if (mode === 'replace' && !await ask('Replace the playlist with the imported one?')) return;
+  const fd = new FormData(); fd.append('file', f); fd.append('mode', mode); fd.append('save_as', save);
+  const r = await fetch('/api/import', {method:'POST', body:fd}).then(x => x.json());
+  $('impMsg').textContent = r.error ? r.error : `Imported ${r.count} items` + (r.saved ? `, saved as "${r.saved}"` : '') + '.';
+  if (r.warnings?.length) $('impMsg').textContent += '\n' + r.warnings.slice(0, 12).join('\n') + (r.warnings.length > 12 ? `\n... ${r.warnings.length - 12} more` : '');
+  $('impFile').value = ''; openPM(); poll();
+}
+
+// ---------------------------------------------------------------- settings
+let SET = null, NORM = {}, UPD = {}, upHide = null, adminPw = '';
+async function openSettings(focus) {
+  SET = await api('/api/settings');
+  if (SET.security.lock_password_set) {
+    let err = '';
+    for (;;) {
+      const pw = await askPassword('Settings: lock password', err); if (pw == null) return;
+      const ok = await fetch('/api/admin_check', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({admin_password:pw})}).then(x => x.ok);
+      if (ok) { adminPw = pw; break; } err = 'Wrong password';
+    }
+  }
+  const f = SET.failover;
+  $('foOn').checked = f.enabled; $('foAfter').value = f.after; $('foMode').value = f.mode;
+  await loadMedia();
+  $('foFile').innerHTML = '<option value="">(pick a clip from the media folder)</option>' + media.map(m => `<option ${m.name === f.file ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  $('foFile').style.display = f.mode === 'clip' ? '' : 'none';
+  $('anOn').checked = SET.audio.normalize; $('anTarget').value = String(Math.round(SET.audio.target));
+  $('stName').value = SET.station_name || '';
+  const sc = SET.security;
+  $('pwLock').value = sc.lock_password_set ? '********' : ''; $('pwLockSt').textContent = sc.lock_password_set ? 'set' : 'not set';
+  $('pwRemote').value = sc.remote_password_set ? '********' : ''; $('pwRemoteSt').textContent = sc.remote_password_set ? 'set' : 'not set';
+  $('rmOn').checked = sc.remote_enabled; $('lockStart').checked = sc.lock_on_start;
+  $('upRepo').value = SET.update.repo; $('upToken').value = SET.update.token_set ? '********' : ''; $('upAuto').checked = SET.update.auto_check;
+  $('setVer').textContent = 'version ' + SET.version;
+  pollUpdate();
+  dSet.showModal();
+  if (focus === 'update') $('secUpdate').scrollIntoView();
+}
+async function saveSettings() {
+  const body = {
+    admin_password: adminPw,
+    failover: {enabled:$('foOn').checked, after:+$('foAfter').value || 3, mode:$('foMode').value, file:$('foFile').value},
+    audio: {normalize:$('anOn').checked, target:+$('anTarget').value},
+    station_name: $('stName').value.trim(),
+    security: {lock_password:$('pwLock').value, remote_password:$('pwRemote').value, remote_enabled:$('rmOn').checked, lock_on_start:$('lockStart').checked},
+    update: {repo:$('upRepo').value.trim(), token:$('upToken').value, auto_check:$('upAuto').checked},
+  };
+  if (body.failover.mode === 'clip' && !body.failover.file) { say('Pick the filler clip.'); return; }
+  const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (!r.ok) { say('Settings were not saved: wrong password'); return; }
+  SET = await r.json(); NORM = SET.audio; if ($('pwLock').value !== '********') adminPw = $('pwLock').value;
+  dSet.close(); $('msg').textContent = 'Settings saved';
+}
+async function pollUpdate(r) {
+  try { UPD = r || await api('/api/update'); } catch (e) { return; }
+  const st = UPD.state === 'downloading' ? `Downloading ${UPD.progress}%` : UPD.state === 'ready' ? `Version ${UPD.latest} downloaded, ready to install`
+    : UPD.state === 'checking' ? 'Checking...' : UPD.state === 'installing' ? 'Installing, Playout restarts by itself...'
+    : UPD.available ? `Version ${UPD.latest} is available` : UPD.error ? UPD.error : UPD.checked ? 'Up to date' : 'Not checked yet';
+  if (dSet.open) {
+    $('upCur').textContent = UPD.current; $('upSt').textContent = st; $('upSt').style.color = UPD.error && !UPD.available ? 'var(--orange)' : '';
+    $('upDl').style.display = UPD.available && UPD.state !== 'ready' && UPD.state !== 'downloading' ? '' : 'none';
+    $('upInst').style.display = UPD.state === 'ready' ? '' : 'none';
+  }
+  const show = UPD.available && upHide !== UPD.latest && !locked;
+  $('upWarn').classList.toggle('show', !!show);
+  $('upText').textContent = `Playout ${UPD.latest} is available (you have ${UPD.current}).`;
+}
+const upCheck = async () => { $('upSt').textContent = 'Checking...'; pollUpdate(await api('/api/update/check', {})); };
+const upDownload = async () => pollUpdate(await api('/api/update/download', {}));
+async function upInstall() {
+  const onAir = S.state === 'PLAYING' || streamInfo?.destinations.some(d => d.enabled) || REC.recording;
+  if (!await ask((onAir ? 'WARNING: Playout is on air / streaming / recording. Installing stops the output for about a minute.\n\n' : '') + `Install Playout ${UPD.latest} now? Playout closes, updates and starts again.`)) return;
+  const r = await api('/api/update/install', {}); if (!r.ok) say(r.error); else pollUpdate();
+}
+
+// ---------------------------------------------------------------- phone remote
+async function openRemote() {
+  const r = await api('/api/remote_info');
+  $('rmBody').innerHTML = !r.enabled ? '<p>Phone remote is turned off. Turn it on in <b>Settings &gt; Passwords</b>.</p>' :
+    `<p>On a phone or tablet on the <b>same network / Wi-Fi</b>, scan the code or open:</p>` +
+    r.urls.map(u => `<div style="display:flex; gap:14px; align-items:center; margin:10px 0"><img class="qr" src="/api/qr.png?t=${encodeURIComponent(u)}" alt="QR"><div><div class="mono" style="font-size:16px; user-select:text">${esc(u)}</div>
+      <div class="hint" style="margin-top:6px">Full control screen: ${esc(u.replace('/remote', '/'))}</div></div></div>`).join('') +
+    (r.urls.length ? '' : '<p class="hint">No network address found. Is this PC on a network?</p>') +
+    `<p class="hint">${r.password_set ? 'The phone asks for the remote password once.' : '<b style="color:var(--orange)">No remote password set:</b> anyone on the network can control Playout. Set one in Settings &gt; Passwords.'}
+     Stream Deck / Companion: http://${esc(r.host)}:${location.port || 8080}/trigger/next${r.password_set ? '?key=PASSWORD' : ''}</p>`;
+  dRemote.showModal();
+}
 
 // program sound on this PC (Windows default output unless a device is picked)
 let AO = {};
@@ -1066,6 +1432,8 @@ pollSys(); setInterval(pollSys, 2000);
 pollRec(); setInterval(() => pollRec(), 1000);
 pollAO(); setInterval(() => pollAO(), 5000);
 pollCG(); setInterval(pollCG, 500);
+pollUpdate(); setInterval(() => pollUpdate(), 3000);
+api('/api/settings').then(r => { NORM = r.audio; }).catch(() => {});
 </script>
 </body>
 </html>

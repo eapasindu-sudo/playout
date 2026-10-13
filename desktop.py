@@ -3,12 +3,16 @@
 Playout.exe runs this. The web server still listens on the network, so a tablet or
 second PC can open http://PLAYOUT-PC:8080 as a remote control.
 
-    Playout.exe              normal start, opens the Playout window
+    Playout.exe              normal start: a small launcher starts the Playout window and
+                             starts it again if it ever crashes or freezes (it then carries on
+                             with the item that was on air)
+    Playout.exe --app        the Playout window itself, without the launcher
     Playout.exe --headless   no window (used by the build test)
     Playout.exe --composer   CG Composer (separate CG preparation window)
 """
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -47,10 +51,36 @@ def wait_for_server(port, timeout=20):
     return False
 
 
+EXIT_ALREADY_RUNNING = 10      # launcher: do not restart for these
+EXIT_START_FAILED = 11
+
+
+def supervise():
+    """Launcher: runs the Playout window as a child process and restarts it after a crash."""
+    args = [sys.executable, "--app"] + [a for a in sys.argv[1:] if a != "--app"]
+    recent = []
+    while True:
+        started = time.time()
+        code = subprocess.call(args)
+        if code in (0, EXIT_ALREADY_RUNNING, EXIT_START_FAILED):
+            return code
+        now = time.time()
+        print(f"launcher: Playout stopped unexpectedly (exit code {code}) after {now - started:.0f}s - restarting")
+        recent = [t for t in recent if now - t < 600] + [now]
+        if len(recent) > 5:
+            message_box("Playout", "Playout stopped unexpectedly 6 times in 10 minutes and was not started again.\n\n"
+                                   "See Documents\\Playout\\logs\\playout.log")
+            return code
+        time.sleep(2)
+
+
 def main():
     if "--composer" in sys.argv:
         import composer
         return composer.main()
+
+    if paths.FROZEN and not ({"--app", "--headless", "--no-launcher"} & set(sys.argv)):
+        return supervise()
 
     import app as server
 
@@ -58,14 +88,21 @@ def main():
     if port_in_use(port):
         message_box("Playout", f"Playout is already running (port {port} is in use).\n\n"
                                "Close the other Playout window first.")
-        return 1
+        return EXIT_ALREADY_RUNNING
 
     server.start_backend()
     threading.Thread(target=server.serve, kwargs={"port": port}, daemon=True, name="web").start()
     if not wait_for_server(port):
         message_box("Playout", "The control screen did not start. See Documents\\Playout\\logs\\playout.log")
         server.shutdown()
-        return 1
+        return EXIT_START_FAILED
+
+    def install_update():
+        """The update installer is running: close cleanly (exit 0, so the launcher does not restart us)."""
+        server.shutdown()
+        os._exit(0)
+
+    server.updater.on_install = install_update
     print(f"Control screen on http://localhost:{port}")
 
     if "--headless" in sys.argv:

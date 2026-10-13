@@ -60,6 +60,10 @@ class Recorder:
                 "folder": self.folder, "elapsed": round(up), "size_mb": round(size / 1048576, 1),
                 "dropped": self.dropped, "error": self.error}
 
+    @property
+    def recording(self):
+        return self._on
+
     # ---- control -------------------------------------------------------
     def start(self):
         if self._on:

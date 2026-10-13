@@ -132,9 +132,61 @@ Stream keys are saved in `data/state.json` on this PC only.
 CPU free; if the PC does not have it, Playout records with the CPU instead and says so. The file is
 written in fragments, so it stays playable even if the PC loses power while recording.
 
+## Failover and auto restart
+
+**Settings > Failover**: when the vMix (or a live card's) input is lost for a few seconds, Playout puts
+colour bars, black or a filler clip ("We'll be right back", looped) on air instead of a frozen picture, shows
+a red warning, writes it to the air log, and goes back to live by itself when the input returns.
+
+Playout.exe runs through a small launcher. If Playout crashes or its output freezes for 15 seconds, it is
+started again within a few seconds and carries on with the item that was on air, at the point it had
+reached. The installer can also start Playout when Windows starts.
+
+## Commercials: client, trim, volume, CGs
+
+**Edit** on a commercial sets its **client** (advertiser, for the ad report), **trim** (in / out point, with
+pictures of both frames), extra **volume**, and **CGs** that go on air only with that commercial (logo, bug,
+lower third), like the CGs on a live card.
+
+**Settings > Audio level > Normalize** plays every clip at the same loudness (default -23 LUFS, EBU).
+Each clip is measured once in the background (FFmpeg EBU R128); files are not changed.
+
+## Ad report
+
+**Functions > Ad Report**: commercials aired in a date range, for one client or all, with plays and total air
+time per commercial and the full spot list. **PDF**, **Excel** or **CSV**; on the playout PC the file is
+saved in `Documents\Playout\reports` and opened. The station name on the report is set in Settings.
+
+## Excel playlists and day schedule
+
+**Playlist Manager > Import from Excel / CSV**: one row per item with columns Time, File, Name, Client, Type
+(clip / live), Duration, In, Out (only File is needed; there is a template). Replace the playlist, add to it,
+or only save it under a name.
+
+**Functions > Day Schedule**: pick a saved playlist for each weekday and for special dates; Playout loads it
+by itself at the chosen time (the on-air item finishes first). **Scheduled recording** starts and stops
+recordings at set times, every day or on chosen days / a date.
+
+## Phone remote and passwords
+
+**Functions > Phone Remote** shows the address and a QR code. On a phone on the same Wi-Fi it opens a
+simple remote: preview, Play / Pause / Stop / Next / Stinger / TAKE LIVE, playlist Take, manual CG IN / OUT,
+REC, and the stream status with the Facebook countdown.
+
+**Settings > Passwords**: a **remote password** (phones and other PCs log in once; this PC never asks) and a
+**lock password** (needed to Unlock the screen and to open Settings; the lock survives a restart, and
+Playout can start locked). Stream Deck / Companion triggers then need `?key=<remote password>`.
+
+## Updates
+
+Every build publishes a GitHub release. Playout checks for a newer one every 6 hours and shows
+"Update available"; **Settings > Updates > Download** then **Install & restart** updates it (it never
+installs by itself). The repository is private, so put a GitHub access token with read access to it in
+Settings > Updates (or make the repository public).
+
 ## Install (Windows)
 
-1. Download **Playout-Setup.exe** (GitHub > Actions > latest "Build Playout installer" run > Artifacts).
+1. Download **Playout-Setup.exe** (GitHub > Releases > latest, or Actions > latest "Build Playout installer" run > Artifacts).
 2. Run it and click through the setup. It installs to Program Files, adds Start menu and desktop
    shortcuts, and allows Playout through Windows Firewall (needed for NDI).
 3. Start **Playout** from the desktop shortcut. It opens in its own window, with no browser.
@@ -190,7 +242,7 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `streamer.py` | H.264/AAC encoder and the 3 stream destinations |
 | `ndi_io.py` | NDI input (frame sync) and output |
 | `media.py` | clip decoding and thumbnails (FFmpeg via PyAV) |
-| `scheduler.py` | fixed-time items |
+| `scheduler.py` | fixed-time items, day playlists, scheduled recording |
 | `cg.py` | CG layers (PNG / JPEG / MOV with alpha), manual and live-card CGs, stingers |
 | `cgfx.py` | colour / luma key, crop, zoom, rotate (FFmpeg filter graph) |
 | `cgedit.py` | CG setup previews and `.cgp` presets (shared with CG Composer) |
@@ -198,6 +250,11 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `web/cgedit.html` | CG setup / CG Composer screen |
 | `web/output.html` | full screen output page |
 | `capture.py` | USB / HDMI capture devices and test bars for live cards |
+| `loudness.py` | audio normalize (EBU R128 measurement) |
+| `report.py` | ad report: PDF / Excel / CSV |
+| `importer.py` | playlist import from Excel / CSV |
+| `updater.py` | update check, download and install |
+| `web/remote.html` | phone remote |
 | `audio_out.py` | program sound on the PC's speakers |
 | `recorder.py` | program recording to MP4 |
 | `system.py` | CPU / GPU / RAM usage |

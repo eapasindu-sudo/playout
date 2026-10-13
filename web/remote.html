@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c0d0f">
+<title>Playout Remote</title>
+<style>
+  :root { --bg:#0c0d0f; --panel:#1a1c1f; --panel2:#232529; --line:#33363b; --text:#e9eaec; --dim:#8d9299;
+          --green:#2fbf3a; --red:#e0261b; --orange:#ff8a1c; --blue:#3b82f6; --yellow:#e8c21e; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.35 "Segoe UI", system-ui, sans-serif; padding:10px 16px 40px; }
+  .mono { font-family: Consolas, ui-monospace, monospace; }
+  .top { display:flex; align-items:center; gap:10px; }
+  .clock { font:600 22px Consolas, monospace; }
+  .tally { margin-left:auto; padding:6px 12px; border-radius:4px; font-weight:800; background:var(--green); color:#04140a; }
+  .tally.air { background:var(--red); color:#fff; } .tally.pause { background:var(--yellow); color:#000; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; margin-top:10px; }
+  .screen { width:100%; aspect-ratio:16/9; background:#000; border-radius:4px; display:block; object-fit:contain; }
+  .name { font-size:18px; font-weight:700; margin-top:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .counters { display:flex; justify-content:space-between; margin-top:6px; color:var(--dim); font-size:13px; }
+  .counters b { color:var(--text); font:600 18px Consolas, monospace; display:block; }
+  .counters .rem b { color:var(--orange); }
+  .bar { height:6px; background:#050506; border-radius:3px; overflow:hidden; margin-top:8px; }
+  .bar > div { height:100%; background:var(--orange); width:0; }
+  .grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin-top:10px; }
+  button { font:inherit; color:var(--text); background:linear-gradient(#45484e, #2f3236); border:1px solid #0006; border-radius:6px; padding:14px 6px; font-weight:700; touch-action:manipulation; }
+  button:active { filter:brightness(.8); }
+  button.red { background:linear-gradient(#f0362a, #b5170e); } button.blue { background:linear-gradient(#4b8ff7, #2462c9); }
+  button.green { background:linear-gradient(#36c843, #1f8f29); } button.on { box-shadow: inset 0 -4px 0 var(--green); }
+  button.sm { padding:8px 12px; font-size:13px; }
+  .big { grid-column: span 3; font-size:18px; padding:16px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 6px; }
+  .row { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid #26292d; border-left:4px solid transparent; padding-left:6px; }
+  .row:first-of-type { border-top:0; }
+  .row .t { flex:1; min-width:0; } .row .t div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .s { color:var(--dim); font-size:12px; }
+  .row.onair { border-left-color:var(--red); background:#4a1410; } .row.next { border-left-color:var(--green); } .row.cued { border-left-color:var(--blue); }
+  .row.played .t { opacity:.45; } .row.live .t > div:first-child::before { content:"LIVE "; color:#c084fc; font-weight:700; font-size:12px; }
+  .warn { display:none; margin-top:10px; padding:10px; border-radius:6px; font-weight:700; background:var(--red); color:#fff; }
+  .warn.show { display:block; }
+  .msg { color:var(--dim); font-size:13px; margin-top:8px; min-height:18px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:#555; margin-right:6px; }
+  .dot.live { background:var(--green); } .dot.connecting, .dot.reconnecting { background:var(--yellow); } .dot.error { background:var(--red); }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; width:min(360px, 92vw); }
+  dialog::backdrop { background:#000a; }
+  dialog .b { display:flex; gap:8px; margin-top:14px; } dialog .b button { flex:1; }
+</style>
+</head>
+<body>
+<div class="top"><b style="font-size:20px">Playout</b><span class="clock" id="clock">--:--:--</span><span class="tally" id="tally">LIVE</span></div>
+<div class="warn" id="foWarn">&#9888; LIVE INPUT LOST - filler on air</div>
+<div class="warn" id="fbWarn" style="background:#7a3d08"></div>
+
+<div class="card">
+  <img class="screen" id="pv" alt="Program">
+  <div class="name" id="name">LIVE</div>
+  <div class="counters"><div>Position<b id="pos">--:--:--</b></div><div class="rem">Remain<b id="rem">--:--:--</b></div><div>Playlist<b id="plr">--:--:--</b></div></div>
+  <div class="bar"><div id="prog"></div></div>
+  <div class="grid">
+    <button onclick="T('play')">&#9654; Play</button>
+    <button onclick="T('pause')">&#10074;&#10074; Pause</button>
+    <button onclick="confirmT('stop', 'Stop the playlist and put colour bars on air?')">&#9632; Stop</button>
+    <button class="blue" onclick="T('next')">Next &#9654;&#9654;</button>
+    <button id="bSting" onclick="T('stinger')">Stinger</button>
+    <button id="bAuto" onclick="mode()">Auto</button>
+    <button class="red big" onclick="confirmT('live', 'Stop the playlist and TAKE LIVE?')">TAKE LIVE</button>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div class="card"><h2>Playlist</h2><div id="pl"></div></div>
+<div class="card"><h2 style="display:flex">Manual CG <span style="flex:1"></span><button class="sm red" onclick="api('/api/cg/all_out', {}).then(pollCG)">ALL OUT</button></h2><div id="cg"></div></div>
+<div class="card"><h2>Recording &amp; streams</h2>
+  <div style="display:flex; gap:8px; align-items:center"><button class="sm" id="bRec" onclick="toggleRec()">&#9679; REC</button><span id="recSt" class="mono" style="font-size:13px"></span></div>
+  <div id="dests" style="margin-top:8px"></div>
+</div>
+
+<dialog id="dAsk"><div id="askText"></div><div class="b"><button onclick="dAsk.close('no')">No</button><button class="blue" onclick="dAsk.close('yes')">Yes</button></div></dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let S = {}, REC = {};
+async function api(url, body) {
+  const opt = body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
+  const r = await fetch(url, opt);
+  if (r.status === 401) { location.href = '/login?next=/remote'; throw new Error('login'); }
+  return r.headers.get('content-type')?.includes('json') ? r.json() : r.text();
+}
+const T = (a, b) => api('/api/transport/' + a, b || {}).then(poll);
+function ask(text) { return new Promise(res => { $('askText').textContent = text; dAsk.returnValue = ''; dAsk.onclose = () => res(dAsk.returnValue === 'yes'); dAsk.showModal(); }); }
+async function confirmT(a, text) { if (await ask(text)) T(a); }
+const mode = () => api('/api/modes', {auto: !S.auto}).then(poll);
+function hms(sec) { if (sec == null || isNaN(sec)) return '--:--:--'; sec = Math.max(0, Math.floor(sec)); const p = n => String(n).padStart(2, '0'); return `${p(Math.floor(sec / 3600))}:${p(Math.floor(sec / 60) % 60)}:${p(sec % 60)}`; }
+const tod = ts => ts == null ? '' : new Date(ts * 1000).toTimeString().slice(0, 5);
+
+let shownVersion = -1;
+async function poll() {
+  try { S = await api('/api/state'); } catch (e) { $('clock').textContent = 'OFFLINE'; return; }
+  $('clock').textContent = new Date(S.now * 1000).toTimeString().slice(0, 8);
+  const it = S.on_air, clip = it && it.type === 'clip';
+  const t = $('tally');
+  if (S.failover?.active) { t.textContent = 'FILLER'; t.className = 'tally pause'; }
+  else if (S.state === 'PAUSED') { t.textContent = 'PAUSED'; t.className = 'tally pause'; }
+  else if (clip) { t.textContent = 'ON-AIR'; t.className = 'tally air'; }
+  else if (!it && S.idle === 'bars') { t.textContent = 'BARS'; t.className = 'tally pause'; }
+  else { t.textContent = 'LIVE'; t.className = 'tally'; }
+  $('name').textContent = it ? it.name : S.idle === 'bars' ? 'COLOUR BARS' : 'LIVE';
+  $('pos').textContent = it ? hms(S.position) : '--:--:--';
+  $('rem').textContent = it && it.duration ? hms(S.remaining) : '--:--:--';
+  $('plr').textContent = S.playlist_remaining != null ? hms(S.playlist_remaining) : '--:--:--';
+  $('prog').style.width = it && it.duration ? Math.min(100, 100 * S.position / it.duration) + '%' : '0';
+  $('foWarn').classList.toggle('show', !!S.failover?.active);
+  $('bAuto').textContent = S.auto ? 'Automatic' : 'Manual'; $('bAuto').classList.toggle('on', S.auto);
+  $('bSting').disabled = !S.stinger?.file; $('bSting').classList.toggle('red', !!S.stinger?.active);
+  $('msg').textContent = S.message || '';
+  if (S.version !== shownVersion) { shownVersion = S.version; renderPL(); }
+  for (const r of S.playlist) {
+    const el = $('r_' + r.id); if (!el) continue;
+    el.className = 'row' + (r.type === 'live' ? ' live' : '') + (r.status === 'ON AIR' ? ' onair' : r.status === 'NEXT' ? ' next' : r.status === 'CUED' ? ' cued' : r.played ? ' played' : '');
+    el.querySelector('.s').textContent = (r.status || (r.played ? 'played' : '')) + (r.start ? ' ' + tod(r.start) : '') + (r.duration ? ' - ' + hms(r.duration).slice(3) : '');
+  }
+}
+function renderPL() {
+  $('pl').innerHTML = S.playlist.map(r => `<div class="row" id="r_${r.id}"><div class="t"><div>${esc(r.name)}</div><div class="s"></div></div>
+    <button class="sm" onclick="take('${r.id}')">Take</button></div>`).join('') || '<div class="msg">Playlist is empty</div>';
+}
+async function take(id) { const r = S.playlist.find(x => x.id === id); if (r && await ask(`Put "${r.name}" on air now?`)) T('play', {id}); }
+
+async function pollCG() {
+  let r; try { r = await api('/api/cg/manual'); } catch (e) { return; }
+  $('cg').innerHTML = r.list.map(c => { const st = r.manual_on[c.id] || ''; const on = st === 'on' || st === 'in';
+    return `<div class="row ${on ? 'onair' : ''}"><div class="t"><div>${esc(c.name || c.file)}</div><div class="s">${on ? 'ON AIR' : st || 'off'}</div></div>
+      <button class="sm ${on ? 'red' : ''}" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button></div>`; }).join('') || '<div class="msg">No manual CGs</div>';
+}
+const cgTake = (id, a) => api(`/api/cg/manual/${id}/${a}`, {}).then(pollCG);
+
+async function pollRec() {
+  try { REC = await api('/api/record'); } catch (e) { return; }
+  $('bRec').innerHTML = REC.recording ? '&#9632; STOP REC' : '&#9679; REC'; $('bRec').classList.toggle('red', REC.recording);
+  $('recSt').textContent = REC.recording ? `${hms(REC.elapsed)}  ${REC.size_mb} MB` : (REC.error || 'not recording');
+}
+async function toggleRec() { if (await ask(REC.recording ? 'Stop recording?' : 'Start recording?')) { await api('/api/record/' + (REC.recording ? 'stop' : 'start'), {}); pollRec(); } }
+async function pollStream() {
+  let s; try { s = await api('/api/stream'); } catch (e) { return; }
+  let warn = '';
+  $('dests').innerHTML = s.destinations.filter(d => d.url).map(d => {
+    const st = d.enabled ? d.status : 'off';
+    let fb = '';
+    if (/facebook|fbcdn/i.test(d.url) && d.status === 'live' && d.uptime) {
+      const left = 8 * 3600 - d.uptime; fb = ` - FB limit in ${hms(left)}`;
+      if (left <= 1800) warn = `&#9888; Facebook 8-hour limit: ${hms(left)} left on ${esc(d.name)}`;
+    }
+    return `<div style="padding:4px 0"><span class="dot ${st}"></span>${esc(d.name)} <span class="s" style="color:var(--dim); font-size:12px">${st === 'live' ? 'LIVE ' + hms(d.uptime) + fb : st}</span></div>`;
+  }).join('') || '<div class="msg">No stream destinations set up</div>';
+  $('fbWarn').innerHTML = warn; $('fbWarn').classList.toggle('show', !!warn);
+}
+
+const pv = $('pv');
+function nextPic() { pv.src = '/api/preview.jpg?' + Date.now(); }
+pv.onload = () => setTimeout(nextPic, 300);
+pv.onerror = () => setTimeout(nextPic, 2000);
+nextPic();
+poll(); setInterval(poll, 500);
+pollCG(); setInterval(pollCG, 1500);
+pollRec(); setInterval(pollRec, 2000);
+pollStream(); setInterval(pollStream, 3000);
+</script>
+</body>
+</html>

@@ -5,15 +5,21 @@ Playlist item (dict):
     type      "clip" | "live"
     name      display name
     file      clip file name in the media folder (clip only)
-    duration  seconds; for clips filled from the file, for live cards optional
+    duration  seconds; for clips filled from the file (after trimming), for live cards optional
               (None = stay live until the operator presses Next)
     fixed     "HH:MM:SS" or "" - item jumps on air at that time of day
+    client    advertiser name (clips), for the ad report
+    in, out   clip trim points in seconds (0 / empty = start / end of the file)
+    gain_db   extra volume for this clip
+    cgs       CGs (logo, bug, lower third) that go on air with this item
 """
 import csv
 import datetime as dt
 import os
 import threading
+import logging
 import time
+import traceback
 import uuid
 from fractions import Fraction
 
@@ -36,8 +42,15 @@ def new_id():
     return uuid.uuid4().hex[:8]
 
 
+def _num(v):
+    try:
+        return max(0.0, float(v or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class AsRunLog:
-    FIELDS = ["date", "start", "end", "type", "item", "planned_sec", "played_sec", "status"]
+    FIELDS = ["date", "start", "end", "type", "item", "planned_sec", "played_sec", "status", "client", "file"]
 
     def __init__(self, folder):
         self.folder = folder
@@ -47,16 +60,34 @@ class AsRunLog:
     def path_for(self, day):
         return os.path.join(self.folder, f"asrun-{day:%Y-%m-%d}.csv")
 
-    def write(self, kind, name, started, ended, planned, status):
+    def _upgrade(self, path):
+        """Logs from older versions have fewer columns: rewrite them with the new header."""
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        if not rows or rows[0] == self.FIELDS:
+            return
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(self.FIELDS)
+            for r in rows[1:]:
+                w.writerow((r + [""] * len(self.FIELDS))[:len(self.FIELDS)])
+
+    def write(self, kind, name, started, ended, planned, status, client="", file=""):
         path = self.path_for(started.date())
         with self._lock:
             new = not os.path.exists(path)
+            if not new:
+                try:
+                    self._upgrade(path)
+                except Exception:
+                    pass
             with open(path, "a", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
                 if new:
                     w.writerow(self.FIELDS)
                 w.writerow([f"{started:%Y-%m-%d}", f"{started:%H:%M:%S}", f"{ended:%H:%M:%S}", kind, name,
-                            f"{planned:.1f}" if planned else "", f"{(ended - started).total_seconds():.1f}", status])
+                            f"{planned:.1f}" if planned else "", f"{(ended - started).total_seconds():.1f}", status,
+                            client or "", file or ""])
 
     def read(self, day):
         path = self.path_for(day)
@@ -108,8 +139,36 @@ class Engine:
         self.stinger = {"file": "", "cut": 0.0, "auto": False}   # cut 0 = half of the stinger's length
         self._pending = None         # [frames left, action, item id]: switch at the stinger's cut point
         self._stinger_item = None    # on-air item whose end already got its stinger
+        self.loudness = None         # Loudness: audio normalize gains
+        # failover: when the live input is lost, put a filler on air instead of a frozen / black picture
+        self.failover = {"enabled": True, "after": 3.0, "mode": "bars", "file": ""}
+        self.failover_active = False
+        self._lost_since = None
+        self._fail_started = None
+        self._filler = None          # ClipPlayer for the filler clip (looped)
+        self._fill_audio = None
+        self._fill_last = None
+        self._fo_checked = False
+        self.heartbeat = time.monotonic()   # output loop alive (watchdog)
+        self.loop_errors = 0
         self._running = False
         self._thread = None
+
+    def set_failover(self, enabled=None, after=None, mode=None, file=None):
+        with self._lock:
+            f = self.failover
+            if enabled is not None:
+                f["enabled"] = bool(enabled)
+            if after not in (None, ""):
+                f["after"] = max(0.5, min(60.0, float(after)))
+            if mode in ("bars", "black", "clip"):
+                f["mode"] = mode
+            if file is not None:
+                f["file"] = file
+                if self._filler:
+                    self._filler.close()
+                    self._filler = None
+            return dict(f)
 
     # -- playlist editing ----------------------------------------------
     def set_playlist(self, items):
@@ -120,8 +179,24 @@ class Engine:
                 it["id"] = it.get("id") or new_id()
                 it["fixed"] = it.get("fixed") or ""
                 if it.get("type") == "clip" and it.get("file"):
-                    it["duration"] = probe(os.path.join(self.media_dir, it["file"]))
+                    path = os.path.join(self.media_dir, it["file"])
+                    full = probe(path)
+                    it["file_duration"] = full
+                    t_in = _num(it.get("in"))
+                    t_out = _num(it.get("out"))
+                    if full and t_out and t_out >= full:
+                        t_out = 0.0
+                    if full and t_in >= full:
+                        t_in = 0.0
+                    if t_out and t_out <= t_in:
+                        t_out = 0.0
+                    it["in"], it["out"] = t_in, t_out
+                    it["duration"] = ((t_out or full) - t_in) if full else None
+                    it["gain_db"] = _num(it.get("gain_db"))
+                    it["client"] = (it.get("client") or "").strip()
                     it["name"] = it.get("name") or os.path.splitext(it["file"])[0]
+                    if self.loudness is not None and full:
+                        self.loudness.request(path)
                 elif it.get("type") == "live":
                     d = it.get("duration")
                     it["duration"] = float(d) if d not in (None, "", 0, "0") else None
@@ -308,11 +383,43 @@ class Engine:
                 self.message = f"Cannot open {key}: {e}"
 
     # -- internals (lock held) ------------------------------------------
-    def _open(self, item):
+    def _open(self, item, offset=0.0):
         path = os.path.join(self.media_dir, item.get("file") or "")
         if not os.path.isfile(path):
             return None
-        return ClipPlayer(path, self.width, self.height, self.fps)
+        db = _num(item.get("gain_db"))
+        if self.loudness is not None:
+            db += self.loudness.gain_db(path)
+        return ClipPlayer(path, self.width, self.height, self.fps,
+                          start=_num(item.get("in")) + max(0.0, offset), end=_num(item.get("out")) or None,
+                          gain=10 ** (db / 20))
+
+    def resume(self, item_id, offset):
+        """After a restart: put item_id back on air, offset seconds in (clips continue where they were)."""
+        with self._lock:
+            item = self._item(item_id)
+            if item is None:
+                return False
+            if item["type"] == "clip" and item.get("duration") and offset >= item["duration"] - 1:
+                self.on_air = item_id
+                self._item_done()
+                return True
+            if self.preload:
+                self.preload[1].close()
+                self.preload = None
+            if item["type"] == "clip":
+                p = self._open(item, offset)
+                if p is None:
+                    return False
+                self.preload = (item_id, p)
+            self._start(item_id)
+            if item["type"] == "live":
+                self.item_ticks = int(offset * float(self.fps))
+            elif self.player is not None:
+                self.player.tick = 0
+                self.item_ticks = int(offset * float(self.fps))
+            self.message = f"Resumed after restart: {item['name']}"
+            return True
 
     def _start(self, item_id, depth=0):
         item = self._item(item_id)
@@ -326,7 +433,8 @@ class Engine:
             player = self._open(item)
             if player is None:
                 now = dt.datetime.now()
-                self.asrun.write("clip", item["name"], now, now, item.get("duration"), "missing file")
+                self.asrun.write("clip", item["name"], now, now, item.get("duration"), "missing file",
+                                 item.get("client", ""), item.get("file", ""))
                 self.message = f"Missing file: {item.get('file')}"
                 self.on_air = item_id
                 if depth < len(self.playlist):
@@ -338,7 +446,7 @@ class Engine:
         self.player = player
         self.on_air = item_id
         if self.cg is not None:
-            if item["type"] == "live":
+            if item.get("cgs"):
                 self.cg.start_card(item_id, item.get("cgs"))
             else:
                 self.cg.stop_card()
@@ -373,9 +481,9 @@ class Engine:
             if self.player and self.player.error:
                 st = "error: " + self.player.error
             self.asrun.write(item["type"], item["name"], self.item_started, dt.datetime.now(),
-                             item.get("duration"), st)
+                             item.get("duration"), st, item.get("client", ""), item.get("file", ""))
         self.played.add(self.on_air)
-        if self.cg is not None and item.get("type") == "live":
+        if self.cg is not None and item.get("cgs"):
             self.cg.stop_card()
         if self.player:
             self.player.close()
@@ -430,102 +538,177 @@ class Engine:
         return int(round((k + 1) * SAMPLE_RATE / f)) - int(round(k * SAMPLE_RATE / f))
 
     def _run(self):
-        k = 0
-        last_version = -1
+        self._k = 0
+        self._last_version = -1
         while self._running:
-            n = self._samples_for(k)
-            k += 1
-            live_v, live_a = self.live.grab(n, self._main_wanted)   # always pulled, keeps the input in sync
-            video = audio = None
-            source = "LIVE"
-            pend = self._pending
-            if pend:
-                pend[0] -= 1
-                if pend[0] <= 0:
-                    self._pending = None
-                    self.next() if pend[1] == "next" else self.play(pend[2])
-            with self._lock:
-                if self.version != last_version:
-                    last_version = self.version
-                    self._sync_inputs()
-                    if self.on_air:
-                        self._refresh_preload()
-                item = self._item(self.on_air)
-                if self.on_air and item is None and self.player is None:
-                    self._stop_to_live()   # the on-air live card was deleted
-                    self._changed()
-                if self.state == "PLAYING" and self.on_air:
-                    self._auto_stinger(item)
-                    if self.player is not None and self.player.finished():
-                        self._item_done()   # starts the next item in this same frame
-                        item = self._item(self.on_air)
-                    if self.state != "PLAYING" or not self.on_air:
-                        pass
-                    elif self.player is not None:
-                        p = self.player
-                        if p.ready():
-                            if self.item_started is None:
-                                self.item_started = dt.datetime.now()
-                            video, audio = p.next_frame(n)
-                            self.item_ticks += 1
-                            source = "CLIP:" + self.on_air
-                            if video is None:
-                                video = self.last_frame
-                            self.last_clip_frame = video
-                        elif self.last_source and self.last_source.startswith("CLIP"):
-                            # next clip still opening: hold the last picture, never flash live
-                            video, source = self.last_frame, self.last_source
-                            audio = np.zeros((CHANNELS, n), np.float32)
-                    else:  # live card
+            self.heartbeat = time.monotonic()
+            try:
+                self._tick()
+            except Exception:
+                # never let one bad frame stop the output: log it, send black and carry on
+                self.loop_errors += 1
+                if self.loop_errors <= 20 or self.loop_errors % 500 == 0:
+                    logging.error("output loop error:\n%s", traceback.format_exc())
+                    print("output loop error:", traceback.format_exc())
+                self.message = "Output error (see log) - still running"
+                try:
+                    self.output.send(self.black, np.zeros((CHANNELS, self._samples_for(0)), np.float32))
+                except Exception:
+                    time.sleep(float(1 / self.fps))
+
+    def _tick(self):
+        n = self._samples_for(self._k)
+        self._k += 1
+        self._fo_checked = False
+        live_v, live_a = self.live.grab(n, self._main_wanted)   # always pulled, keeps the input in sync
+        video = audio = None
+        source = "LIVE"
+        pend = self._pending
+        if pend:
+            pend[0] -= 1
+            if pend[0] <= 0:
+                self._pending = None
+                self.next() if pend[1] == "next" else self.play(pend[2])
+        with self._lock:
+            if self.version != self._last_version:
+                self._last_version = self.version
+                self._sync_inputs()
+                if self.on_air:
+                    self._refresh_preload()
+            item = self._item(self.on_air)
+            if self.on_air and item is None and self.player is None:
+                self._stop_to_live()   # the on-air live card was deleted
+                self._changed()
+            if self.state == "PLAYING" and self.on_air:
+                self._auto_stinger(item)
+                if self.player is not None and self.player.finished():
+                    self._item_done()   # starts the next item in this same frame
+                    item = self._item(self.on_air)
+                if self.state != "PLAYING" or not self.on_air:
+                    pass
+                elif self.player is not None:
+                    p = self.player
+                    if p.ready():
                         if self.item_started is None:
                             self.item_started = dt.datetime.now()
+                        video, audio = p.next_frame(n)
                         self.item_ticks += 1
-                        key = (item or {}).get("source")
-                        inp = self.inputs.get(key) if key else None
-                        if inp is not None:
-                            v, a = inp.grab(n)
+                        source = "CLIP:" + self.on_air
+                        if video is None:
+                            video = self.last_frame
+                        self.last_clip_frame = video
+                    elif self.last_source and self.last_source.startswith("CLIP"):
+                        # next clip still opening: hold the last picture, never flash live
+                        video, source = self.last_frame, self.last_source
+                        audio = np.zeros((CHANNELS, n), np.float32)
+                else:  # live card
+                    if self.item_started is None:
+                        self.item_started = dt.datetime.now()
+                    self.item_ticks += 1
+                    key = (item or {}).get("source")
+                    inp = self.inputs.get(key) if key else None
+                    if inp is not None:
+                        v, a = inp.grab(n)
+                        ok = v is not None and getattr(inp, "connected", True)
+                        video = self._failover(ok, n) if not ok else v
+                        if video is not None and not ok:
+                            audio, source = self._fill_audio, "FILLER"
+                        else:
                             video = v if v is not None else self.black
                             audio = a
                             source = "LIVE:" + key
-                        dur = item.get("duration") if item else None
-                        if dur and self.item_ticks / float(self.fps) >= dur:
-                            self._item_done()
-                elif self.state == "PAUSED" and self.player is not None:
-                    video = self.last_clip_frame if self.last_clip_frame is not None else self.black
-                    audio = np.zeros((CHANNELS, n), np.float32)
-                    source = "PAUSE"
-            if video is None and self.state == "STOPPED" and self.idle == "bars":
-                video, audio, source = self.bars, np.zeros((CHANNELS, n), np.float32), "BARS"
-            if video is None:
+                    dur = item.get("duration") if item else None
+                    if dur and self.item_ticks / float(self.fps) >= dur:
+                        self._item_done()
+            elif self.state == "PAUSED" and self.player is not None:
+                video = self.last_clip_frame if self.last_clip_frame is not None else self.black
+                audio = np.zeros((CHANNELS, n), np.float32)
+                source = "PAUSE"
+        if video is None and self.state == "STOPPED" and self.idle == "bars":
+            video, audio, source = self.bars, np.zeros((CHANNELS, n), np.float32), "BARS"
+        if video is None:
+            ok = live_v is not None and self.live.connected
+            fv = self._failover(ok, n)
+            if fv is not None:
+                video, audio, source = fv, self._fill_audio, "FILLER"
+            else:
                 video = live_v if live_v is not None else self.black
                 audio = live_a if live_a is not None else np.zeros((CHANNELS, n), np.float32)
-            self._main_wanted = source == "LIVE"
-            if self.cg is not None:
-                try:
-                    video = self.cg.render(video, source.startswith("LIVE"), n)
-                    sa = self.cg.stinger_audio
-                    if sa is not None and sa.shape == audio.shape:
-                        audio = np.clip(audio + sa, -1.0, 1.0)
-                except Exception as e:
-                    self.message = f"CG error: {e}"
-            if source != self.last_source:
-                audio = audio.copy()
-                m = min(FADE, audio.shape[1])
-                audio[:, :m] *= np.linspace(0.0, 1.0, m, dtype=np.float32)
-                self.last_source = source
-            peak = np.abs(audio).max(axis=1) if audio.size else np.zeros(CHANNELS)
-            self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
-            self.last_frame = video
+        elif not self._fo_checked:
+            self._failover(True, n)       # live not on air: nothing to cover
+        self._main_wanted = source in ("LIVE", "FILLER")
+        if self.cg is not None:
             try:
-                self.output.send(video, audio)   # blocks to frame rate (NDI clock)
-            except Exception:
-                time.sleep(float(1 / self.fps))
-            if self.streamer is not None:
-                self.streamer.push(video, audio)
-            if self.audio_out is not None:
-                self.audio_out.push(audio)
-            if self.recorder is not None:
-                self.recorder.push(video, audio)
+                video = self.cg.render(video, source.startswith("LIVE"), n)
+                sa = self.cg.stinger_audio
+                if sa is not None and sa.shape == audio.shape:
+                    audio = np.clip(audio + sa, -1.0, 1.0)
+            except Exception as e:
+                self.message = f"CG error: {e}"
+        if source != self.last_source:
+            audio = audio.copy()
+            m = min(FADE, audio.shape[1])
+            audio[:, :m] *= np.linspace(0.0, 1.0, m, dtype=np.float32)
+            self.last_source = source
+        peak = np.abs(audio).max(axis=1) if audio.size else np.zeros(CHANNELS)
+        self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
+        self.last_frame = video
+        try:
+            self.output.send(video, audio)   # blocks to frame rate (NDI clock)
+        except Exception:
+            time.sleep(float(1 / self.fps))
+        if self.streamer is not None:
+            self.streamer.push(video, audio)
+        if self.audio_out is not None:
+            self.audio_out.push(audio)
+        if self.recorder is not None:
+            self.recorder.push(video, audio)
+
+    def _failover(self, ok, n):
+        """Called every frame live is wanted on air. Returns the filler picture while the input is lost."""
+        self._fo_checked = True
+        f = self.failover
+        now = time.monotonic()
+        if ok or not f.get("enabled"):
+            self._lost_since = None
+            if self.failover_active:
+                self.failover_active = False
+                self.message = "Live input is back - failover ended"
+                if self._fail_started:
+                    self.asrun.write("failover", "Live input lost", self._fail_started, dt.datetime.now(), None,
+                                     "filler " + f.get("mode", "bars"))
+                    self._fail_started = None
+            if self._filler is not None and ok:
+                self._filler.close()
+                self._filler = None
+            return None
+        if self._lost_since is None:
+            self._lost_since = now
+        if now - self._lost_since < float(f.get("after") or 3):
+            return None
+        if not self.failover_active:
+            self.failover_active = True
+            self._fail_started = dt.datetime.now()
+            self.message = "LIVE INPUT LOST - filler on air (failover)"
+        self._fill_audio = np.zeros((CHANNELS, n), np.float32)
+        mode = f.get("mode", "bars")
+        if mode == "clip" and f.get("file"):
+            p = self._filler
+            if p is None or p.finished():
+                if p is not None:
+                    p.close()
+                path = os.path.join(self.media_dir, f["file"])
+                p = self._filler = ClipPlayer(path, self.width, self.height, self.fps) if os.path.isfile(path) else None
+            if p is not None and p.ready():
+                v, a = p.next_frame(n)
+                if v is not None:
+                    self._fill_audio = a
+                    self._fill_last = v
+                    return v
+            return self._fill_last if (p is not None and self._fill_last is not None) else self.bars
+        if mode == "black":
+            return self.black
+        return self.bars
 
     def _auto_stinger(self, item):
         """Automatic mode with auto stinger: start the stinger so its cut lands on the item's last frame."""
@@ -615,6 +798,7 @@ class Engine:
                 "idle": self.idle,
                 "stinger": dict(self.stinger, active=bool(self.cg and self.cg.stinger_active)),
                 "live_connected": self.live.connected,
+                "failover": dict(self.failover, active=self.failover_active),
                 "inputs": {k: bool(getattr(v, "connected", False)) for k, v in self.inputs.items()},
                 "output": self.output.sender.ndi_name,
                 "fps": fps,

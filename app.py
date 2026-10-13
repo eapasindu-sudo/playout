@@ -6,12 +6,16 @@ import datetime as dt
 import io
 import json
 import os
+import secrets
 import signal
+import socket
 import sys
+import threading
 import time
 
-from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory, session
 from PIL import Image
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from audio_out import AudioOut
@@ -23,9 +27,14 @@ import media as media_mod
 from engine import Engine
 from system import SystemMonitor
 from media import MEDIA_EXT, list_media, thumbnail
-from scheduler import Scheduler
+from scheduler import DayPlanner, Scheduler
 from store import Store
 from streamer import Streamer
+from loudness import Loudness
+from updater import Updater
+from version import VERSION
+import importer
+import report
 
 import paths
 
@@ -67,12 +76,206 @@ audio_out = AudioOut()
 engine.audio_out = audio_out
 recorder = Recorder(engine, os.path.join(ROOT, cfg.get("record_dir", "recordings")))
 engine.recorder = recorder
+loudness = Loudness(cfg["data_dir"], streamer.ffmpeg)
+engine.loudness = loudness
+planner = DayPlanner(engine, store, recorder)
+updater = Updater()
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
+RUN_FLAG = os.path.join(cfg["data_dir"], "running.flag")   # left behind = last run did not close normally
 app = Flask(__name__, static_folder=None)
+
+
+def _secret_key():
+    path = os.path.join(cfg["data_dir"], "secret.key")
+    try:
+        with open(path) as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    with open(path, "w") as f:
+        f.write(key)
+    return key
+
+
+app.secret_key = _secret_key()
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.permanent_session_lifetime = dt.timedelta(days=30)
 app.register_blueprint(make_blueprint(lambda: cfg["cg_dir"], lambda: (engine.width, engine.height),
                                       lambda: engine.last_frame))
 fullscreen_on = False
 fullscreen_hook = None   # set by the desktop app: fn(on, screen) opens / closes the full screen output window
+
+
+# ---- security: remote password, lock ---------------------------------------
+def is_local():
+    return request.remote_addr in ("127.0.0.1", "::1", "localhost")
+
+
+def sec():
+    """Saved security settings."""
+    s = store.data.get("security") or {}
+    s.setdefault("remote_enabled", True)
+    s.setdefault("remote_hash", "")
+    s.setdefault("lock_hash", "")
+    s.setdefault("epoch", 1)
+    s.setdefault("lock_on_start", False)
+    return s
+
+
+OPEN_PATHS = ("/login", "/api/login")
+
+
+@app.before_request
+def remote_guard():
+    """Other PCs / phones need the remote password (when one is set). This PC never does."""
+    if is_local():
+        return None
+    s = sec()
+    if not s["remote_enabled"]:
+        return Response("Playout remote control is turned off on the playout PC (Settings > Remote).", 403)
+    if not s["remote_hash"] or request.path in OPEN_PATHS:
+        return None
+    if session.get("ok") == s["epoch"]:
+        return None
+    key = request.args.get("key")
+    if key and request.path.startswith("/trigger/") and check_password_hash(s["remote_hash"], key):
+        return None
+    if request.path.startswith("/api/") or request.path.startswith("/trigger/"):
+        return jsonify(error="login"), 401
+    return redirect("/login?next=" + request.path)
+
+
+@app.get("/login")
+def login_page():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "login.html")
+
+
+@app.post("/api/login")
+def login():
+    s = sec()
+    pw = (request.get_json(silent=True) or request.form or {}).get("password", "")
+    if not s["remote_hash"] or check_password_hash(s["remote_hash"], pw):
+        session.permanent = True
+        session["ok"] = s["epoch"]
+        return jsonify(ok=True)
+    time.sleep(1)       # slow down guessing
+    return jsonify(ok=False, error="Wrong password"), 403
+
+
+@app.route("/api/lock", methods=["GET", "POST"])
+def lock_api():
+    """Lock the control screen; unlocking needs the lock password when one is set."""
+    s = sec()
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        if b.get("lock"):
+            store.set(locked=True)
+        else:
+            if s["lock_hash"] and not check_password_hash(s["lock_hash"], b.get("password", "")):
+                time.sleep(0.5)
+                return jsonify(ok=False, locked=True, error="Wrong password"), 403
+            store.set(locked=False)
+    return jsonify(ok=True, locked=bool(store.data.get("locked")), has_password=bool(s["lock_hash"]))
+
+
+def check_admin(body):
+    """Settings changes need the lock password (when one is set)."""
+    h = sec()["lock_hash"]
+    return not h or check_password_hash(h, (body or {}).get("admin_password", ""))
+
+
+# ---- settings ----------------------------------------------------------------
+@app.route("/api/settings", methods=["GET", "POST"])
+def settings_api():
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        if not check_admin(b):
+            time.sleep(0.5)
+            return jsonify(error="Wrong password"), 403
+        if "failover" in b:
+            f = b["failover"] or {}
+            store.set(failover=engine.set_failover(f.get("enabled"), f.get("after"), f.get("mode"), f.get("file")))
+        if "audio" in b:
+            a = b["audio"] or {}
+            store.set(audio_norm=loudness.configure(a.get("normalize"), a.get("target")))
+        if "station_name" in b:
+            store.set(station_name=str(b["station_name"] or "")[:80])
+        if "security" in b:
+            s = sec()
+            n = b["security"] or {}
+            if "remote_enabled" in n:
+                s["remote_enabled"] = bool(n["remote_enabled"])
+            if "lock_on_start" in n:
+                s["lock_on_start"] = bool(n["lock_on_start"])
+            for k, field in (("remote_password", "remote_hash"), ("lock_password", "lock_hash")):
+                if n.get(k) is not None and n.get(k) != "********":
+                    s[field] = generate_password_hash(n[k]) if n[k] else ""
+                    if k == "remote_password":
+                        s["epoch"] = int(s["epoch"]) + 1      # log out every phone / tablet
+            store.set(security=s)
+        if "update" in b:
+            u = b["update"] or {}
+            updater.configure(u.get("repo"), u.get("token"), u.get("auto_check"))
+            store.set(update=updater.settings())
+    s = sec()
+    return jsonify(
+        failover=engine.failover, audio=loudness.settings(), station_name=store.data.get("station_name", ""),
+        security={"remote_enabled": s["remote_enabled"], "remote_password_set": bool(s["remote_hash"]),
+                  "lock_password_set": bool(s["lock_hash"]), "lock_on_start": s["lock_on_start"]},
+        update={"repo": updater.repo, "token_set": bool(updater.token), "auto_check": updater.auto_check},
+        version=VERSION)
+
+
+@app.post("/api/admin_check")
+def admin_check():
+    if check_admin(request.get_json(silent=True)):
+        return jsonify(ok=True)
+    time.sleep(0.5)
+    return jsonify(ok=False, error="Wrong password"), 403
+
+
+# ---- remote control (phone / tablet) -------------------------------------------
+def lan_addresses():
+    ips = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            ips.append(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in ips and not ip.startswith("127."):
+                ips.append(ip)
+    except OSError:
+        pass
+    return ips
+
+
+@app.get("/api/remote_info")
+def remote_info():
+    port = int(cfg.get("web_port", 8080))
+    s = sec()
+    return jsonify(urls=[f"http://{ip}:{port}/remote" for ip in lan_addresses()], enabled=s["remote_enabled"],
+                   password_set=bool(s["remote_hash"]), host=socket.gethostname())
+
+
+@app.get("/api/qr.png")
+def qr_png():
+    import qrcode
+    img = qrcode.make(request.args.get("t", "")[:300], box_size=6, border=2)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return Response(buf.getvalue(), mimetype="image/png")
+
+
+@app.get("/remote")
+def remote_page():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "remote.html")
 
 
 @app.get("/")
@@ -93,7 +296,9 @@ def output_page():
 # ---- state & transport -------------------------------------------------
 @app.get("/api/state")
 def state():
-    return jsonify(engine.snapshot())
+    snap = engine.snapshot()
+    snap["locked"] = bool(store.data.get("locked"))
+    return jsonify(snap)
 
 
 @app.post("/api/transport/<action>")
@@ -292,7 +497,46 @@ def live_source():
 # ---- media library -----------------------------------------------------
 @app.get("/api/media")
 def media():
-    return jsonify(list_media(cfg["media_dir"]))
+    out = list_media(cfg["media_dir"])
+    for m in out:
+        path = os.path.join(cfg["media_dir"], m["name"])
+        info = loudness.info(path)
+        if info is None:
+            loudness.request(path)
+        m["lufs"] = (info or {}).get("lufs")
+    return jsonify(out)
+
+
+@app.get("/api/frame/<path:name>")
+def clip_frame(name):
+    """A picture of a clip at t seconds (trim in / out preview)."""
+    import av
+    path = os.path.join(cfg["media_dir"], secure_filename(name))
+    if not os.path.isfile(path):
+        abort(404)
+    t = max(0.0, float(request.args.get("t") or 0))
+    try:
+        with av.open(path) as c:
+            vs = c.streams.video[0]
+            base = float(vs.start_time * vs.time_base) if vs.start_time is not None else 0.0
+            if t > 0:
+                c.seek(int((base + t) / vs.time_base), stream=vs, backward=True)
+            img = None
+            for fr in c.decode(vs):
+                img = fr
+                if fr.time is None or fr.time >= base + t - 0.02:
+                    break
+            if img is None:
+                abort(404)
+            im = img.to_image().convert("RGB")
+    except Exception:
+        abort(404)
+    im.thumbnail((int(request.args.get("w") or 320), 400))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=80)
+    r = Response(buf.getvalue(), mimetype="image/jpeg")
+    r.headers["Cache-Control"] = "max-age=600"
+    return r
 
 
 @app.post("/api/media")
@@ -334,6 +578,147 @@ def asrun_csv():
     if not os.path.exists(path):
         abort(404)
     return send_file(path, as_attachment=True)
+
+
+# ---- ad report -------------------------------------------------------------
+def _range():
+    a = request.args
+    d1 = dt.date.fromisoformat(a.get("from")) if a.get("from") else dt.date.today()
+    d2 = dt.date.fromisoformat(a.get("to")) if a.get("to") else d1
+    if d2 < d1:
+        d1, d2 = d2, d1
+    if (d2 - d1).days > 400:
+        abort(400)
+    return d1, d2
+
+
+@app.get("/api/report")
+def report_json():
+    d1, d2 = _range()
+    rows = report.collect(engine.asrun, d1, d2, request.args.get("client"), request.args.get("q"))
+    return jsonify(rows=rows, summary=report.summarize(rows), clients=report.clients(engine.asrun, d1, d2))
+
+
+@app.get("/api/report.<kind>")
+def report_file(kind):
+    d1, d2 = _range()
+    client = request.args.get("client", "")
+    rows = report.collect(engine.asrun, d1, d2, client, request.args.get("q"))
+    station = store.data.get("station_name", "")
+    if kind == "xlsx":
+        data, mime = report.to_xlsx(rows, station, d1, d2, client), \
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif kind == "pdf":
+        data, mime = report.to_pdf(rows, station, d1, d2, client), "application/pdf"
+    elif kind == "csv":
+        data, mime = report.to_csv(rows), "text/csv"
+    else:
+        abort(404)
+    name = report.filename(kind, d1, d2, client)
+    if request.args.get("save") and is_local():
+        # desktop app: save into Documents\Playout\reports and open it
+        folder = os.path.join(ROOT, "reports")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        if sys.platform == "win32":
+            try:
+                os.startfile(path)
+            except OSError:
+                pass
+        return jsonify(path=path)
+    return send_file(io.BytesIO(data), mimetype=mime, as_attachment=True, download_name=name)
+
+
+# ---- playlist import (Excel / CSV) and day playlists ------------------------------
+@app.post("/api/import")
+def import_playlist():
+    f = request.files.get("file")
+    if not f:
+        abort(400)
+    try:
+        items, warn = importer.parse(f.filename or "", f.read(), [m["name"] for m in list_media(cfg["media_dir"])])
+    except Exception as e:
+        return jsonify(error=f"Could not read the file: {e}"), 400
+    if not items:
+        return jsonify(error="No playlist rows found in the file", warnings=warn), 400
+    mode = request.form.get("mode", "replace")
+    save_as = (request.form.get("save_as") or "").strip()
+    if save_as:
+        store.save_list(save_as, items)
+    if mode == "append":
+        engine.set_playlist(engine.playlist + items)
+    elif mode == "replace":
+        engine.set_playlist(items)
+    return jsonify(ok=True, count=len(items), warnings=warn, saved=save_as)
+
+
+@app.get("/api/import/template.csv")
+def import_template():
+    if request.args.get("save") and is_local():
+        folder = os.path.join(ROOT, "reports")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "playlist_template.csv")
+        with open(path, "wb") as f:
+            f.write(importer.template_csv())
+        if sys.platform == "win32":
+            os.startfile(path)
+        return jsonify(path=path)
+    return send_file(io.BytesIO(importer.template_csv()), mimetype="text/csv", as_attachment=True,
+                     download_name="playlist_template.csv")
+
+
+@app.route("/api/schedule", methods=["GET", "POST"])
+def schedule_api():
+    """Day playlists (auto-load each day) and scheduled recordings."""
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        if "day_lists" in b:
+            d = b["day_lists"] or {}
+            store.set(day_lists={"enabled": bool(d.get("enabled", True)), "time": d.get("time") or "00:00",
+                                 "dates": {k: v for k, v in (d.get("dates") or {}).items() if v},
+                                 "weekdays": {k: v for k, v in (d.get("weekdays") or {}).items() if v}})
+        if "rec_times" in b:
+            clean = []
+            for e in b["rec_times"] or []:
+                if e.get("start") and e.get("end"):
+                    clean.append({"id": e.get("id") or secrets.token_hex(4), "name": e.get("name", ""),
+                                  "start": e["start"][:5], "end": e["end"][:5], "days": e.get("days") or [],
+                                  "date": e.get("date") or "", "enabled": bool(e.get("enabled", True))})
+            store.set(rec_times=clean)
+    today = dt.date.today()
+    return jsonify(day_lists=planner.day_lists, rec_times=planner.rec_times, playlists=store.list_names(),
+                   today=today.isoformat(), today_list=planner.list_for(today),
+                   loaded=store.data.get("day_list_loaded"), rec_by_schedule=planner.rec_by_schedule)
+
+
+@app.post("/api/schedule/load_today")
+def schedule_load_today():
+    name = planner.list_for(dt.date.today())
+    if not name:
+        return jsonify(ok=False, error="No playlist is set for today")
+    store.set(day_list_loaded=dt.date.today().isoformat())
+    return jsonify(ok=planner.load(name), name=name)
+
+
+# ---- updates -------------------------------------------------------------------
+@app.get("/api/update")
+def update_info():
+    return jsonify(updater.info())
+
+
+@app.post("/api/update/<action>")
+def update_action(action):
+    if action == "check":
+        return jsonify(updater.check())
+    if not is_local():
+        abort(403)
+    if action == "download":
+        return jsonify(updater.download())
+    if action == "install":
+        return jsonify(updater.install())
+    abort(404)
 
 
 # ---- live streaming (3 destinations) -----------------------------------
@@ -501,6 +886,17 @@ def start_backend():
     if _started:
         return
     _started = True
+    crashed = os.path.exists(RUN_FLAG)
+    with open(RUN_FLAG, "w") as f:
+        f.write(str(os.getpid()))
+    fo = store.data.get("failover") or {}
+    engine.set_failover(fo.get("enabled"), fo.get("after"), fo.get("mode"), fo.get("file"))
+    an = store.data.get("audio_norm") or {}
+    loudness.configure(an.get("normalize"), an.get("target"))
+    up = store.data.get("update") or {}
+    updater.configure(up.get("repo"), up.get("token"), up.get("auto_check"))
+    if sec()["lock_on_start"]:
+        store.set(locked=True)
     engine.set_modes(store.data.get("auto", True), store.data.get("loop", False))
     engine.set_playlist(store.data.get("playlist", []))
     engine.on_change = lambda items: store.set(playlist=items)
@@ -522,9 +918,52 @@ def start_backend():
     audio_out.configure(ao.get("enabled", True), ao.get("device", ""), ao.get("volume", 1.0))
     engine.start()
     scheduler.start()
+    planner.start()
+    updater.start_auto()
+    air = store.data.get("air") or {}
+    if crashed and air.get("id"):
+        # Playout closed unexpectedly (crash / power): put the item that was on air back, where it was
+        offset = max(0.0, time.time() - float(air.get("since") or time.time()))
+        if engine.resume(air["id"], offset):
+            print(f"resumed {air['id']} at {offset:.1f}s after an unexpected stop")
+    elif crashed:
+        engine.message = "Playout restarted after an unexpected stop"
+    threading.Thread(target=_air_saver, daemon=True, name="air state").start()
+    threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
+
+
+def _air_saver():
+    """Remembers what is on air (and since when), so a restart can carry on."""
+    last = None
+    while True:
+        time.sleep(1)
+        try:
+            on = engine.on_air if engine.state == "PLAYING" else None
+            if on != last:
+                since = time.time() - engine.item_ticks / float(engine.fps) if on else None
+                store.set(air={"id": on, "since": since})
+                last = on
+        except Exception:
+            pass
+
+
+def _watchdog():
+    """If the output loop freezes, quit so the Playout launcher restarts it (and it resumes)."""
+    while True:
+        time.sleep(2)
+        if engine._running and time.monotonic() - engine.heartbeat > 15:
+            print(f"watchdog: output loop stuck for {time.monotonic() - engine.heartbeat:.0f}s, restarting", flush=True)
+            import faulthandler
+            faulthandler.dump_traceback(file=sys.stdout, all_threads=True)
+            os._exit(3)
 
 
 def shutdown():
+    planner.stop()
+    try:
+        os.remove(RUN_FLAG)
+    except OSError:
+        pass
     sysmon.stop()
     recorder.stop()
     audio_out.close()

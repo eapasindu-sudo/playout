@@ -81,6 +81,10 @@ def list_media(folder):
     return out
 
 
+class _OutPoint(Exception):
+    """Decoding reached the clip's out point."""
+
+
 class ClipPlayer:
     """Decodes one clip ahead of time on a background thread.
 
@@ -92,13 +96,17 @@ class ClipPlayer:
 
     VIDEO_BUFFER = 10  # decoded frames held ahead (~80 MB at 1080p)
 
-    def __init__(self, path, width, height, fps, process=None):
+    def __init__(self, path, width, height, fps, process=None, start=0.0, end=None, gain=1.0):
         self.path = path
         self.process = process   # optional: called with each decoded VideoFrame (CG effects)
         self.name = os.path.basename(path)
         self.width, self.height = width, height
         self.frame_dur = 1.0 / float(fps)
-        self.duration = probe(path) or 0.0
+        full = probe(path) or 0.0
+        self.start = max(0.0, float(start or 0))          # trim: in point (seconds into the file)
+        self.end = float(end) if end and (not full or float(end) < full) else None   # out point
+        self.gain = float(gain or 1.0)                    # audio level (normalize + item volume)
+        self.duration = max(0.0, (self.end or full) - self.start) if full or self.end else 0.0
         self.error = None
         self._vq = queue.Queue(maxsize=self.VIDEO_BUFFER)
         self._audio = collections.deque()
@@ -126,6 +134,13 @@ class ClipPlayer:
                 self._has_audio = aus is not None
                 resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE) if aus else None
                 t0 = None
+                base = float(vs.start_time * vs.time_base) if vs.start_time is not None and vs.time_base else 0.0
+                if self.start > 0:
+                    t0 = base + self.start
+                    c.seek(int(t0 / vs.time_base), stream=vs, backward=True, any_frame=False)
+                end_t = (base + self.end) if self.end else None
+                a_skip = None                       # audio samples before the in point still to drop
+                a_left = int(self.duration * SAMPLE_RATE) if self.end else None
                 streams = [s for s in (vs, aus) if s is not None]
                 for packet in c.demux(*streams):
                     if self._stop.is_set():
@@ -135,6 +150,10 @@ class ClipPlayer:
                             t = frame.time if frame.time is not None else 0.0
                             if t0 is None:
                                 t0 = t
+                            if t < t0 - self.frame_dur * 0.5:
+                                continue            # before the in point (after a seek)
+                            if end_t is not None and t >= end_t - self.frame_dur * 0.5:
+                                raise _OutPoint()
                             if self.process is not None:
                                 item = (t - t0, self.process(frame))
                             else:
@@ -147,18 +166,32 @@ class ClipPlayer:
                                 except queue.Full:
                                     continue
                         else:
+                            if a_skip is None:
+                                at = frame.time
+                                a_skip = int(round((t0 - at) * SAMPLE_RATE)) if (self.start > 0 and at is not None) else 0
                             for rf in resampler.resample(frame):
                                 pcm = rf.to_ndarray().reshape(-1, CHANNELS).T
-                                self._push_audio(pcm)
+                                if a_skip > 0:
+                                    cut = min(a_skip, pcm.shape[1])
+                                    pcm, a_skip = pcm[:, cut:], a_skip - cut
+                                if a_left is not None:
+                                    pcm = pcm[:, :max(0, a_left)]
+                                    a_left -= pcm.shape[1]
+                                if pcm.shape[1]:
+                                    self._push_audio(pcm)
                 if resampler:
                     for rf in resampler.resample(None):
                         self._push_audio(rf.to_ndarray().reshape(-1, CHANNELS).T)
+        except _OutPoint:
+            pass
         except Exception as e:  # bad file: report and let the break move on
             self.error = str(e)
         finally:
             self._done.set()
 
     def _push_audio(self, pcm):
+        if self.gain != 1.0:
+            pcm = np.clip(pcm * np.float32(self.gain), -1.0, 1.0)
         with self._alock:
             self._audio.append(np.ascontiguousarray(pcm, dtype=np.float32))
             self._audio_len += pcm.shape[1]
