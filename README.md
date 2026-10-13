@@ -132,6 +132,14 @@ YouTube needs nothing. Facebook needs a Page access token (**Look / Facebook tok
 Graph API Explorer > your Page, permissions pages_read_engagement and pages_read_user_content > Generate token.
 **Look** sets the font (Nirmala UI shows Sinhala, Tamil and English), size, colours and position.
 
+## Singlish typing (Sinhala CG text)
+
+Press **අ Singlish** in a text CG (or in CG > Comments) and type Sinhala with English letters, like Helakuru:
+each word turns into Sinhala when you press space. `dhilshan` → දිල්ශන්, `ammaa` → අම්මා, `suba upandhinayak`
+→ සුබ උපන්දිනයක්. d = ඩ, dh = ද, t = ට, th = ත, sh = ශ, N = ණ, L = ළ, x = ං, aa / ae / ii / uu / ee / oo for the long
+vowels. Put `\` in front of a word to keep it English (`\Endora`). `{t}` in a countdown is left alone.
+Sinhala text in a font without Sinhala letters (Arial...) is drawn with Nirmala UI by itself.
+
 ## Live streaming (3 destinations)
 
 1. Click **Setup** on a destination and pick the **Facebook Live** preset (or YouTube or Custom).
@@ -201,6 +209,29 @@ or only save it under a name.
 **Functions > Day Schedule**: pick a saved playlist for each weekday and for special dates; Playout loads it
 by itself at the chosen time (the on-air item finishes first). **Scheduled recording** starts and stops
 recordings at set times, every day or on chosen days / a date.
+
+## Clip check
+
+Every clip is checked once in the background (at low priority, it never slows down what is on air) when it is
+uploaded, dropped into the media folder or first seen: black parts, silent parts, no sound, a picture size or
+shape that does not fit the output (black bars / low resolution), a frame rate that judders on the output
+(29.97 fps on a 25 fps channel), interlaced video, very loud. **Add Media** shows a Check column (✓ OK or ⚠ with
+the list), the playlist shows a ⚠ CHECK badge and **Edit** lists the problems. After an upload Playout tells you
+when the check finds something.
+
+## Vertical 9:16 stream (Reels / Shorts / TikTok)
+
+**Live Stream > Setup > Picture**: a destination can go out vertical, 1080x1920, either cutting out the middle of
+the program (move the **Cut out** slider to follow the action) or showing the whole picture with blurred top and
+bottom. The other destinations stay 16:9. A vertical destination is encoded once more, so it uses more CPU / GPU.
+
+## Stream health on the phone
+
+Open **http://<playout PC>:8080/health** on a phone (Phone Remote shows the QR code, and the phone remote has a
+**Health** link): one big ALL OK / CHECK / PROBLEM, and a line each for every live destination (upload speed
+against what it should be, reconnects, time on air), the stream encoder (dropped frames), the program output
+fps, the live input, recording, CPU / GPU / RAM / upload, free disk and the YouTube / Facebook viewer counts
+(from the links in CG > Comments). A problem that lasts 30 s also goes to Telegram (Alerts: Stream health).
 
 ## Phone remote and passwords
 

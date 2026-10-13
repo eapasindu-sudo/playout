@@ -16,6 +16,7 @@ import urllib.request
 EVENTS = {
     "failover": "Live input lost / back",
     "stream": "Stream dropped / back",
+    "health": "Stream health problem (slow upload, dropped frames, CPU)",
     "fb_limit": "Facebook 8-hour limit (30, 10, 5 min)",
     "record": "Recording failed / scheduled recording",
     "restart": "Playout restarted after a crash",

@@ -95,6 +95,28 @@ def youtube_parse(data):
     return msgs, nxt, wait
 
 
+def youtube_viewers(vid, key=""):
+    """People watching a YouTube live right now (None if not live / not found)."""
+    url = "https://www.youtube.com/youtubei/v1/updated_metadata" + (f"?key={key}" if key else "")
+    text = _get(url, {"context": {"client": {"clientName": "WEB", "clientVersion": "2.20240101.00.00"}}, "videoId": vid})
+    return parse_viewers(text)
+
+
+def parse_viewers(text):
+    m = re.search(r'"originalViewCount"\s*:\s*"(\d+)"', text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'"(?:text|simpleText)"\s*:\s*"([\d,.]+)\s*(?:watching|waiting)', text)
+    return int(re.sub(r"[^\d]", "", m.group(1))) if m else None
+
+
+def facebook_viewers(vid, token):
+    q = urllib.parse.urlencode({"access_token": token, "fields": "live_views"})
+    data = json.loads(_get(f"https://graph.facebook.com/v19.0/{vid}?{q}"))
+    v = data.get("live_views")
+    return int(v) if v is not None else None
+
+
 def youtube_start(vid):
     """(api key, client version, first continuation) from the chat window page."""
     html = _get(f"https://www.youtube.com/live_chat?is_popout=1&v={vid}")
@@ -134,6 +156,7 @@ class Comments:
         self._seen = set()
         self._lock = threading.Lock()
         self.status = {"YouTube": "", "Facebook": ""}
+        self.viewers = {}              # {"YouTube": 120, "Facebook": 35}: people watching now (stream health page)
         self._gen = 0                  # bumped when the sources change: old reader threads stop
         self._queue = collections.deque()
         self._shown_at = 0.0
@@ -164,11 +187,38 @@ class Comments:
         self._gen += 1
         gen, c = self._gen, self.cfg
         self.status = {"YouTube": "", "Facebook": ""}
+        self.viewers = {}
+        if (c.get("youtube") or "").strip() or (c.get("facebook") or "").strip():
+            threading.Thread(target=self._count_viewers, args=(gen, c), daemon=True, name="viewers").start()
         if (c.get("youtube") or "").strip():
             threading.Thread(target=self._youtube, args=(gen, c["youtube"]), daemon=True, name="yt chat").start()
         if (c.get("facebook") or "").strip():
             threading.Thread(target=self._facebook, args=(gen, c["facebook"], c.get("facebook_token") or ""),
                              daemon=True, name="fb comments").start()
+
+    def _count_viewers(self, gen, c):
+        """Viewer counts every 30 s while the links are set (shown on the stream health page)."""
+        yt, fb, token = (c.get("youtube") or "").strip(), (c.get("facebook") or "").strip(), c.get("facebook_token") or ""
+        vid = None
+        while gen == self._gen:
+            if yt:
+                try:
+                    vid = vid or youtube_id(yt)
+                    if vid:
+                        self.viewers["YouTube"] = youtube_viewers(vid)
+                except Exception:
+                    self.viewers.pop("YouTube", None)
+            if fb and token:
+                try:
+                    fid = facebook_id(fb)
+                    if fid:
+                        self.viewers["Facebook"] = facebook_viewers(fid, token)
+                except Exception:
+                    self.viewers.pop("Facebook", None)
+            for _ in range(30):
+                if gen != self._gen:
+                    return
+                time.sleep(1)
 
     # ---- incoming -----------------------------------------------------------
     def add(self, msgs, queue=True):

@@ -34,6 +34,7 @@ from comments import Comments
 from scheduler import DayPlanner, Scheduler
 from store import Store
 from streamer import Streamer
+from health import Health
 from loudness import Loudness
 from updater import Updater
 from version import VERSION
@@ -100,6 +101,7 @@ engine.sdi = sdi
 watch = WatchFolder(engine, cfg["media_dir"], loudness)
 backup = Backup(engine, cgm, streamer, cfg["media_dir"], cfg["cg_dir"], alerts)
 comments = Comments(cgm, lambda: store.data.get("comments") or {}, lambda c: store.set(comments=c))
+health = Health(engine, streamer, recorder, sysmon, alerts, lambda: comments.viewers)
 planner.active = lambda: backup.role != "backup"     # a backup PC takes its playlist from the main PC
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 RUN_FLAG = os.path.join(cfg["data_dir"], "running.flag")   # left behind = last run did not close normally
@@ -468,6 +470,16 @@ def qr_png():
     return Response(buf.getvalue(), mimetype="image/png")
 
 
+@app.get("/api/health")
+def health_info():
+    return jsonify(**health.get(), station=store.data.get("station_name", ""))
+
+
+@app.get("/health")
+def health_page():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "health.html")
+
+
 @app.get("/remote")
 def remote_page():
     return send_from_directory(os.path.join(BUNDLE, "web"), "remote.html")
@@ -481,6 +493,11 @@ def index():
 @app.get("/cgedit")
 def cgedit_page():
     return send_from_directory(os.path.join(BUNDLE, "web"), "cgedit.html")
+
+
+@app.get("/js/singlish.js")
+def singlish_js():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "singlish.js", max_age=600)
 
 
 @app.get("/img/<any('logo-playout.png', 'logo-composer.png'):name>")
@@ -747,10 +764,16 @@ def media():
     for m in out:
         path = os.path.join(cfg["media_dir"], m["name"])
         info = loudness.info(path)
-        if info is None:
+        if not loudness.checked(path):
             loudness.request(path)
         m["lufs"] = (info or {}).get("lufs")
+        m["check"] = clip_warnings(info) if loudness.checked(path) else None   # None = still checking
     return jsonify(out)
+
+
+def clip_warnings(info):
+    from loudness import warnings
+    return warnings(info, engine.width, engine.height, float(engine.fps))
 
 
 @app.get("/api/frame/<path:name>")
@@ -792,6 +815,7 @@ def upload():
         name = safe_name(f.filename or "")
         if name and os.path.splitext(name)[1].lower() in MEDIA_EXT:
             f.save(os.path.join(cfg["media_dir"], name))
+            loudness.request(os.path.join(cfg["media_dir"], name))     # loudness + clip check
             saved.append(name)
     return jsonify(saved=saved)
 
@@ -1141,7 +1165,7 @@ def stream_config(slot):
     if not 0 <= slot < len(streamer.dests):
         abort(404)
     body = request.get_json(silent=True) or {}
-    streamer.configure(slot, body.get("name"), body.get("url"), body.get("key"))
+    streamer.configure(slot, body.get("name"), body.get("url"), body.get("key"), body.get("layout"), body.get("crop_pos"))
     store.set(stream_destinations=streamer.dump())
     return jsonify(streamer.info())
 
@@ -1463,6 +1487,7 @@ def start_backend():
     planner.start()
     updater.start_auto()
     watcher.start()
+    health.start()
     sd = store.data.get("sdi") or {}
     sdi.configure(sd.get("enabled"), sd.get("device"), sd.get("ffmpeg"))
     if crashed:

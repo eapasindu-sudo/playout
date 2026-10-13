@@ -112,6 +112,23 @@ def get_font(name, size, bold=False):
     return f
 
 
+_SINHALA = re.compile("[\u0d80-\u0dff]")
+_TAMIL = re.compile("[\u0b80-\u0bff]")
+
+
+def _fontname(cfg):
+    """The CG's font; Sinhala / Tamil text in a font without those letters (Arial...) uses Nirmala UI."""
+    name = cfg.get("font") or "Arial"
+    if name.lower().endswith((".ttf", ".otf")) or "Nirmala" in name:
+        return name
+    text = " ".join(str(cfg.get(k) or "") for k in ("line1", "line2", "text", "label", "end_text", "_file_text"))
+    if _TAMIL.search(text) and "Latha" not in name:
+        return "Nirmala UI (Sinhala / Tamil)"
+    if _SINHALA.search(text) and "Iskoola" not in name:
+        return "Nirmala UI (Sinhala / Tamil)"
+    return name
+
+
 def _rgb(c, default=(255, 255, 255)):
     c = (c or "").lstrip("#")
     try:
@@ -192,8 +209,8 @@ def _wrap(font, text, width, max_lines):
 def render_comment(cfg, out_w):
     """A viewer comment: name bar (with YouTube / Facebook) over the comment."""
     size = int(_num(cfg.get("size"), 36))
-    font = get_font(cfg.get("font") or "Arial", size, False)
-    fname = get_font(cfg.get("font") or "Arial", max(10, int(size * 0.8)), True)
+    font = get_font(_fontname(cfg), size, False)
+    fname = get_font(_fontname(cfg), max(10, int(size * 0.8)), True)
     color = _rgb(cfg.get("color"), (255, 255, 255)) + (255,)
     bg = _rgb(cfg.get("bg"), (10, 30, 80))
     bg_a = int(255 * max(0, min(100, _num(cfg.get("bg_alpha"), 85))) / 100)
@@ -216,7 +233,7 @@ def render_comment(cfg, out_w):
     d.text((pad, hn // 2), cfg.get("line1") or "Viewer", font=fname, fill=(255, 255, 255, 255), anchor="lm")
     label = cfg.get("label") or ""
     if label:
-        lf = get_font(cfg.get("font") or "Arial", max(10, int(size * 0.55)), True)
+        lf = get_font(_fontname(cfg), max(10, int(size * 0.55)), True)
         d.text((width - pad, hn // 2), label, font=lf, fill=(255, 255, 255, 220), anchor="rm")
     d.rectangle([0, hn, width, im.height], fill=bg + (bg_a,))
     for i, line in enumerate(lines):
@@ -230,14 +247,14 @@ def render_static(cfg, out_w, out_h, now=None, left=None):
     if style == "comment":
         return render_comment(cfg, out_w)
     size = int(_num(cfg.get("size"), 44))
-    font = get_font(cfg.get("font") or "Arial", size, cfg.get("bold", True))
+    font = get_font(_fontname(cfg), size, cfg.get("bold", True))
     color = _rgb(cfg.get("color"), (255, 255, 255)) + (255,)
     bg = _rgb(cfg.get("bg"), (10, 30, 80))
     bg_a = int(255 * max(0, min(100, _num(cfg.get("bg_alpha"), 85))) / 100)
     accent = _rgb(cfg.get("accent"), (224, 38, 27)) + (255,)
     pad = max(6, size // 3)
     if style == "lower3":
-        f2 = get_font(cfg.get("font") or "Arial", max(10, int(size * 0.62)), False)
+        f2 = get_font(_fontname(cfg), max(10, int(size * 0.62)), False)
         l1, l2 = cfg.get("line1") or "", cfg.get("line2") or ""
         w1, w2 = _text_w(font, l1), _text_w(f2, l2)
         h1, h2 = int(size * 1.35), int(size * 0.62 * 1.4) if l2 else 0
@@ -338,9 +355,9 @@ class TextLayer:
             self.error = str(e)
 
     def _build_ticker(self):
-        cfg = self.cfg
-        size = int(_num(cfg.get("size"), 40))
-        font = get_font(cfg.get("font") or "Arial", size, cfg.get("bold", True))
+        size = int(_num(self.cfg.get("size"), 40))
+        cfg = {**self.cfg, "_file_text": self._ticker_text()}      # Sinhala in the ticker file picks a Sinhala font too
+        font = get_font(_fontname(cfg), size, cfg.get("bold", True))
         sep = cfg.get("separator") or "   \u25cf   "
         items = [s.strip() for s in self._ticker_text().splitlines() if s.strip()]
         text = sep.join(items) + sep if items else " "
@@ -357,7 +374,7 @@ class TextLayer:
         self._label_w = 0
         label = cfg.get("label") or ""
         if label:
-            lf = get_font(cfg.get("font") or "Arial", size, True)
+            lf = get_font(_fontname(cfg), size, True)
             lw = _text_w(lf, label) + size
             d = ImageDraw.Draw(base)
             d.rectangle([0, 0, lw, h], fill=_rgb(cfg.get("accent"), (224, 38, 27)) + (255,))

@@ -410,8 +410,8 @@
         <div class="hint" id="cmStatus" style="padding:4px 10px"></div>
         <div class="cglist" id="cmList" style="max-height:300px; overflow:auto"></div>
         <div style="display:flex; gap:6px; padding:6px 10px">
-          <input id="cmAuthor" placeholder="Name" style="width:120px"><input id="cmText" placeholder="Type a comment (e.g. from WhatsApp) and press Enter" style="flex:1"
-            onkeydown="if (event.key === 'Enter') cmAdd()"><button class="sm" onclick="cmAdd()">Add</button>
+          <input id="cmAuthor" class="sl" placeholder="Name" style="width:120px"><input id="cmText" class="sl" placeholder="Type a comment (e.g. from WhatsApp) and press Enter" style="flex:1"
+            onkeydown="if (event.key === 'Enter') cmAdd()"><button class="sm" onclick="cmAdd()">Add</button><button class="sm sl-toggle" onclick="Singlish.toggle()">අ Singlish</button>
         </div>
         <div class="cgbar">
           <label title="Show every new comment by itself, one after another"><input type="checkbox" id="cmAuto" onchange="cmSet({auto: this.checked})"> Auto</label>
@@ -579,6 +579,7 @@
       <span>Fixed start</span><span style="display:flex; gap:6px"><input id="edFixed" type="time" step="1"><button class="sm" onclick="$('edFixed').value=''">Clear</button>
         <span class="hint" style="align-self:center">"Exact time": goes on air at that time even if something else is playing.</span></span>
       <span>Volume</span><span style="display:flex; gap:8px; align-items:center"><input class="num" id="edGain" type="number" step="0.5" min="-20" max="12"> dB <span class="hint" id="edLufs"></span></span>
+      <span>Clip check</span><span class="hint" id="edCheck" style="white-space:pre-line"></span>
     </div>
     <div class="section-t" style="margin:12px -14px 8px">Trim (in / out point) <span class="hint" id="edFull" style="text-transform:none; letter-spacing:0"></span></div>
     <div class="trim">
@@ -660,6 +661,14 @@
     <span>Server URL</span><input id="dsUrl" placeholder="rtmps://live-api-s.facebook.com:443/rtmp/">
     <span>Stream key</span><input id="dsKey" type="password" placeholder="paste the stream key">
     <span></span><span class="hint" id="dsKeyHint">Facebook: Live Producer &gt; Streaming software &gt; copy Server URL and Stream key. The key is saved on this PC only.</span>
+    <span>Picture</span>
+    <select id="dsLayout" onchange="dsLayoutShow()">
+      <option value="">16:9 (normal)</option>
+      <option value="crop">9:16 vertical: cut out the middle (Reels / Shorts / TikTok)</option>
+      <option value="blur">9:16 vertical: whole picture, blurred top and bottom</option>
+    </select>
+    <span class="dsV">Cut out</span><span class="dsV" style="display:flex; gap:8px; align-items:center">Left <input type="range" id="dsPos" min="0" max="100" step="5" style="width:200px"> Right</span>
+    <span class="dsV"></span><span class="hint dsV">Vertical streams use more CPU / GPU (the picture is encoded once more for this destination). Facebook Reels / YouTube Shorts live use the same Server URL and key as a normal live.</span>
   </div>
   <div class="foot"><button class="blue" onclick="saveDest()">Save</button></div>
 </dialog>
@@ -815,23 +824,23 @@
 
 <!-- Text CG -->
 <dialog id="dText" style="width:min(1100px, 97vw)">
-  <header><span id="tcTitle">Text CG</span> <button class="sm" onclick="dText.close()">Close</button></header>
+  <header><span id="tcTitle">Text CG</span> <button class="sm sl-toggle" onclick="Singlish.toggle()">අ Singlish</button><button class="sm" style="margin-left:6px" onclick="dText.close()">Close</button></header>
   <div class="body" style="display:grid; grid-template-columns: minmax(0, 1fr) 360px; gap:14px">
     <div><img class="tcg-prev" id="tcPrev" alt="preview"><div class="hint" id="tcErr" style="margin-top:4px"></div>
       <div style="display:flex; gap:6px; margin-top:6px"><label><input type="checkbox" id="tcOnPgm" onchange="tcRender()"> Show over the program</label></div></div>
     <div class="form" style="grid-template-columns: 90px 1fr">
       <span>Type</span><select id="tcStyle" onchange="tcShow(); tcRender()"><option value="lower3">Lower third (name / title)</option><option value="ticker">Ticker (scrolling news)</option><option value="clock">Clock / date</option><option value="countdown">Countdown</option><option value="text">Text box</option></select>
       <span>Name</span><input id="tcName" placeholder="name in the CG list">
-      <span class="tc-l3">Line 1</span><input class="tc-l3" id="tcL1" placeholder="Name" oninput="tcLater()">
-      <span class="tc-l3">Line 2</span><input class="tc-l3" id="tcL2" placeholder="Title" oninput="tcLater()">
-      <span class="tc-tk tc-tx">Text</span><textarea class="tc-tk tc-tx" id="tcText" rows="5" style="font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:6px" placeholder="Ticker: one news item per line" oninput="tcLater()"></textarea>
+      <span class="tc-l3">Line 1</span><input class="tc-l3 sl" id="tcL1" placeholder="Name" oninput="tcLater()">
+      <span class="tc-l3">Line 2</span><input class="tc-l3 sl" id="tcL2" placeholder="Title" oninput="tcLater()">
+      <span class="tc-tk tc-tx">Text</span><textarea class="tc-tk tc-tx sl" id="tcText" rows="5" style="font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:6px" placeholder="Ticker: one news item per line" oninput="tcLater()"></textarea>
       <span class="tc-cd">Count</span><span class="tc-cd" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap">
         <select id="tcCdMode" onchange="tcCdShow(); tcRender()"><option value="for">for</option><option value="to">until the time</option></select>
         <input id="tcCdSecs" placeholder="05:00" style="width:80px" oninput="tcLater()" title="mm:ss or h:mm:ss, counted from when it goes IN">
         <input id="tcCdTo" type="time" step="1" style="width:110px" onchange="tcRender()"></span>
-      <span class="tc-cd">At zero</span><input class="tc-cd" id="tcEnd" placeholder="LIVE NOW (empty = goes off by itself)" oninput="tcLater()">
+      <span class="tc-cd">At zero</span><input class="tc-cd sl" id="tcEnd" placeholder="LIVE NOW (empty = goes off by itself)" oninput="tcLater()">
       <span class="tc-cd"></span><span class="tc-cd hint">Text: {t} is the time left, e.g. "Starting in {t}". It starts counting when it goes IN.</span>
-      <span class="tc-tk">Label</span><input class="tc-tk" id="tcLabel" placeholder="NEWS / BREAKING (optional)" oninput="tcLater()">
+      <span class="tc-tk">Label</span><input class="tc-tk sl" id="tcLabel" placeholder="NEWS / BREAKING (optional)" oninput="tcLater()">
       <span class="tc-tk">Text file</span><input class="tc-tk" id="tcFile" placeholder="optional: C:\news\ticker.txt (read every 10 s)" oninput="tcLater()">
       <span class="tc-tk">Speed</span><span class="tc-tk"><input class="num" id="tcSpeed" type="number" min="20" max="600" step="10"> pixels / second</span>
       <span class="tc-ck">Format</span><span class="tc-ck"><select id="tcFmt" onchange="tcRender()">
@@ -874,10 +883,11 @@
   <div class="foot"><button class="blue" onclick="saveBooking()">Save</button></div>
 </dialog>
 
+<script src="/js/singlish.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let S = {playlist:[], fps:25}, PL = [], media = [], streamInfo = null, renderedVersion = -1, locked = false, editId = null, destSlot = 0;
+let S = {playlist:[], fps:25}, PL = [], media = [], CHECK = {}, streamInfo = null, renderedVersion = -1, locked = false, editId = null, destSlot = 0;
 
 async function api(url, body) {
   const opt = body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
@@ -998,7 +1008,7 @@ function renderPlaylist() {
           <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}" ${catColor(it)}>${it.type === 'live' ? 'LIVE' : catShort(it)}</span>
           <span class="name">${esc(it.name)}</span>
         </div>
-        <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.squeeze ? ` <span class="badge" style="background:#15803d" title="Squeeze Feed: ${esc(it.squeeze)}">SQUEEZE</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}</div>
+        <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.squeeze ? ` <span class="badge" style="background:#15803d" title="Squeeze Feed: ${esc(it.squeeze)}">SQUEEZE</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}${it.type === 'clip' && CHECK[it.file] ? ` <span class="badge" style="background:#b45309; cursor:help" title="${esc(CHECK[it.file].join('\n'))}">&#9888; CHECK</span>` : ''}</div>
         <div class="metrics">
           <div><div class="lbl">Duration</div><div class="v">${it.duration ? tc(it.duration).slice(0, 11) : 'until Next'}</div></div>
           <div><div class="lbl">Start</div><div class="v" data-f="start">--:--:--</div></div>
@@ -1061,8 +1071,10 @@ async function openEdit(id) {
   $('edFull').textContent = it.file_duration ? `- file is ${clockShort(it.file_duration)} long` : '';
   edCGs = JSON.parse(JSON.stringify(it.cgs || [])); renderItemCG(); trimPrev(); loadCGFiles(); fillSqSel('ed', it);
   fillClients();
-  $('edLufs').textContent = '';
+  $('edLufs').textContent = ''; $('edCheck').textContent = '';
   api('/api/media').then(list => { const m = list.find(x => x.name === it.file);
+    $('edCheck').innerHTML = !m ? '' : m.check == null ? 'checking...' : m.check.length
+      ? `<span style="color:#ff8a1c">&#9888; ${esc(m.check.join('\n'))}</span>` : '<span style="color:#2fbf3a">&#10003; no problems found</span>';
     $('edLufs').textContent = m && m.lufs != null ? `measured loudness ${m.lufs.toFixed(1)} LUFS` + (NORM.normalize ? `, normalize brings it to ${NORM.target} LUFS` : '') : (NORM.normalize ? 'loudness not measured yet' : ''); }).catch(() => {});
   dEdit.showModal();
 }
@@ -1173,15 +1185,25 @@ function addCardCG() { openCG('card', null, cfg => { lvCGs.push(cfg); renderCard
 function editCardCG(i) { openCG('card', lvCGs[i], cfg => { lvCGs[i] = cfg; renderCardCG(); }, () => { lvCGs.splice(i, 1); renderCardCG(); }); }
 
 // commercials
-async function loadMedia() { media = await api('/api/media'); }
+async function loadMedia() {
+  media = await api('/api/media');
+  const c = {}; media.forEach(m => { if (m.check && m.check.length) c[m.name] = m.check; });
+  if (JSON.stringify(c) !== JSON.stringify(CHECK)) { CHECK = c; renderedVersion = -1; }
+}
+// clip check: what is wrong with a clip, as a badge / line
+const checkHtml = m => m.check == null ? '<span class="hint">checking...</span>' : m.check.length
+  ? `<a href="#" style="color:#ff8a1c; font-weight:700" title="${esc(m.check.join('\n'))}" onclick="say(${esc(JSON.stringify(m.name + ':\n\n' + m.check.join('\n')))}); return false">&#9888; ${m.check.length}</a>`
+  : '<span style="color:#2fbf3a">&#10003; OK</span>';
+setInterval(() => { if (!document.hidden) loadMedia().catch(() => {}); }, 60000);
+setTimeout(() => loadMedia().catch(() => {}), 3000);
 async function openLib() {
   await loadMedia();
-  $('libT').innerHTML = '<tr><th></th><th></th><th>Clip</th><th>Length</th><th>Loudness</th><th></th></tr>' + (media.map((m, i) => `
+  $('libT').innerHTML = '<tr><th></th><th></th><th>Clip</th><th>Length</th><th>Loudness</th><th>Check</th><th></th></tr>' + (media.map((m, i) => `
     <tr><td><input type="checkbox" data-i="${i}"></td>
       <td><img class="lib-thumb" loading="lazy" src="/api/thumb/${encodeURIComponent(m.name)}"></td>
-      <td>${esc(m.name)}</td><td class="mono">${m.duration ? tc(m.duration).slice(0, 8) : '?'}</td><td class="mono hint">${m.lufs != null ? m.lufs.toFixed(1) + ' LUFS' : ''}</td>
+      <td>${esc(m.name)}</td><td class="mono">${m.duration ? tc(m.duration).slice(0, 8) : '?'}</td><td class="mono hint">${m.lufs != null ? m.lufs.toFixed(1) + ' LUFS' : ''}</td><td>${checkHtml(m)}</td>
       <td style="white-space:nowrap"><button class="sm" onclick="previewClip(media[${i}].name)">&#9654;</button> <button class="sm" onclick="addClipsList([${i}], 'end')">Add</button></td></tr>`).join('') ||
-    '<tr><td colspan="6" class="hint">No clips yet. Upload some or copy files into the media folder.</td></tr>');
+    '<tr><td colspan="7" class="hint">No clips yet. Upload some or copy files into the media folder.</td></tr>');
   dLib.showModal();
 }
 function addClipsList(idxs, where) {
@@ -1193,9 +1215,24 @@ function addClips(where) { addClipsList([...document.querySelectorAll('#libT inp
 async function upload(input) {
   const fd = new FormData(); for (const f of input.files) fd.append('files', f);
   $('msg').textContent = 'Uploading...';
-  await fetch('/api/media', {method:'POST', body:fd}); input.value = '';
-  $('msg').textContent = 'Upload done';
+  const r = await (await fetch('/api/media', {method:'POST', body:fd})).json().catch(() => ({})); input.value = '';
+  $('msg').textContent = 'Upload done, checking the clips...';
   if (dLib.open) { dLib.close(); openLib(); }
+  watchCheck(r.saved || []);
+}
+// after an upload: wait for the clip check and tell the operator about any problem
+async function watchCheck(names) {
+  for (let i = 0; i < 200 && names.length; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    await loadMedia().catch(() => {});
+    const done = media.filter(m => names.includes(m.name) && m.check != null);
+    if (done.length < names.length) continue;
+    const bad = done.filter(m => m.check.length);
+    $('msg').textContent = bad.length ? `Clip check: ${bad.length} clip(s) need a look` : 'Clip check: all clips OK';
+    if (bad.length) say('Clip check found problems:\n\n' + bad.map(m => m.name + '\n  - ' + m.check.join('\n  - ')).join('\n\n'));
+    if (dLib.open) { dLib.close(); openLib(); }
+    return;
+  }
 }
 
 // playlist manager
@@ -1259,10 +1296,10 @@ async function pollStream() {
   $('dests').innerHTML = streamInfo.destinations.map(d => {
     const st = d.enabled ? d.status : (d.status === 'error' ? 'error' : 'off');
     const fb = fbCountdown(d);
-    const detail = st === 'live' ? `LIVE ${fmtUp(d.uptime)} - ${d.kbps} kbps` + (fb != null ? `  |  FB limit in ${fmtUp(Math.max(0, fb))}` : '') : st === 'error' || st === 'reconnecting' ? (d.error || st) : st === 'connecting' ? 'connecting...' : (d.url ? shortUrl(d.url) + (d.key_set ? '' : ' (no key)') : 'not set up');
+    const detail = st === 'live' ? `LIVE ${fmtUp(d.uptime)} - ${d.now_kbps ?? d.kbps} kbps` + (fb != null ? `  |  FB limit in ${fmtUp(Math.max(0, fb))}` : '') : st === 'error' || st === 'reconnecting' ? (d.error || st) : st === 'connecting' ? 'connecting...' : (d.url ? shortUrl(d.url) + (d.key_set ? '' : ' (no key)') : 'not set up');
     return `<div class="dest">
       <span class="dot ${st}"></span>
-      <div style="min-width:0"><div class="nm">${esc(d.name)}</div><div class="st ${fb != null ? 'fbcd ' + fbLevel(fb) : ''}" title="${esc(d.error)}">${esc(detail)}</div></div>
+      <div style="min-width:0"><div class="nm">${esc(d.name)}${d.layout ? ' <span class="badge" style="background:#7c3aed">9:16</span>' : ''}</div><div class="st ${fb != null ? 'fbcd ' + fbLevel(fb) : ''}" title="${esc(d.error)}">${esc(detail)}</div></div>
       <button class="sm lockable" onclick="openDest(${d.slot})">Setup</button>
       ${d.enabled ? `<button class="sm red lockable" onclick="streamToggle(${d.slot}, 'stop')">Stop</button>`
                   : `<button class="sm green lockable" onclick="streamToggle(${d.slot}, 'start')" ${d.url ? '' : 'disabled'}>Go live</button>`}
@@ -1279,7 +1316,12 @@ function openDest(slot) {
   $('dsName').value = d.name; $('dsUrl').value = d.url; $('dsKey').value = '';
   $('dsKey').placeholder = d.key_set ? 'saved (leave empty to keep)' : 'paste the stream key';
   $('dsPreset').value = [...$('dsPreset').options].some(o => o.value === d.url) ? d.url : '';
+  $('dsLayout').value = d.layout || ''; $('dsPos').value = d.crop_pos ?? 50; dsLayoutShow();
   dDest.showModal();
+}
+function dsLayoutShow() {
+  const v = $('dsLayout').value;
+  document.querySelectorAll('.dsV').forEach((e, i) => e.style.display = v && (v === 'crop' || i > 1) ? '' : 'none');
 }
 function presetChanged() {
   const sel = $('dsPreset'); if (!sel.value) return;
@@ -1287,7 +1329,8 @@ function presetChanged() {
   if (/^Destination \d$/.test($('dsName').value) || !$('dsName').value) $('dsName').value = sel.options[sel.selectedIndex].text;
 }
 async function saveDest() {
-  await api(`/api/stream/${destSlot}`, {name:$('dsName').value.trim(), url:$('dsUrl').value.trim(), key:$('dsKey').value.trim()});
+  await api(`/api/stream/${destSlot}`, {name:$('dsName').value.trim(), url:$('dsUrl').value.trim(), key:$('dsKey').value.trim(),
+                                        layout:$('dsLayout').value, crop_pos:+$('dsPos').value});
   dDest.close(); pollStream();
 }
 
@@ -1711,7 +1754,9 @@ async function openRemote() {
       <div class="hint" style="margin-top:6px">Full control screen: ${esc(u.replace('/remote', '/'))}</div></div></div>`).join('') +
     (r.urls.length ? '' : '<p class="hint">No network address found. Is this PC on a network?</p>') +
     `<p class="hint">${r.password_set ? 'The phone asks for the remote password once.' : '<b style="color:var(--orange)">No remote password set:</b> anyone on the network can control Playout. Set one in Settings &gt; Passwords.'}
-     Stream Deck / Companion: http://${esc(r.host)}:${location.port || 8080}/trigger/next${r.password_set ? '?key=PASSWORD' : ''}</p>`;
+     Stream Deck / Companion: http://${esc(r.host)}:${location.port || 8080}/trigger/next${r.password_set ? '?key=PASSWORD' : ''}</p>` +
+    (r.urls.length ? `<div style="display:flex; gap:14px; align-items:center; margin:10px 0"><img class="qr" src="/api/qr.png?t=${encodeURIComponent(r.urls[0].replace('/remote', '/health'))}" alt="QR">
+      <div><b>Stream health</b> (upload speed, dropped frames, viewers, CPU):<div class="mono" style="user-select:text">${esc(r.urls[0].replace('/remote', '/health'))}</div></div></div>` : '');
   dRemote.showModal();
 }
 
@@ -1933,6 +1978,7 @@ const cmSet = ch => api('/api/comments/settings', ch);
 async function cmConnect() { await cmSet({youtube: $('cmYt').value.trim(), facebook: $('cmFb').value.trim()}); $('cmStatus').textContent = 'Connecting...'; setTimeout(cmPoll, 2500); }
 async function cmShow(n) { const r = await api('/api/comments/show', {n}); if (r.error) say(r.error); cmPoll(); }
 async function cmAdd() {
+  Singlish.finish($('cmAuthor')); Singlish.finish($('cmText'));
   const text = $('cmText').value.trim(); if (!text) return;
   const r = await api('/api/comments/add', {author: $('cmAuthor').value.trim(), text});
   $('cmText').value = ''; await cmPoll(); if (r.n && !CM.cfg.auto) cmShow(r.n);
