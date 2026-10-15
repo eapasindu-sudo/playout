@@ -310,9 +310,9 @@
         <button class="sm" id="nxPrev" onclick="previewNext()" title="Watch the next clip before it goes on air">&#9654; Preview</button></div>
       <div class="srcrow lockable">
         <span class="dot" id="srcDot"></span>
-        <span class="lbl" style="text-align:left">vMix NDI input</span>
+        <span class="lbl" style="text-align:left">Live input (vMix / USB)</span>
         <select id="mainSrc" onchange="pickSource(this.value)"></select>
-        <button class="sm" title="Search the network again" onclick="refreshSources()">&#10227;</button>
+        <button class="sm" title="Search the network and USB devices again" onclick="refreshSources(); refreshDevices()">&#10227;</button>
       </div>
       <div class="srcrow" title="Program sound on this PC's speakers / headphones">
         <span class="dot" id="aoDot"></span>
@@ -332,7 +332,7 @@
         <button class="lockable" onclick="openSrc()">Live Source</button>
         <button class="lockable" onclick="$('upFile').click()">Upload Clips</button>
         <button class="lockable" onclick="openMediaFolder()" title="Open the media folder on this PC">Media Folder</button>
-        <button id="bFull" onclick="toggleFull()" title="Program output full screen on the second display (Esc on that screen closes it)">Full Screen</button>
+        <button id="bFull" onclick="toggleFull()" title="Program output full screen on a display you pick (Esc on that screen closes it)">Full Screen</button>
         <button id="bLock" onclick="toggleLock()">Lock</button>
         <button onclick="openComposerHelp()" title="Open CG Composer to make CGs">CG Composer</button>
         <button onclick="openReport()" title="Commercials aired per client, as PDF / Excel">Ad Report</button>
@@ -549,6 +549,13 @@
   <div class="foot"><button class="blue" onclick="saveStinger()">Save</button></div>
 </dialog>
 
+<!-- Full screen output: which display -->
+<dialog id="dFull" style="width:min(460px, 94vw)">
+  <header>Full screen output: pick the display <button class="sm" onclick="dFull.close()">Close</button></header>
+  <div class="body"><div id="fullList" style="display:flex; flex-direction:column; gap:8px"></div>
+    <div class="hint" style="margin-top:8px">Esc on that display (or Exit Full Screen here) closes it. Playout remembers the display.</div></div>
+</dialog>
+
 <!-- Stream quality -->
 <dialog id="dStream" style="width:min(520px, 94vw)">
   <header>Stream quality <button class="sm" onclick="dStream.close()">Close</button></header>
@@ -725,9 +732,16 @@
 <dialog id="dSet" style="width:min(760px, 96vw)">
   <header>Settings <span class="hint" id="setVer" style="margin-left:10px; font-weight:400"></span> <button class="sm" onclick="dSet.close()">Close</button></header>
   <div class="body" id="setBody">
-    <div class="setnav"><a href="#" data-s="secFail">Failover</a><a href="#" data-s="secAudio">Audio</a><a href="#" data-s="secPw">Passwords</a>
+    <div class="setnav"><a href="#" data-s="secOut">Output format</a><a href="#" data-s="secFail">Failover</a><a href="#" data-s="secAudio">Audio</a><a href="#" data-s="secPw">Passwords</a>
       <a href="#" data-s="secUsers">Users</a><a href="#" data-s="secAlerts">Alerts</a><a href="#" data-s="secBackup">Backup PC</a><a href="#" data-s="secRec">Recording</a><a href="#" data-s="secSdi">SDI out</a>
       <a href="#" data-s="secWatch">Watch folder</a><a href="#" data-s="secUpdate">Updates</a></div>
+    <div class="setsec" id="secOut">Output format (program out, NDI, full screen, stream source)</div>
+    <div class="form">
+      <span>Size</span><select id="outRes"><option value="720p">720p (1280x720)</option><option value="1080p">1080p HD (1920x1080)</option><option value="2160p">4K UHD (3840x2160)</option></select>
+      <span>Frame rate</span><select id="outFps"><option value="25">25 fps (PAL, Sri Lanka TV)</option><option value="50">50 fps</option><option value="29.97">29.97 fps</option><option value="30">30 fps</option><option value="59.94">59.94 fps</option><option value="60">60 fps</option><option value="23.976">23.976 fps</option><option value="24">24 fps</option></select>
+      <span></span><span class="hint" id="outInfo">Set it to what vMix / the ATEM sends, so nothing has to be converted. 4K needs a strong PC (4x the work of 1080p). Playout restarts to change it (about 20 seconds off air).</span>
+    </div>
+
     <div class="setsec" id="secFail">Failover (live input lost)</div>
     <div class="form">
       <span>Failover</span><label><input type="checkbox" id="foOn"> When the vMix / live input is lost, put a filler on air</label>
@@ -952,7 +966,7 @@ async function poll() {
   $('msg').textContent = S.message || '';
   $('pvProg').style.width = it && it.duration ? Math.min(100, 100 * S.position / it.duration) + '%' : '0';
   const tag = $('pvTag'); tag.textContent = isClip ? 'ON-AIR' : 'LIVE'; tag.style.background = isClip ? 'var(--red)' : 'var(--green)';
-  $('liveInfo').textContent = S.live_source ? (S.live_connected ? 'Live input connected' : 'Live input NOT connected: check vMix NDI output is on') : 'Pick the vMix NDI output above';
+  $('liveInfo').textContent = S.live_source ? (S.live_connected ? 'Live input connected' : 'Live input NOT connected: ' + (S.live_source.startsWith('dev:') ? 'check the USB cable / device' : 'check vMix NDI output is on')) : 'Pick the vMix NDI output or the Blackmagic USB above';
   $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
   if (S.live_source !== shownSource) fillSources();
   meters(S.meters);
@@ -964,7 +978,7 @@ async function poll() {
   showNext();
 }
 function srcLabel(k) {
-  if (!k) return 'vMix NDI: ' + (S.live_source || 'no source selected');
+  if (!k) return S.live_source?.startsWith('dev:') ? 'Main input: ' + srcLabel(S.live_source) : 'vMix NDI: ' + (S.live_source || 'no source selected');
   if (k === 'bars') return 'Colour bars + tone';
   if (k.startsWith('ndi:')) return 'NDI: ' + k.slice(4);
   if (k.startsWith('url:')) return 'Feed: ' + k.slice(4);
@@ -1137,7 +1151,7 @@ let lvCGs = [], inputs = {ndi:[], devices:[]};
 async function loadInputs(force) {
   if (force || !inputs.loaded) { try { inputs = await api('/api/inputs'); inputs.loaded = true; } catch (e) {} }
   const cur = $('lvSrc').dataset.want || '';
-  const opts = [['', `Main vMix input (${S.live_source || 'none picked'})`]];
+  const opts = [['', `Main input (${S.live_source?.startsWith('dev:') ? srcLabel(S.live_source) : (S.live_source || 'none picked')})`]];
   inputs.ndi.filter(n => n !== S.live_source).forEach(n => opts.push(['ndi:' + n, 'NDI: ' + n]));
   if (cur.startsWith('ndi:') && !opts.some(o => o[0] === cur)) opts.push([cur, srcLabel(cur) + ' (offline)']);
   opts.push(['dev', 'USB / HDMI capture device'], ['url', 'Network feed (SRT / RTMP / HLS / YouTube)'], ['bars', 'Colour bars + tone (test)']);
@@ -1157,11 +1171,8 @@ async function loadInputs(force) {
 }
 // the sound of the same device (ATEM Mini: video "Blackmagic Design", sound "... (Blackmagic Design)")
 function lvGuessAudio() {
-  const v = ($('lvVid').value || '').toLowerCase(); if (!v) return;
-  const words = v.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['video', 'capture', 'camera', 'device', 'webcam'].includes(w));
-  const auds = [...$('lvAud').options].map(o => o.value).filter(Boolean);
-  const guess = auds.find(a => a.toLowerCase().includes(v)) || auds.find(a => words.some(w => a.toLowerCase().includes(w)));
-  $('lvAud').value = guess || '';
+  if (!$('lvVid').value) return;
+  $('lvAud').value = guessAudio($('lvVid').value, [...$('lvAud').options].map(o => o.value).filter(Boolean));
 }
 function lvSrcChanged() {
   document.querySelectorAll('.lvDev').forEach(e => e.style.display = $('lvSrc').value === 'dev' ? '' : 'none');
@@ -1289,18 +1300,34 @@ async function loadSources() {
 async function openSrc() { await loadSources(); dSrc.showModal(); }
 async function setSource() { await api('/api/live_source', {name:$('srcSel').value}); dSrc.close(); poll(); }
 
-// main-screen NDI input picker (vMix outputs listed first)
-let sourceList = [], shownSource = null;
+// main-screen input picker: vMix / NDI outputs (vMix first), then USB capture devices (Blackmagic ATEM in USB mode...)
+let sourceList = [], shownSource = null, devList = [];
+// the sound device of the same box (ATEM Mini: video "Blackmagic Design", sound "... (Blackmagic Design)")
+function guessAudio(video, auds) {
+  const v = (video || '').toLowerCase(); if (!v) return '';
+  const words = v.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['video', 'capture', 'camera', 'device', 'webcam'].includes(w));
+  return auds.find(a => a.toLowerCase().includes(v)) || auds.find(a => words.some(w => a.toLowerCase().includes(w))) || '';
+}
+function devKeys() {
+  const auds = devList.filter(d => d.kind === 'audio').map(d => d.name);
+  return devList.filter(d => d.kind === 'video').map(d => { const a = guessAudio(d.name, auds); return 'dev:' + d.name + (a ? '|' + a : ''); });
+}
 function fillSources() {
   const sel = $('mainSrc'); if (document.activeElement === sel) return;
   const cur = S.live_source || '';
   const names = [...sourceList];
-  if (cur && !names.includes(cur)) names.unshift(cur);
+  if (cur && !cur.startsWith('dev:') && !names.includes(cur)) names.unshift(cur);
   names.sort((a, b) => (/vmix/i.test(b) - /vmix/i.test(a)) || a.localeCompare(b));
-  sel.innerHTML = '<option value="">(none - pick vMix output)</option>' + names.map(n =>
-    `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}${sourceList.includes(n) ? '' : '  (offline)'}</option>`).join('');
+  const devs = devKeys();
+  if (cur.startsWith('dev:') && !devs.includes(cur)) devs.unshift(cur);
+  sel.innerHTML = '<option value="">(none - pick vMix output)</option>' +
+    (names.length ? '<optgroup label="vMix / NDI">' + names.map(n =>
+      `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}${sourceList.includes(n) ? '' : '  (offline)'}</option>`).join('') + '</optgroup>' : '') +
+    (devs.length ? '<optgroup label="USB capture (Blackmagic ATEM, capture card)">' + devs.map(k =>
+      `<option value="${esc(k)}" ${k === cur ? 'selected' : ''}>${esc(srcLabel(k))}</option>`).join('') + '</optgroup>' : '');
   shownSource = S.live_source;
 }
+async function refreshDevices() { try { devList = (await api('/api/inputs')).devices || []; } catch (e) {} fillSources(); }
 async function refreshSources() { try { sourceList = await api('/api/sources'); } catch (e) {} fillSources(); }
 async function pickSource(name) { await api('/api/live_source', {name}); await poll(); fillSources(); }
 
@@ -1495,6 +1522,8 @@ async function openSettings(focus) {
   $('sdiDev').innerHTML = sd.device ? `<option selected>${esc(sd.device)}</option>` : '<option value="">(press Find cards)</option>';
   $('sdiSt').textContent = sd.enabled ? sd.status + (sd.error ? ' - ' + sd.error : '') : 'off';
   $('recDir').value = SET.recording?.folder || '';
+  const of = SET.output || {}; $('outRes').value = of.resolution || '1080p'; $('outFps').value = of.fps || '25';
+  $('outInfo').textContent = `Running now: ${of.running || '?'}` + (of.restart_needed ? ' (the new format starts after a restart)' : '') + '. Set it to what vMix / the ATEM sends, so nothing has to be converted. 4K needs a strong PC (4x the work of 1080p). Playout restarts to change it (about 20 seconds off air).';
   $('recFree').textContent = `Recordings (REC button and scheduled recordings) are saved here` + (SET.recording?.free_gb != null ? ` - ${SET.recording.free_gb} GB free.` : '.') + ' A big, fast drive is best (1 hour of 1080p 20 Mbps is about 9 GB).';
   const wf = SET.watch; $('wfOn').checked = wf.enabled; $('wfDir').value = wf.folder || ''; $('wfMove').checked = wf.move; $('wfAdd').checked = wf.add_to_playlist;
   $('wfLog').textContent = (wf.error ? 'Problem: ' + wf.error + '\n' : '') + (wf.log.slice(0, 6).map(l => l.time.slice(5, 16) + '  ' + l.text).join('\n') || 'nothing yet');
@@ -1521,6 +1550,7 @@ async function saveSettings() {
     sdi: {enabled:$('sdiOn').checked, ffmpeg:$('sdiFf').value.trim(), device:$('sdiDev').value},
     watch: {enabled:$('wfOn').checked, folder:$('wfDir').value.trim(), move:$('wfMove').checked, add_to_playlist:$('wfAdd').checked},
     recording: {folder:$('recDir').value.trim()},
+    output: {resolution:$('outRes').value, fps:$('outFps').value},
   };
   if (body.backup.role === 'backup' && (!body.backup.main_url || !body.backup.key)) { say('A backup PC needs the main PC address and the sync key.'); return; }
   if (body.backup.role === 'main' && !body.backup.key) { say('Set a sync key on the main PC (the same one goes on the backup PC).'); return; }
@@ -1529,6 +1559,13 @@ async function saveSettings() {
   if (!r.ok) { const e = await r.json().catch(() => ({})); say('Settings were not saved: ' + (e.error || (r.status === 403 ? 'wrong password or not an admin' : 'error ' + r.status))); return; }
   SET = await r.json(); NORM = SET.audio; if ($('pwLock').value !== '********') adminPw = $('pwLock').value;
   dSet.close(); $('msg').textContent = 'Settings saved';
+  if (SET.output?.restart_needed) {
+    const warn = onAirNow() ? 'WARNING: Playout is on air / streaming / recording. The output stops for about 20 seconds.\n\n' : '';
+    if (!SET.output.can_restart) { say('The new output format (' + SET.output.resolution + ' ' + SET.output.fps + ' fps) starts the next time Playout starts.'); return; }
+    if (await ask(warn + `Restart Playout now to change the output to ${SET.output.resolution} ${SET.output.fps} fps?\n\nNo = it changes the next time Playout starts.`)) {
+      await api('/api/restart', {}); $('msg').textContent = 'Restarting Playout...';
+    }
+  }
 }
 async function pollUpdate(r) {
   try { UPD = r || await api('/api/update'); } catch (e) { return; }
@@ -2094,10 +2131,21 @@ async function browseStinger(input) {
 }
 async function saveStinger() { await setStinger({file:$('stFile').value, cut:+$('stCut').value || 0, auto:$('stAuto').checked}); dSting.close(); }
 
-// full screen output on the second display
+// full screen output on a display of this PC (asks which one when there are two or more)
 let fullOn = false;
 async function toggleFull() {
-  const r = await api('/api/fullscreen', {on: !fullOn});
+  if (fullOn) return goFull(false);
+  let screens = [];
+  try { screens = await api('/api/screens'); } catch (e) {}
+  if (screens.length < 2) return goFull(true, screens.length ? 0 : null);
+  let last = null; try { last = localStorage.getItem('fullScreen'); } catch (e) {}
+  $('fullList').innerHTML = screens.map(sc => `<button class="${String(sc.index) === last ? 'blue' : ''}" style="text-align:left; padding:10px"
+    onclick="dFull.close(); goFull(true, ${sc.index})">Display ${sc.index + 1}: ${sc.width} x ${sc.height}${sc.x === 0 && sc.y === 0 ? ' (main screen, Playout is here)' : ''}${String(sc.index) === last ? ' - last used' : ''}</button>`).join('');
+  dFull.showModal();
+}
+async function goFull(on, screen) {
+  if (on && screen != null) { try { localStorage.setItem('fullScreen', String(screen)); } catch (e) {} }
+  const r = await api('/api/fullscreen', {on, screen});
   if (r.ok) { fullOn = r.on; $('bFull').classList.toggle('on', fullOn); $('bFull').textContent = fullOn ? 'Exit Full Screen' : 'Full Screen'; }
   else if (r.error === 'browser') window.open('/output', 'playout_output', 'popup');
   else say('Full screen output did not open: ' + r.error);
@@ -2201,7 +2249,7 @@ document.addEventListener('keydown', e => {
 })();
 poll(); setInterval(poll, 200);
 pollStream(); setInterval(pollStream, 1000);
-refreshSources(); setInterval(refreshSources, 5000);
+refreshSources(); setInterval(refreshSources, 5000); refreshDevices();
 pollSys(); setInterval(pollSys, 2000);
 pollRec(); setInterval(() => pollRec(), 1000);
 pollAO(); setInterval(() => pollAO(), 5000);

@@ -54,6 +54,7 @@ def wait_for_server(port, timeout=20):
 
 EXIT_ALREADY_RUNNING = 10      # launcher: do not restart for these
 EXIT_START_FAILED = 11
+EXIT_RESTART = 12              # launcher: start again at once (Settings > Output format)
 
 
 def supervise():
@@ -63,6 +64,9 @@ def supervise():
     while True:
         started = time.time()
         code = subprocess.call(args)
+        if code == EXIT_RESTART:
+            time.sleep(1)
+            continue
         if code in (0, EXIT_ALREADY_RUNNING, EXIT_START_FAILED):
             return code
         now = time.time()
@@ -163,6 +167,14 @@ def start_server(say=print):
         os._exit(0)
 
     server.updater.on_install = install_update
+
+    def restart():
+        """Settings > Output format: close and let the launcher start Playout again."""
+        server.shutdown()
+        os._exit(EXIT_RESTART)
+
+    if paths.FROZEN and "--app" in sys.argv:
+        server.restart_hook = restart
     print(f"Control screen on http://localhost:{port}")
     return server, port
 

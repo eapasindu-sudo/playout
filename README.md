@@ -341,6 +341,18 @@ Needs Windows 10 or 11 (64-bit) with the Microsoft Edge WebView2 runtime, which 
 Running from source instead: install Python 3.12, run `install.bat`, then `start.bat`
 (this opens the browser version).
 
+## Blackmagic ATEM (USB) as the live input
+
+The **Live input** picker (top right) lists the vMix / NDI outputs and the USB capture devices.
+Pick **USB: Blackmagic Design + ...** there and every live card on "Main input" shows the ATEM
+directly. Blackmagic / Elgato / Magewell / AJA devices are opened in the format they send
+(no conversion asked of the device); set the ATEM to the same frame rate as the output.
+
+## Output format
+
+Settings > Output format: 720p, 1080p or 4K and the frame rate (25, 50, 29.97, 30, 59.94, 60...).
+Playout restarts to change it. **Full Screen** asks which display to use when there are two or more.
+
 ## Graphics card (GPU)
 
 Streaming, the 9:16 vertical stream and recording use the graphics card's video encoder by

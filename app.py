@@ -28,6 +28,7 @@ from cg import CGManager, cg_info, cg_kind, cg_preview, list_cg
 from cgedit import PRESET_EXT, list_presets, make_blueprint, read_cgp, update_preset
 from cgfx import render_still
 import media as media_mod
+import engine as engine_mod
 from engine import Engine
 from system import SystemMonitor
 from media import MEDIA_EXT, list_media, thumbnail
@@ -78,6 +79,23 @@ def load_config():
 
 
 cfg = load_config()
+OUTPUT_SIZES = {"720p": (1280, 720), "1080p": (1920, 1080), "2160p": (3840, 2160)}
+OUTPUT_RATES = ("23.976", "24", "25", "29.97", "30", "50", "59.94", "60")
+restart_hook = None     # set by the desktop app: closes Playout and starts it again
+
+
+def save_output_format(res, fps):
+    """Program output size / frame rate in config.json (used from the next start)."""
+    path = os.path.join(ROOT, "config.json")
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    raw["width"], raw["height"] = OUTPUT_SIZES[res]
+    raw["fps"] = fps
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2)
+    os.replace(tmp, path)
+    return raw
 media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
 store = Store(cfg["data_dir"])
 engine = Engine(cfg, cfg["media_dir"], cfg["log_dir"])
@@ -154,7 +172,7 @@ def sec():
 
 OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png")
 LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen", "/api/preview.jpg")   # + CG Composer   # full screen output window
-ADMIN_ONLY = ("/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
+ADMIN_ONLY = ("/api/restart", "/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
               "/api/sdi", "/api/alerts", "/api/backup")
 
 
@@ -427,6 +445,15 @@ def settings_api():
                 recorder.folder = folder
                 watcher.folders[1:2] = [folder]
                 store.set(record_folder=folder)
+        if "output" in b:
+            o = b["output"] or {}
+            res, fps = o.get("resolution"), str(o.get("fps") or "")
+            if res not in OUTPUT_SIZES or fps not in OUTPUT_RATES:
+                return jsonify(error="Pick an output size and frame rate"), 400
+            try:
+                save_output_format(res, fps)
+            except OSError as e:
+                return jsonify(error=f"Could not save config.json: {e}"), 400
         if "watch" in b:
             w = b["watch"] or {}
             store.set(watch=watch.configure(w.get("enabled"), w.get("folder"), w.get("move"), w.get("add_to_playlist")))
@@ -443,8 +470,32 @@ def settings_api():
         update={"repo": updater.repo, "token_set": bool(updater.token), "auto_check": updater.auto_check},
         alerts=alerts.info(), sdi=sdi.info(), watch=watch.info(), backup=backup.info(),
         recording={"folder": recorder.folder, "free_gb": _free_gb(recorder.folder)},
+        output=_output_info(),
         need_password=bool(s["lock_hash"]) and not users(), users=bool(users()),
         version=VERSION)
+
+
+def _output_info():
+    run_res = next((k for k, v in OUTPUT_SIZES.items() if v == (engine.width, engine.height)), f"{engine.width}x{engine.height}")
+    run_fps = next((r for r in OUTPUT_RATES if engine_mod.parse_fps(r) == engine.fps), str(float(engine.fps)))
+    try:
+        with open(os.path.join(ROOT, "config.json"), encoding="utf-8") as f:
+            raw = json.load(f)
+        saved_res = next((k for k, v in OUTPUT_SIZES.items() if v == (int(raw.get("width", 0)), int(raw.get("height", 0)))), run_res)
+        saved_fps = str(raw.get("fps", run_fps))
+    except (OSError, ValueError):
+        saved_res, saved_fps = run_res, run_fps
+    return {"resolution": saved_res, "fps": saved_fps, "running": f"{run_res} {run_fps} fps",
+            "restart_needed": (saved_res, saved_fps) != (run_res, run_fps), "can_restart": restart_hook is not None}
+
+
+@app.post("/api/restart")
+def restart_app():
+    """Close Playout and start it again (new output format). Desktop app only."""
+    if restart_hook is None:
+        return jsonify(ok=False, error="Close Playout and start it again")
+    threading.Timer(1.0, restart_hook).start()
+    return jsonify(ok=True)
 
 
 @app.post("/api/admin_check")
@@ -611,12 +662,12 @@ _pv_lock = threading.Lock()
 _pv_cache = {}          # width -> (frame it was made from, jpeg)
 
 
-def _jpeg(width=640):
+def _jpeg(width=640, quality=75):
     """The program picture as a small JPEG. Made once per new frame and shared by every
     preview window (desktop app, remotes), so more viewers cost nothing extra."""
     frame = engine.last_frame
     with _pv_lock:
-        hit = _pv_cache.get(width)
+        hit = _pv_cache.get((width, quality))
         if hit and hit[0] is frame:
             return hit[1]
         img = Image.frombuffer("RGB", (engine.width, engine.height), frame, "raw", "BGRX", 0, 1)
@@ -627,9 +678,9 @@ def _jpeg(width=640):
         if img.size != (width, h):
             img = img.resize((width, h), Image.BILINEAR)
         buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=75)
+        img.save(buf, "JPEG", quality=quality)
         data = buf.getvalue()
-        _pv_cache[width] = (frame, data)
+        _pv_cache[(width, quality)] = (frame, data)
         return data
 
 
@@ -676,12 +727,7 @@ def output_stream():
                 time.sleep(period / 4)
                 continue
             last = frame
-            img = Image.frombuffer("RGB", (engine.width, engine.height), frame, "raw", "BGRX", 0, 1)
-            if w != engine.width:
-                img = img.resize((w, int(w * engine.height / engine.width)), Image.BILINEAR)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=q)
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n"
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + _jpeg(w, q) + b"\r\n"
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 

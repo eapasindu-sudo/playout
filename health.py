@@ -98,6 +98,12 @@ class Health:
         e = self.engine
         if getattr(e, "failover_active", False):
             add("Live input", "bad", "LOST - filler on air")
+        elif e.live.connected and getattr(e.live, "is_device", False):
+            got, text, lvl = e.live.in_fps, "USB: " + e.live.source_name[4:].split("|")[0] + " " + (e.live.mode or ""), "ok"
+            if got and not any(abs(got - fps * k) < 1.5 for k in (1, 2)):
+                lvl = "warn"
+                text += f", {got:g} fps from the device on a {fps:g} fps output: set the device / ATEM to {fps:g} fps"
+            add("Live input", lvl, text)
         elif e.live.connected:
             add("Live input", "ok", f"{e.live.source_name or 'connected'}")
         else:

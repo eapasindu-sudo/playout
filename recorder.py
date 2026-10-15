@@ -77,7 +77,7 @@ class Recorder:
         self.file = os.path.join(self.folder, dt.datetime.now().strftime("PGM_%Y-%m-%d_%H-%M-%S.mp4"))
         self.error = ""
         self.dropped = self.frames = 0
-        self._q = queue.Queue(maxsize=int(float(self.engine.fps) * 2))
+        self._q = queue.Queue(maxsize=max(8, int(float(self.engine.fps))))   # 1 s of frames at most (RAM)
         self._on = True
         self.started = time.time()
         self._thread = threading.Thread(target=self._run, daemon=True, name="recorder")
@@ -156,7 +156,7 @@ class Recorder:
                 img = np.asarray(video).reshape(self.engine.height, self.engine.width, 4)
                 vf = av.VideoFrame.from_ndarray(img, format="bgra")
                 if pix != "bgra" or (w, h) != (self.engine.width, self.engine.height):
-                    vf = vf.reformat(width=w, height=h, format=pix)
+                    vf = vf.reformat(width=w, height=h, format=pix, interpolation="FAST_BILINEAR")
                 vf.pts, vf.time_base = vpts, vtb
                 vpts += 1
                 for pkt in vs.encode(vf):

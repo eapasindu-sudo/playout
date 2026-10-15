@@ -41,6 +41,54 @@ def parse_fps(value):
     return table.get(s) or Fraction(s)
 
 
+class MainInput:
+    """The main live input (top right picker, and every live card set to "Main input"): a vMix / NDI
+    source, or a USB capture device such as a Blackmagic ATEM Mini in USB mode ("dev:Video|Sound")."""
+
+    def __init__(self, finder, width, height, fps):
+        self.ndi = LiveInput(finder, width, height)
+        self.width, self.height, self.fps = width, height, fps
+        self.dev = None
+        self.source_name = None
+
+    def set_source(self, name):
+        name = name or None
+        self.source_name = name
+        if name and name.startswith("dev:"):
+            self.ndi.set_source(None)
+            if self.dev is None or self.dev.key != name:
+                if self.dev is not None:
+                    self.dev.close()
+                self.dev = CaptureInput(name, self.width, self.height, self.fps)
+        else:
+            if self.dev is not None:
+                self.dev.close()
+                self.dev = None
+            self.ndi.set_source(name)
+
+    @property
+    def connected(self):
+        return self.dev.connected if self.dev is not None else self.ndi.connected
+
+    @property
+    def is_device(self):
+        return self.dev is not None
+
+    def __getattr__(self, name):          # mode, in_fps, error of the USB device
+        dev = self.__dict__.get("dev")
+        if dev is not None and name in ("mode", "in_fps", "error"):
+            return getattr(dev, name)
+        raise AttributeError(name)
+
+    def grab(self, n, want_video=True):
+        return self.dev.grab(n, want_video) if self.dev is not None else self.ndi.grab(n, want_video)
+
+    def close(self):
+        if self.dev is not None:
+            self.dev.close()
+        self.ndi.close()
+
+
 def new_id():
     return uuid.uuid4().hex[:8]
 
@@ -108,7 +156,7 @@ class Engine:
         self.media_dir = media_dir
         self.asrun = AsRunLog(log_dir)
         self.finder = SourceFinder()
-        self.live = LiveInput(self.finder, self.width, self.height)
+        self.live = MainInput(self.finder, self.width, self.height, self.fps)
         self.output = NDIOutput(cfg.get("output_name", "PLAYOUT PGM"), self.width, self.height, self.fps)
         self.black = np.zeros(self.width * self.height * 4, np.uint8)
         self.black[3::4] = 255
@@ -379,6 +427,7 @@ class Engine:
     def _sync_inputs(self):
         """Open the extra inputs live cards use (other NDI sources, USB capture, bars); close the rest."""
         wanted = {it.get("source") for it in self.playlist if it.get("type") == "live" and it.get("source")}
+        wanted.discard(self.live.source_name)     # the main input's own device: it is open already
         for key in list(self.inputs):
             if key not in wanted:
                 self.inputs.pop(key).close()
@@ -628,8 +677,10 @@ class Engine:
                     self.item_ticks += 1
                     key = (item or {}).get("source")
                     inp = self.inputs.get(key) if key else None
+                    if key and key == self.live.source_name:
+                        inp = self.live                  # the same USB device as the main input
                     if inp is not None:
-                        v, a = inp.grab(n)
+                        v, a = (live_v, live_a) if inp is self.live else inp.grab(n)
                         ok = v is not None and getattr(inp, "connected", True)
                         video = self._failover(ok, n) if not ok else v
                         if video is not None and not ok:

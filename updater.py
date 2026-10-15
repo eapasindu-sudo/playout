@@ -143,17 +143,37 @@ class Updater:
             self.state = "idle"
 
     def install(self):
-        """Hand over to update.ps1 (next to Playout.exe), which runs on its own: it waits for Playout to
-        close, stops what still runs from the install folder, installs silently, and starts Playout again
-        (also when the install did not work). Windows asks the admin Yes / No question for the install."""
+        """Start the downloaded installer with the Windows admin Yes / No question shown in front of
+        Playout (it comes from the Playout window itself, so it cannot hide in the taskbar), then close.
+        The installer closes what is left of Playout, installs, and starts Playout again (/AUTOSTART)."""
         if self.state != "ready" or not self.file or not os.path.isfile(self.file):
             return {"ok": False, "error": "Download the update first"}
         if sys.platform != "win32":
             return {"ok": False, "error": "Install works on Windows only"}
+        params = f'/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /AUTOSTART /LOG="{SETUP_LOG}"'
+        try:
+            with open(RESULT_FILE, "w", encoding="utf-8") as f:
+                f.write(f"99 {self.latest}")      # replaced by the new version starting (see last_result)
+        except OSError:
+            pass
+        err = _run_elevated(self.file, params)
+        if err == 1223:
+            _remove(RESULT_FILE)
+            return {"ok": False, "error": "The Windows admin question was answered No. Press Install again and choose Yes."}
+        if err:
+            _remove(RESULT_FILE)
+            return self._install_by_script()
+        self.state = "installing"
+        if self.on_install:
+            threading.Timer(1.5, self.on_install).start()
+        return {"ok": True}
+
+    def _install_by_script(self):
+        """Older way (update.ps1 next to Playout.exe), used only if the installer could not be started directly."""
         app_dir = os.path.dirname(sys.executable)
         script = os.path.join(app_dir, "update.ps1")
         if not os.path.isfile(script):
-            return {"ok": False, "error": "update.ps1 is missing: install this version by hand once"}
+            return {"ok": False, "error": "Could not start the installer: run " + self.file + " by hand"}
         with open(REQUEST_FILE, "w", encoding="utf-8") as f:
             json.dump({"setup": self.file, "pid": os.getpid(), "version": self.latest}, f)
         args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
@@ -182,8 +202,11 @@ class Updater:
         if not text:
             return
         code, _, want = text.partition(" ")
+        if code == "99" and want and _ver(want) <= _ver(self.current):
+            code = "0"                     # started straight from Playout: the new version running = it worked
         if code != "0" or (want and _ver(want) > _ver(self.current)):
-            why = {"97": "the Windows admin question was answered No", "98": "the installer file was not found"}
+            why = {"97": "the Windows admin question was answered No", "98": "the installer file was not found",
+                   "99": "the installer did not finish"}
             self.notice = (f"The last update ({want or '?'}) did not install "
                            f"({why.get(code, f'setup code {code}')}). Details: {SETUP_LOG}")
         else:
@@ -191,6 +214,42 @@ class Updater:
         t = threading.Timer(300, lambda: setattr(self, "notice", ""))     # shown after the restart only
         t.daemon = True
         t.start()
+
+
+def _remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _run_elevated(exe, params):
+    """ShellExecuteEx 'runas' from the Playout window: 0 = started, 1223 = admin question answered No."""
+    import ctypes
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("fMask", ctypes.c_ulong), ("hwnd", wintypes.HWND),
+                    ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+                    ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE),
+                    ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+                    ("dwHotKey", wintypes.DWORD), ("hIcon", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
+    try:
+        info = SHELLEXECUTEINFO()
+        info.cbSize = ctypes.sizeof(info)
+        info.fMask = 0x00000040 | 0x00000400            # SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI
+        info.hwnd = ctypes.windll.user32.GetForegroundWindow()
+        info.lpVerb, info.lpFile, info.lpParameters = "runas", exe, params
+        info.lpDirectory = os.path.dirname(exe)
+        info.nShow = 1
+        if ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+            if info.hProcess:
+                ctypes.windll.kernel32.CloseHandle(info.hProcess)
+            return 0
+        return ctypes.GetLastError() or 1
+    except Exception as e:
+        print(f"updater: could not start the installer directly: {e}")
+        return 1
 
 
 REQUEST_FILE = os.path.join(tempfile.gettempdir(), "endora-update-request.json")

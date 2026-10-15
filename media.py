@@ -94,7 +94,7 @@ class ClipPlayer:
     exactly n_samples of 48 kHz stereo audio.
     """
 
-    VIDEO_BUFFER = 10  # decoded frames held ahead (~80 MB at 1080p)
+    VIDEO_BUFFER = 8   # decoded frames held ahead at 1080p (~65 MB); fewer at 4K, so RAM stays the same
 
     def __init__(self, path, width, height, fps, process=None, start=0.0, end=None, gain=1.0):
         self.path = path
@@ -108,7 +108,7 @@ class ClipPlayer:
         self.gain = float(gain or 1.0)                    # audio level (normalize + item volume)
         self.duration = max(0.0, (self.end or full) - self.start) if full or self.end else 0.0
         self.error = None
-        self._vq = queue.Queue(maxsize=self.VIDEO_BUFFER)
+        self._vq = queue.Queue(maxsize=max(3, int(self.VIDEO_BUFFER * 1920 * 1080 / max(1, width * height))))
         self._audio = collections.deque()
         self._audio_len = 0
         self._alock = threading.Lock()

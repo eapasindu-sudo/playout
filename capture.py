@@ -62,12 +62,18 @@ def list_capture_devices(ffmpeg=None):
     return out
 
 
-def device_modes(width, height, fps):
+NATIVE = ("blackmagic", "atem", "decklink", "ultrastudio", "intensity", "elgato", "magewell", "aja")
+
+
+def device_modes(width, height, fps, name=""):
     """Capture formats to ask a USB device for, best first. Many cheap USB HDMI grabbers give 1080p only at
     5 fps uncompressed but 25 / 30 / 60 fps as MJPEG, so MJPEG is asked for first; the ATEM Mini (and other
     UVC devices without MJPEG) then open with the size and frame rate, and the last try takes the device default."""
     rate = f"{float(fps):g}"
     size = f"{width}x{height}"
+    if any(k in name.lower() for k in NATIVE):
+        # broadcast devices (Blackmagic ATEM in USB mode...): take the picture exactly as the device sends it
+        return [("native", {})] + [m for m in device_modes(width, height, fps) if m[0] != "default"]
     return [
         ("mjpeg", {"vcodec": "mjpeg", "video_size": size, "framerate": rate}),
         ("raw", {"video_size": size, "framerate": rate}),
@@ -104,9 +110,9 @@ def open_args(key):
 class CaptureInput:
     """Reads a capture device on its own thread; the output loop takes the newest frame."""
 
-    MAX_AUDIO = SAMPLE_RATE // 2      # keep at most 500 ms of audio queued
-    TARGET_AUDIO = SAMPLE_RATE // 10  # trim back to ~100 ms when it builds up
-    MAX_FRAMES = 3                    # video frames held to smooth out uneven USB delivery
+    MAX_AUDIO = SAMPLE_RATE // 5      # keep at most 200 ms of sound queued (more = sound late against the picture)
+    TARGET_AUDIO = SAMPLE_RATE * 3 // 50  # trim back to ~60 ms when it builds up
+    MAX_FRAMES = 2                    # video frames held to smooth out uneven USB delivery
 
     def __init__(self, key, width, height, fps=25):
         self.key = key
@@ -147,7 +153,7 @@ class CaptureInput:
         urls = [url] + ([f"video={video}"] if audio else [])
         last = None
         for u in urls:
-            for name, extra in device_modes(self.width, self.height, self.fps):
+            for name, extra in device_modes(self.width, self.height, self.fps, video):
                 try:
                     c = av.open(u, format=fmt, options={**opts, **extra}, timeout=5)
                     note = "" if u == url or not audio else f"sound device {audio} did not open"
@@ -177,7 +183,8 @@ class CaptureInput:
                             return
                         for frame in packet.decode():
                             if packet.stream is vs:
-                                img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
+                                img = frame.reformat(width=self.width, height=self.height, format="bgra",
+                                                     interpolation="FAST_BILINEAR").to_ndarray()
                                 with self._lock:
                                     self._frames.append(np.ascontiguousarray(img).reshape(-1))
                                     while len(self._frames) > self.MAX_FRAMES:
@@ -299,7 +306,8 @@ class UrlInput(CaptureInput):
                             break
                         for frame in packet.decode():
                             if packet.stream is vs:
-                                img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
+                                img = frame.reformat(width=self.width, height=self.height, format="bgra",
+                                                     interpolation="FAST_BILINEAR").to_ndarray()
                                 with self._lock:
                                     self._video = np.ascontiguousarray(img).reshape(-1)
                                 self._last_frame_time = time.time()

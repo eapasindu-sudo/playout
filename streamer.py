@@ -327,7 +327,7 @@ class Streamer:
                 img = np.asarray(video).reshape(self.engine.height, self.engine.width, 4)
                 vf = av.VideoFrame.from_ndarray(img, format="bgra")
                 if pix != "bgra" or (self.width, self.height) != (self.engine.width, self.engine.height):
-                    vf = vf.reformat(width=self.width, height=self.height, format=pix)
+                    vf = vf.reformat(width=self.width, height=self.height, format=pix, interpolation="FAST_BILINEAR")
                 vf.pts = vpts
                 vf.time_base = vtb
                 vpts += 1
