@@ -28,6 +28,7 @@ from fractions import Fraction
 
 import numpy as np
 
+from audiofx import MasterAudio
 from media import ClipPlayer, probe
 from capture import CaptureInput, UrlInput, make_bars
 from ndi_io import CHANNELS, SAMPLE_RATE, LiveInput, NDIOutput, SourceFinder
@@ -157,6 +158,7 @@ class Engine:
         self.asrun = AsRunLog(log_dir)
         self.finder = SourceFinder()
         self.live = MainInput(self.finder, self.width, self.height, self.fps)
+        self.master = MasterAudio()          # program sound: auto level + limiter
         self.output = NDIOutput(cfg.get("output_name", "PLAYOUT PGM"), self.width, self.height, self.fps)
         self.black = np.zeros(self.width * self.height * 4, np.uint8)
         self.black[3::4] = 255
@@ -723,6 +725,10 @@ class Engine:
             m = min(FADE, audio.shape[1])
             audio[:, :m] *= np.linspace(0.0, 1.0, m, dtype=np.float32)
             self.last_source = source
+        try:
+            audio = self.master.process(audio)
+        except Exception as e:
+            self.message = f"Audio limiter error: {e}"
         peak = np.abs(audio).max(axis=1) if audio.size else np.zeros(CHANNELS)
         self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
         self.last_frame = video
@@ -869,6 +875,7 @@ class Engine:
                 "playlist": rows,
                 "version": self.version,
                 "meters": self.meters,
+                "master": self.master.info(),
                 "live_source": self.live.source_name,
                 "idle": self.idle,
                 "stinger": dict(self.stinger, active=bool(self.cg and self.cg.stinger_active)),

@@ -14,7 +14,7 @@ for pkg in pkgs:
     datas += d; binaries += b; hidden += h
 hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths", "squeeze", "comments", "health",
            "capture", "cg", "system", "audio_out", "psutil", "cgfx", "cgedit", "composer", "recorder",
-           "loudness", "gpu", "textlooks", "report", "importer", "updater", "version",
+           "loudness", "gpu", "textlooks", "audiofx", "report", "importer", "updater", "version",
            "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon", "certs"]
 
 import glob, os

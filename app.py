@@ -844,6 +844,18 @@ def sources():
     return jsonify([n for n in engine.finder.names() if not n.endswith(own)])   # never our own output
 
 
+@app.post("/api/master_audio")
+def master_audio():
+    """Program sound: auto level (target) and the limiter (ceiling), on / off."""
+    b = request.get_json(silent=True) or {}
+    try:
+        st = engine.master.configure(b.get("agc"), b.get("target"), b.get("limiter"), b.get("ceiling"))
+    except (TypeError, ValueError):
+        return jsonify(error="bad value"), 400
+    store.set(master_audio=st)
+    return jsonify(engine.master.info())
+
+
 @app.post("/api/live_source")
 def live_source():
     name = (request.get_json(silent=True) or {}).get("name", "")
@@ -1561,6 +1573,8 @@ def start_backend():
     engine.set_failover(fo.get("enabled"), fo.get("after"), fo.get("mode"), fo.get("file"))
     an = store.data.get("audio_norm") or {}
     loudness.configure(an.get("normalize"), an.get("target"))
+    ma = store.data.get("master_audio") or {}
+    engine.master.configure(ma.get("agc"), ma.get("target"), ma.get("limiter", True), ma.get("ceiling"))
     up = store.data.get("update") or {}
     updater.configure(up.get("repo"), up.get("token"), up.get("auto_check"))
     updater.last_result()        # tell the operator if the last update did not install

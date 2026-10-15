@@ -110,8 +110,10 @@ def open_args(key):
 class CaptureInput:
     """Reads a capture device on its own thread; the output loop takes the newest frame."""
 
-    MAX_AUDIO = SAMPLE_RATE // 5      # keep at most 200 ms of sound queued (more = sound late against the picture)
-    TARGET_AUDIO = SAMPLE_RATE * 3 // 50  # trim back to ~60 ms when it builds up
+    MAX_AUDIO = SAMPLE_RATE * 2 // 5  # safety: never more than 400 ms of sound queued
+    TARGET_AUDIO = SAMPLE_RATE // 10  # (safety trim back to 100 ms)
+    PREBUF = SAMPLE_RATE // 10        # 100 ms cushion: USB sound comes in uneven bursts; playing from a
+                                      # small cushion means no gaps (clicks) when a burst is a little late
     MAX_FRAMES = 2                    # video frames held to smooth out uneven USB delivery
 
     def __init__(self, key, width, height, fps=25):
@@ -126,6 +128,7 @@ class CaptureInput:
         self._frames = collections.deque()
         self._audio = collections.deque()
         self._audio_len = 0
+        self._playing = False         # sound cushion filled, playing
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._last_frame_time = 0.0
@@ -223,27 +226,56 @@ class CaptureInput:
             self._tone_phase += n_samples
             tone = (0.1 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)   # -20 dBFS
             return self._video, np.vstack([tone, tone])
-        out = np.zeros((CHANNELS, n_samples), np.float32)
-        got = 0
         with self._lock:
             # one new frame per output frame, in order: a frame that comes a little early or late from the
             # USB device still shows for its own frame time (no jumping back and forth)
             if self._frames:
                 self._video = self._frames.popleft()
             video = self._video
-            while got < n_samples and self._audio:
-                chunk = self._audio[0]
-                take = min(n_samples - got, chunk.shape[1])
-                out[:, got:got + take] = chunk[:, :take]
-                if take == chunk.shape[1]:
-                    self._audio.popleft()
-                else:
-                    self._audio[0] = chunk[:, take:]
-                got += take
-                self._audio_len -= take
+            out = self._take_audio(n_samples)
         if not self.connected:
             video = None
         return video, fit_audio(out, n_samples)
+
+    def _pop(self, k):
+        """Up to k queued sound samples (lock held)."""
+        parts, got = [], 0
+        while got < k and self._audio:
+            chunk = self._audio[0]
+            take = min(k - got, chunk.shape[1])
+            parts.append(chunk[:, :take])
+            if take == chunk.shape[1]:
+                self._audio.popleft()
+            else:
+                self._audio[0] = chunk[:, take:]
+            got += take
+        self._audio_len -= got
+        return np.concatenate(parts, axis=1) if parts else np.zeros((CHANNELS, 0), np.float32)
+
+    def _take_audio(self, n):
+        """n samples of sound for one output frame, smooth even when the device clock runs a little
+        fast or slow against the output: the cushion is kept near 80 ms by playing up to 1% faster or
+        slower (not audible), instead of cutting pieces out (clicks) or running dry (gaps)."""
+        if not self._playing:
+            if self._audio_len < self.PREBUF:
+                return np.zeros((CHANNELS, n), np.float32)
+            self._playing = True
+        extra = (self._audio_len - self.PREBUF) / SAMPLE_RATE      # seconds away from the cushion size
+        step = 0.0 if abs(extra) < 0.01 else 0.005 if abs(extra) < 0.03 else 0.01
+        k = n + int(round(n * step)) * (1 if extra > 0 else -1)
+        if self._audio_len < k:               # ran dry: fade out what is there, build the cushion again
+            a = self._pop(self._audio_len)
+            self._playing = False
+            out = np.zeros((CHANNELS, n), np.float32)
+            if a.shape[1]:
+                m = a.shape[1]
+                out[:, :m] = fit_audio(a, m) * np.linspace(1, 0, m, dtype=np.float32)[None, :]
+            return out
+        a = fit_audio(self._pop(k), k)
+        if k != n:
+            src = np.linspace(0, k - 1, n)
+            a = np.vstack([np.interp(src, np.arange(k), a[c]) for c in range(a.shape[0])]).astype(np.float32)
+        return a
 
     def close(self):
         self._stop.set()

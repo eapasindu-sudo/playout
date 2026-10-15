@@ -341,6 +341,15 @@ Needs Windows 10 or 11 (64-bit) with the Microsoft Edge WebView2 runtime, which 
 Running from source instead: install Python 3.12, run `install.bat`, then `start.bat`
 (this opens the browser version).
 
+## Program sound: limiter and auto level
+
+Main screen (under PC sound): **Limiter** and **Auto level** buttons; Settings > Audio sets the
+ceiling (-1 dBFS) and the level (-18). The limiter looks 5 ms ahead and turns loud parts down
+smoothly, so nothing goes over the ceiling or distorts. Auto level slowly brings quiet and loud
+sources to one level (up to +12 dB). They work on everything on air: live input, clips, NDI,
+stream, recording. USB capture sound plays from a 100 ms cushion and follows the device clock
+(up to 1% faster / slower), so late USB sound packets no longer make clicks or gaps.
+
 ## Text CG templates
 
 Text CG > **Template**: one click sets a look, colours and the way it comes in. Looks: Classic,

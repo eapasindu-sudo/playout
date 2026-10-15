@@ -320,6 +320,11 @@
         <select id="aoDev" onchange="setAO({device: this.value})"></select>
         <input type="range" id="aoVol" min="0" max="150" style="width:80px" title="Volume" onchange="setAO({volume: this.value / 100})">
       </div>
+      <div class="srcrow" title="Program sound processing: on air, stream, recording and NDI">
+        <button class="sm" id="maLim" onclick="setMaster({limiter: !S.master?.limiter})" title="Broadcast limiter: nothing goes over the ceiling; loud parts are turned down smoothly (no distortion)">Limiter</button>
+        <button class="sm" id="maAgc" onclick="setMaster({agc: !S.master?.agc})" title="Auto level: quiet and loud sources come out at the same level (set the level in Settings > Audio)">Auto level</button>
+        <span class="hint" id="maInfo" style="white-space:nowrap"></span>
+      </div>
       <div class="hint" style="padding:0 10px 8px" id="liveInfo"></div>
     </div>
 
@@ -757,6 +762,13 @@
       <span>Target</span><select id="anTarget"><option value="-24">-24 LUFS (ATSC TV)</option><option value="-23">-23 LUFS (EBU TV, recommended)</option><option value="-18">-18 LUFS</option><option value="-16">-16 LUFS (web / Facebook)</option><option value="-14">-14 LUFS (loud)</option></select>
       <span></span><span class="hint">Each clip is measured once in the background; the file itself is not changed. Extra volume per clip: Edit on the playlist item.</span>
     </div>
+    <div class="form">
+      <span>Limiter</span><span style="display:flex; gap:8px; align-items:center"><label><input type="checkbox" id="maLimOn"> Broadcast limiter on the program sound</label>
+        ceiling <select id="maCeil"><option value="-1">-1 dBFS (recommended)</option><option value="-2">-2 dBFS</option><option value="-3">-3 dBFS</option><option value="-6">-6 dBFS</option></select></span>
+      <span>Auto level</span><span style="display:flex; gap:8px; align-items:center"><label><input type="checkbox" id="maAgcOn"> Bring every source to one level</label>
+        level <select id="maTarget"><option value="-23">-23 (TV)</option><option value="-20">-20</option><option value="-18">-18 (recommended)</option><option value="-16">-16 (web / Facebook)</option><option value="-14">-14 (loud)</option></select></span>
+      <span></span><span class="hint">For the live sound (Blackmagic / vMix / USB) as well as clips. Auto level turns quiet speech up and loud music down slowly (up to +12 dB); the limiter then stops anything going over the ceiling, without cutting or distorting it. Both buttons are also on the main screen, under PC sound.</span>
+    </div>
     <div class="setsec">Station</div>
     <div class="form"><span>Station name</span><input id="stName" placeholder="shown on the ad reports and alerts"></div>
     <div class="setsec" id="secPw">Passwords</div>
@@ -972,6 +984,7 @@ async function poll() {
   $('liveInfo').textContent = S.live_source ? (S.live_connected ? 'Live input connected' : 'Live input NOT connected: ' + (S.live_source.startsWith('dev:') ? 'check the USB cable / device' : 'check vMix NDI output is on')) : 'Pick the vMix NDI output or the Blackmagic USB above';
   $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
   if (S.live_source !== shownSource) fillSources();
+  showMaster();
   meters(S.meters);
   if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
@@ -1303,6 +1316,14 @@ async function loadSources() {
 async function openSrc() { await loadSources(); dSrc.showModal(); }
 async function setSource() { await api('/api/live_source', {name:$('srcSel').value}); dSrc.close(); poll(); }
 
+// program sound: limiter + auto level
+async function setMaster(ch) { try { S.master = await api('/api/master_audio', ch); } catch (e) { say('Could not change the sound setting: ' + e); } showMaster(); }
+function showMaster() {
+  const m = S.master || {};
+  $('maLim').classList.toggle('on', !!m.limiter); $('maAgc').classList.toggle('on', !!m.agc);
+  $('maInfo').textContent = (m.limiter ? `ceiling ${m.ceiling} dB` + (m.reduction >= 0.5 ? `, -${m.reduction.toFixed(1)} dB` : '') : 'limiter off') +
+    (m.agc ? ` | level ${m.target}, ${m.agc_gain >= 0 ? '+' : ''}${m.agc_gain} dB` : '');
+}
 // main-screen input picker: vMix / NDI outputs (vMix first), then USB capture devices (Blackmagic ATEM in USB mode...)
 let sourceList = [], shownSource = null, devList = [];
 // the sound device of the same box (ATEM Mini: video "Blackmagic Design", sound "... (Blackmagic Design)")
@@ -1509,6 +1530,8 @@ async function openSettings(focus) {
   $('foFile').innerHTML = '<option value="">(pick a clip from the media folder)</option>' + media.map(m => `<option ${m.name === f.file ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
   $('foFile').style.display = f.mode === 'clip' ? '' : 'none';
   $('anOn').checked = SET.audio.normalize; $('anTarget').value = String(Math.round(SET.audio.target));
+  const MA = S.master || {}; $('maLimOn').checked = !!MA.limiter; $('maCeil').value = String(Math.round(MA.ceiling ?? -1));
+  $('maAgcOn').checked = !!MA.agc; $('maTarget').value = String(Math.round(MA.target ?? -18));
   $('stName').value = SET.station_name || '';
   const sc = SET.security;
   $('pwLock').value = sc.lock_password_set ? '********' : ''; $('pwLockSt').textContent = sc.lock_password_set ? 'set' : 'not set';
@@ -1561,6 +1584,7 @@ async function saveSettings() {
   const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   if (!r.ok) { const e = await r.json().catch(() => ({})); say('Settings were not saved: ' + (e.error || (r.status === 403 ? 'wrong password or not an admin' : 'error ' + r.status))); return; }
   SET = await r.json(); NORM = SET.audio; if ($('pwLock').value !== '********') adminPw = $('pwLock').value;
+  await setMaster({limiter:$('maLimOn').checked, ceiling:+$('maCeil').value, agc:$('maAgcOn').checked, target:+$('maTarget').value});
   dSet.close(); $('msg').textContent = 'Settings saved';
   if (SET.output?.restart_needed) {
     const warn = onAirNow() ? 'WARNING: Playout is on air / streaming / recording. The output stops for about 20 seconds.\n\n' : '';
