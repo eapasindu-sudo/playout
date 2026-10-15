@@ -341,6 +341,13 @@ Needs Windows 10 or 11 (64-bit) with the Microsoft Edge WebView2 runtime, which 
 Running from source instead: install Python 3.12, run `install.bat`, then `start.bat`
 (this opens the browser version).
 
+## Text CG templates
+
+Text CG > **Template**: one click sets a look, colours and the way it comes in. Looks: Classic,
+News (slanted bars), Glass, Sports, Minimal, Elegant (gold, weddings), Pill, Neon (glow), Split
+(colour block + white card), Gradient and Frame (corner brackets). **In / out**: fade, wipe from
+the left, slide in or rise up. They work for lower thirds, tickers, clocks, countdowns and text boxes.
+
 ## Blackmagic ATEM (USB) as the live input
 
 The **Live input** picker (top right) lists the vMix / NDI outputs and the USB capture devices.

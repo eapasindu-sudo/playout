@@ -17,6 +17,8 @@ A text CG is a manual CG config with "kind": "text":
     cd_mode      countdown: "for" (cd_secs seconds from when it goes IN) or "to" (the clock time cd_to, "20:30")
     text         countdown: "Starting in {t}"  ({t} = the time left, 05:00 or 1:05:00)
     end_text     countdown: shown at zero ("LIVE NOW"); empty = it takes itself off
+    look         classic | news | glass | sports | minimal | elegant | pill (see textlooks.py)
+    anim         how it comes in / goes out: fade | wipe | slide | up
     line1, text  comment: who wrote it and the comment; label = "YouTube" / "Facebook"
 Sinhala and Tamil work with a font that has them (Iskoola Pota, Nirmala UI).
 """
@@ -31,9 +33,11 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, features
 
+import textlooks
+
 RAQM = features.check("raqm")      # proper Sinhala / Tamil shaping
 TEXT_KEYS = ("style", "line1", "line2", "text", "text_file", "label", "fmt", "font", "size", "bold", "color",
-             "bg", "bg_alpha", "accent", "x", "y", "width", "speed", "separator", "cd_mode", "cd_secs", "cd_to", "end_text")
+             "bg", "bg_alpha", "accent", "x", "y", "width", "speed", "separator", "cd_mode", "cd_secs", "cd_to", "end_text", "look", "anim")
 
 # font name -> (regular, bold) file names
 WIN_FONTS = {
@@ -253,6 +257,11 @@ def render_static(cfg, out_w, out_h, now=None, left=None):
     bg_a = int(255 * max(0, min(100, _num(cfg.get("bg_alpha"), 85))) / 100)
     accent = _rgb(cfg.get("accent"), (224, 38, 27)) + (255,)
     pad = max(6, size // 3)
+    look = cfg.get("look") or "classic"
+    if style == "lower3" and look != "classic":
+        im = textlooks.lower3(cfg, out_w, look)
+        if im is not None:
+            return _bgra(im)
     if style == "lower3":
         f2 = get_font(_fontname(cfg), max(10, int(size * 0.62)), False)
         l1, l2 = cfg.get("line1") or "", cfg.get("line2") or ""
@@ -284,6 +293,8 @@ def render_static(cfg, out_w, out_h, now=None, left=None):
         text = cfg.get("text") or ""
     if not text.strip():
         return None
+    if look != "classic":
+        return _bgra(textlooks.box(cfg, text, out_w, look))
     tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     box = tmp.multiline_textbbox((0, 0), text, font=font, spacing=size // 4)
     tw, th = box[2] - box[0], box[3] - box[1]
@@ -306,6 +317,8 @@ class TextLayer:
         self.out_w, self.out_h = out_w, out_h
         self.fps = float(fps)
         self.fade = max(0, int(cfg.get("fade", 8)))
+        if self.fade and (cfg.get("anim") or "fade") != "fade":
+            self.fade = max(self.fade, int(self.fps * 0.5))     # wipe / slide / up: half a second
         self.delay_frames = int(_num(cfg.get("delay"), 0) * self.fps)
         dur = _num(cfg.get("duration"), 0)
         self.duration_frames = int(dur * self.fps) if dur > 0 else None
@@ -368,18 +381,22 @@ class TextLayer:
         self._strip = _bgra(strip)
         width = int(_num(cfg.get("width"), 0)) or self.out_w
         self._box_w = min(width, self.out_w)
-        bg = _rgb(cfg.get("bg"), (10, 30, 80))
-        bg_a = int(255 * max(0, min(100, _num(cfg.get("bg_alpha"), 90))) / 100)
-        base = Image.new("RGBA", (self._box_w, h), bg + (bg_a,))
-        self._label_w = 0
         label = cfg.get("label") or ""
-        if label:
-            lf = get_font(_fontname(cfg), size, True)
-            lw = _text_w(lf, label) + size
-            d = ImageDraw.Draw(base)
-            d.rectangle([0, 0, lw, h], fill=_rgb(cfg.get("accent"), (224, 38, 27)) + (255,))
-            d.text((lw // 2, h // 2), label, font=lf, fill=(255, 255, 255, 255), anchor="mm")
-            self._label_w = lw + 4
+        if (cfg.get("look") or "classic") != "classic":
+            base, self._label_w = textlooks.ticker_base(cfg, self._box_w, h, label,
+                                                        get_font(_fontname(cfg), size * textlooks.SS, True))
+        else:
+            bg = _rgb(cfg.get("bg"), (10, 30, 80))
+            bg_a = int(255 * max(0, min(100, _num(cfg.get("bg_alpha"), 90))) / 100)
+            base = Image.new("RGBA", (self._box_w, h), bg + (bg_a,))
+            self._label_w = 0
+            if label:
+                lf = get_font(_fontname(cfg), size, True)
+                lw = _text_w(lf, label) + size
+                d = ImageDraw.Draw(base)
+                d.rectangle([0, 0, lw, h], fill=_rgb(cfg.get("accent"), (224, 38, 27)) + (255,))
+                d.text((lw // 2, h // 2), label, font=lf, fill=(255, 255, 255, 255), anchor="mm")
+                self._label_w = lw + 4
         self._base = _bgra(base)
         self._frame = self._base.copy()
         if self._pos == 0:
@@ -406,6 +423,7 @@ class TextLayer:
                 dst = out[:, area_x + a0:area_x + a1]
                 al = src[..., 3:4].astype(np.uint16)
                 dst[..., :3] = ((src[..., :3] * al + dst[..., :3] * (255 - al) + 127) // 255).astype(np.uint8)
+                np.maximum(dst[..., 3], src[..., 3], out=dst[..., 3])   # text stays solid on a see-through bar
             start += sw
         self._pos -= _num(self.cfg.get("speed"), 120) / self.fps
         if self._pos < -sw:
@@ -477,8 +495,26 @@ class TextLayer:
         img = self._picture()
         if img is None:
             return None
-        opacity = 255 if (not self.fade or self.state == "on") else int(255 * self.level / self.fade)
-        return img, opacity, (0, 0)
+        if not self.fade or self.state == "on":
+            return img, 255, (0, 0)
+        p = self.level / self.fade
+        e = 1 - (1 - p) ** 3                      # ease out
+        anim = self.cfg.get("anim") or "fade"
+        if anim == "wipe":                        # revealed from the left
+            w = img.shape[1]
+            cut = int(w * e)
+            out = img.copy()
+            out[:, cut:, 3] = 0
+            if 0 < cut < w:
+                edge = min(cut, max(2, w // 40))  # soft edge
+                out[:, cut - edge:cut, 3] = (out[:, cut - edge:cut, 3] *
+                                             np.linspace(1, 0, edge, dtype=np.float32)[None, :]).astype(np.uint8)
+            return out, 255, (0, 0)
+        if anim == "slide":
+            return img, int(255 * min(1, e * 1.5)), (-int((1 - e) * min(300, img.shape[1] * 0.4)), 0)
+        if anim == "up":
+            return img, int(255 * e), (0, int((1 - e) * max(30, img.shape[0] * 0.6)))
+        return img, int(255 * p), (0, 0)
 
     def close(self):
         self._strip = self._img = None

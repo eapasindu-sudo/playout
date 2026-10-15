@@ -851,6 +851,7 @@
       <div style="display:flex; gap:6px; margin-top:6px"><label><input type="checkbox" id="tcOnPgm" onchange="tcRender()"> Show over the program</label></div></div>
     <div class="form" style="grid-template-columns: 90px 1fr">
       <span>Type</span><select id="tcStyle" onchange="tcShow(); tcRender()"><option value="lower3">Lower third (name / title)</option><option value="ticker">Ticker (scrolling news)</option><option value="clock">Clock / date</option><option value="countdown">Countdown</option><option value="text">Text box</option></select>
+      <span>Template</span><span id="tcTpl" style="display:flex; flex-wrap:wrap; gap:4px"></span>
       <span>Name</span><input id="tcName" placeholder="name in the CG list">
       <span class="tc-l3">Line 1</span><input class="tc-l3 sl" id="tcL1" placeholder="Name" oninput="tcLater()">
       <span class="tc-l3">Line 2</span><input class="tc-l3 sl" id="tcL2" placeholder="Title" oninput="tcLater()">
@@ -870,6 +871,8 @@
         <option value="%d %B %Y">13 October 2026</option><option value="%A">Tuesday</option></select></span>
       <span>Font</span><select id="tcFont" onchange="tcRender()"></select>
       <span>Size</span><span><input class="num" id="tcSize" type="number" min="10" max="200" onchange="tcRender()"> <label><input type="checkbox" id="tcBold" onchange="tcRender()"> Bold</label></span>
+      <span>Look</span><select id="tcLook" onchange="tcRender()"><option value="classic">Classic (flat box)</option><option value="news">News (slanted bars)</option><option value="glass">Glass (dark, shine)</option><option value="sports">Sports (angled)</option><option value="minimal">Minimal (text + line)</option><option value="elegant">Elegant (gold lines, wedding)</option><option value="pill">Pill (round)</option><option value="neon">Neon (glow)</option><option value="split">Split (colour block + white card)</option><option value="gradient">Gradient</option><option value="frame">Frame (corner brackets)</option></select>
+      <span>In / out</span><select id="tcAnim"><option value="fade">Fade</option><option value="wipe">Wipe from left</option><option value="slide">Slide in</option><option value="up">Rise up</option></select>
       <span>Colours</span><span style="display:flex; gap:6px; align-items:center">Text <input type="color" id="tcColor" onchange="tcRender()"> Box <input type="color" id="tcBg" onchange="tcRender()"> Accent <input type="color" id="tcAcc" onchange="tcRender()"></span>
       <span>Box</span><span><input type="range" id="tcBgA" min="0" max="100" style="width:140px" onchange="tcRender()"> opacity</span>
       <span>Position</span><span style="display:flex; gap:6px; align-items:center">X <input class="num" id="tcX" type="number" onchange="tcRender()" style="width:80px"> Y <input class="num" id="tcY" type="number" onchange="tcRender()" style="width:80px"></span>
@@ -1703,6 +1706,30 @@ function closePreview() { dPrev.close(); }
 let tcEdit = null, tcTimer = null, FONTS = null;
 const TC_DEF = {kind:'text', style:'lower3', line1:'Name Surname', line2:'Title', text:'', label:'', text_file:'', fmt:'%H:%M:%S', font:'Arial', size:44, bold:true,
   color:'#ffffff', bg:'#0f2252', bg_alpha:85, accent:'#e0261b', x:120, y:820, width:0, speed:120, live_only:false, fade:8};
+// one-click looks: Look + colours + how it comes in
+const TC_TPL = [
+  ['Classic', {look:'classic', bg:'#0f2252', accent:'#e0261b', color:'#ffffff', bg_alpha:85, anim:'fade'}],
+  ['News Red', {look:'news', bg:'#ffffff', accent:'#c8102e', color:'#ffffff', bg_alpha:95, anim:'wipe'}],
+  ['News Blue', {look:'news', bg:'#f2f4f7', accent:'#0057b8', color:'#ffffff', bg_alpha:95, anim:'wipe'}],
+  ['Glass', {look:'glass', bg:'#101820', accent:'#00b4ff', color:'#ffffff', bg_alpha:75, anim:'slide'}],
+  ['Sports Gold', {look:'sports', bg:'#0b1f3a', accent:'#ffb400', color:'#ffffff', bg_alpha:95, anim:'slide'}],
+  ['Minimal', {look:'minimal', bg:'#000000', accent:'#ffcc00', color:'#ffffff', bg_alpha:0, anim:'up'}],
+  ['Wedding Gold', {look:'elegant', bg:'#000000', accent:'#d4af37', color:'#ffffff', bg_alpha:70, anim:'fade'}],
+  ['Pill', {look:'pill', bg:'#ffffff', accent:'#7b2ff7', color:'#ffffff', bg_alpha:95, anim:'up'}],
+  ['Neon', {look:'neon', bg:'#05060a', accent:'#00e5ff', color:'#ffffff', bg_alpha:80, anim:'wipe'}],
+  ['Split', {look:'split', bg:'#1d3557', accent:'#e63946', color:'#ffffff', bg_alpha:95, anim:'slide'}],
+  ['Gradient', {look:'gradient', bg:'#3a0ca3', accent:'#f72585', color:'#ffffff', bg_alpha:90, anim:'wipe'}],
+  ['Frame', {look:'frame', bg:'#000000', accent:'#ffffff', color:'#ffffff', bg_alpha:40, anim:'up'}],
+];
+function tcTplButtons() {
+  $('tcTpl').innerHTML = TC_TPL.map(([n, t], i) => `<button class="sm" onclick="tcApplyTpl(${i})" title="${esc(n)}: look, colours and animation">
+    <span style="display:inline-block; width:10px; height:10px; border-radius:2px; background:${t.accent}; margin-right:4px"></span>${esc(n)}</button>`).join('');
+}
+function tcApplyTpl(i) {
+  const t = TC_TPL[i][1];
+  $('tcLook').value = t.look; $('tcAnim').value = t.anim; $('tcBg').value = t.bg; $('tcAcc').value = t.accent; $('tcColor').value = t.color; $('tcBgA').value = t.bg_alpha;
+  tcRender();
+}
 const TC_POS = {lower3:[120, 0.76], ticker:[0, 0.93], clock:[0.86, 0.04], countdown:[0.35, 0.42], text:[80, 0.06]};
 const secsText = v => { v = Math.max(0, Math.round(+v || 0)); const h = Math.floor(v / 3600), m = Math.floor(v / 60) % 60, x = v % 60;
   return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(x).padStart(2, '0'); };
@@ -1721,6 +1748,7 @@ async function openTextCG(c) {
   $('tcX').value = cfg.x; $('tcY').value = cfg.y; $('tcW').value = cfg.width || 0; $('tcLive').checked = !!cfg.live_only;
   $('tcCdMode').value = cfg.cd_mode || 'for'; $('tcCdSecs').value = secsText(cfg.cd_secs ?? 300); $('tcCdTo').value = cfg.cd_to || '';
   $('tcEnd').value = cfg.end_text ?? 'LIVE NOW'; tcCdShow();
+  $('tcLook').value = cfg.look || 'classic'; $('tcAnim').value = cfg.anim || 'fade'; tcTplButtons();
   $('tcStyle').dataset.prev = cfg.style;
   tcShow(); dText.showModal(); tcRender();
 }
@@ -1743,7 +1771,8 @@ function tcCfg() {
     label:$('tcLabel').value.trim(), text_file:$('tcFile').value.trim(), fmt:$('tcFmt').value, font:$('tcFont').value, size:+$('tcSize').value || 40,
     bold:$('tcBold').checked, color:$('tcColor').value, bg:$('tcBg').value, accent:$('tcAcc').value, bg_alpha:+$('tcBgA').value,
     x:+$('tcX').value || 0, y:+$('tcY').value || 0, width:+$('tcW').value || 0, speed:+$('tcSpeed').value || 120, live_only:$('tcLive').checked,
-    cd_mode:$('tcCdMode').value, cd_secs:parseClock($('tcCdSecs').value) || 300, cd_to:$('tcCdTo').value, end_text:$('tcEnd').value};
+    cd_mode:$('tcCdMode').value, cd_secs:parseClock($('tcCdSecs').value) || 300, cd_to:$('tcCdTo').value, end_text:$('tcEnd').value,
+    look:$('tcLook').value, anim:$('tcAnim').value};
   if (!c.name) c.name = st === 'lower3' ? (c.line1 || 'Lower third') : st === 'ticker' ? 'Ticker' : st === 'clock' ? 'Clock' : st === 'countdown' ? 'Countdown' : (c.text.split('\n')[0] || 'Text').slice(0, 30);
   return c;
 }
