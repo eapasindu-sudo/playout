@@ -20,6 +20,7 @@ from PIL import Image
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import certs  # noqa: F401  (HTTPS certificates from the Windows store)
+import gpu
 from audio_out import AudioOut
 from recorder import Recorder
 from capture import list_capture_devices
@@ -58,7 +59,7 @@ DEFAULT_CONFIG = {
     "output_name": "PLAYOUT PGM", "live_source": "", "width": 1920, "height": 1080, "fps": "25",
     "web_port": 8080, "media_dir": "media", "data_dir": "data", "log_dir": "logs", "cg_dir": "cg",
     "stream": {"width": 1920, "height": 1080, "video_kbps": 4500, "audio_kbps": 128,
-               "encoder": "libx264", "preset": "veryfast", "ffmpeg_path": ""},
+               "encoder": "auto", "preset": "veryfast", "ffmpeg_path": ""},
 }
 
 
@@ -1532,6 +1533,12 @@ def start_backend():
     engine.on_change = lambda items: store.set(playlist=items)
     engine.set_live_source(cfg.get("live_source") or store.data.get("live_source"))
     streamer.load(store.data.get("stream_destinations"))
+    if not store.data.get("gpu_auto"):
+        # from 1.0.24 streaming and recording use the graphics card by default (CPU only if there is none)
+        for k in ("record_settings", "stream_settings"):
+            if (store.data.get(k) or {}).get("encoder") == "libx264":
+                store.set(**{k: {**store.data[k], "encoder": "auto"}})
+        store.set(gpu_auto=True)
     rs = store.data.get("record_settings") or {}
     recorder.configure(rs.get("resolution"), rs.get("mbps"), rs.get("encoder"))
     st = store.data.get("stinger") or {}
@@ -1552,6 +1559,7 @@ def start_backend():
     updater.start_auto()
     watcher.start()
     health.start()
+    threading.Thread(target=gpu.best, daemon=True, name="gpu check").start()   # find the GPU encoder now
     sd = store.data.get("sdi") or {}
     sdi.configure(sd.get("enabled"), sd.get("device"), sd.get("ffmpeg"))
     if crashed:

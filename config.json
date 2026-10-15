@@ -13,7 +13,7 @@
     "height": 1080,
     "video_kbps": 4500,
     "audio_kbps": 128,
-    "encoder": "libx264",
+    "encoder": "auto",
     "preset": "veryfast",
     "ffmpeg_path": ""
   },

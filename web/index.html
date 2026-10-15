@@ -356,7 +356,7 @@
       <div class="recrow lockable">
         <select id="recRes" onchange="setRec()"><option value="1080p">1080p</option><option value="720p">720p</option></select>
         <select id="recMbps" onchange="setRec()"><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="50">50 Mbps</option></select>
-        <select id="recEnc" onchange="setRec()"><option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA</option><option value="h264_qsv">Intel</option><option value="h264_amf">AMD</option></select>
+        <select id="recEnc" onchange="setRec()"><option value="auto">Auto (GPU)</option><option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA</option><option value="h264_qsv">Intel</option><option value="h264_amf">AMD</option></select>
       </div>
       <div class="recrow">
         <button id="bRec" class="lockable" onclick="toggleRec()" title="Record the program output (with CGs and sound) to an MP4 file">&#9679; REC</button>
@@ -561,9 +561,9 @@
         <option value="4500">4500 (1080p)</option><option value="6000">6000 (1080p high)</option><option value="8000">8000</option></select></span>
     <span>Audio bitrate</span><select id="ssA"><option>96</option><option>128</option><option>160</option><option>192</option><option>256</option><option>320</option></select>
     <span>Encoder</span><select id="ssE">
-      <option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA GPU (NVENC)</option>
+      <option value="auto">Auto: graphics card (GPU) if this PC has one</option><option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA GPU (NVENC)</option>
       <option value="h264_qsv">Intel GPU (Quick Sync)</option><option value="h264_amf">AMD GPU (AMF)</option></select>
-    <span></span><span class="hint">Facebook: 720p 3000-4000 kbps, 1080p 4500-6000 kbps. Use a GPU encoder to save CPU. Destinations that are live restart with the new settings (a few seconds).</span>
+    <span></span><span class="hint">Facebook: 720p 3000-4000 kbps, 1080p 4500-6000 kbps. <span id="ssUsing"></span> Auto uses the graphics card to save CPU. Destinations that are live restart with the new settings (a few seconds).</span>
   </div>
   <div class="foot"><button class="blue" onclick="saveStreamSet()">Apply</button></div>
 </dialog>
@@ -2144,7 +2144,7 @@ async function pollRec(r) {
   $('bRec').classList.toggle('on', on); $('bRec').innerHTML = on ? '&#9632; STOP REC' : '&#9679; REC';
   ['recRes', 'recMbps', 'recEnc'].forEach(id => $(id).disabled = on);
   if (document.activeElement?.closest?.('.recrow') == null) {
-    $('recRes').value = REC.resolution; $('recMbps').value = String(REC.mbps); $('recEnc').value = REC.encoder;
+    $('recRes').value = REC.resolution; $('recMbps').value = String(REC.mbps); $('recEnc').value = REC.encoder; $('recEnc').title = 'Recording with: ' + (REC.using || '');
   }
   $('recFmt').textContent = `- ${REC.resolution} ${REC.mbps} Mbps MP4`;
   $('recPanel').className = on ? 'recon' : 'recoff';
@@ -2163,7 +2163,7 @@ async function toggleRec() {
 function openStreamSet() {
   const st = streamInfo?.settings || {};
   $('ssRes').value = st.resolution === '720p' ? '720p' : '1080p'; $('ssV').value = st.video_kbps || 4500;
-  $('ssA').value = String(st.audio_kbps || 128); $('ssE').value = st.encoder || 'libx264';
+  $('ssA').value = String(st.audio_kbps || 128); $('ssE').value = st.encoder || 'auto'; $('ssUsing').textContent = st.active_encoder ? 'Encoding with: ' + st.active_encoder + '.' : '';
   dStream.showModal();
 }
 async function saveStreamSet() {
@@ -2182,8 +2182,23 @@ document.addEventListener('keydown', e => {
   if (e.key === 'F12') { e.preventDefault(); T('live'); }
 });
 
-$('pv').src = '/api/preview.mjpg';
-$('pv').onerror = () => setTimeout(() => { $('pv').src = '/api/preview.mjpg?' + Date.now(); }, 2000);
+// program preview: ask for the newest picture only when the last one is on screen,
+// so pictures never queue up and the preview never falls behind what is on air
+(function previewLoop() {
+  let url = null;
+  async function next() {
+    try {
+      const r = await fetch('/api/preview.jpg?w=640&_=' + Date.now(), {cache: 'no-store'});
+      if (!r.ok) throw new Error(r.status);
+      const u = URL.createObjectURL(await r.blob());
+      $('pv').src = u;
+      if (url) URL.revokeObjectURL(url);
+      url = u;
+      setTimeout(next, document.hidden ? 1000 : 30);
+    } catch (e) { setTimeout(next, 2000); }
+  }
+  next();
+})();
 poll(); setInterval(poll, 200);
 pollStream(); setInterval(pollStream, 1000);
 refreshSources(); setInterval(refreshSources, 5000);

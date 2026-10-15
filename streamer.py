@@ -19,6 +19,8 @@ from fractions import Fraction
 import av
 import numpy as np
 
+import gpu
+
 from ndi_io import SAMPLE_RATE
 
 
@@ -87,20 +89,27 @@ class Destination:
         return url
 
     def command(self):
-        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
-               "-fflags", "+genpts", "-f", "mpegts", "-i", "pipe:0"]
         st = self.streamer
-        if self.layout in ("crop", "blur") and st is not None:
+        vertical = self.layout in ("crop", "blur") and st is not None
+        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-fflags", "+genpts"]
+        if vertical:
+            cmd += ["-hwaccel", "auto"]          # decode on the graphics card when it can
+        cmd += ["-f", "mpegts", "-i", "pipe:0"]
+        if vertical:
             out_w, out_h = (720, 1280) if st.height <= 720 else (1080, 1920)
             kbps = st.video_kbps
             gop = str(int(round(float(st.engine.fps) * 2)))
-            enc = st.encoder if st.encoder in ("h264_nvenc", "h264_qsv", "h264_amf") else "libx264"
+            enc = gpu.resolve(st.encoder)
             cmd += ["-filter_complex", "[0:v:0]" + vertical_filter(self.layout, self.crop_pos, out_w, out_h) + "[v]",
                     "-map", "[v]", "-map", "0:a:0?", "-c:v", enc, "-pix_fmt", "yuv420p",
                     "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k",
                     "-g", gop, "-keyint_min", gop, "-bf", "0"]
             if enc == "libx264":
                 cmd += ["-preset", "veryfast", "-tune", "zerolatency", "-sc_threshold", "0"]
+            else:
+                for k, v in gpu.hw_options(enc, kbps, int(gop)).items():
+                    if k not in ("maxrate", "bufsize", "g", "bf"):
+                        cmd += ["-" + k, v]
             cmd += ["-c:a", "copy"]
         else:
             cmd += ["-c", "copy"]
@@ -119,7 +128,7 @@ class Destination:
     def _read_errors(self, proc):
         for line in proc.stderr:
             text = line.decode("utf-8", "replace").strip()
-            if text:
+            if text and not ("AVHWDeviceContext" in text or "Device creation failed" in text):   # GPU decode not there: fine
                 self.error = text[-300:]
 
     def write(self, data):
@@ -179,7 +188,9 @@ class Streamer:
         self.height = int(s.get("height", engine.height))
         self.video_kbps = int(s.get("video_kbps", 4500))
         self.audio_kbps = int(s.get("audio_kbps", 128))
-        self.encoder = s.get("encoder", "libx264")
+        enc = s.get("encoder", "auto")
+        self.encoder = "auto" if enc == "libx264" else enc     # CPU only when chosen in Stream settings
+        self.active_encoder = None
         self.preset = s.get("preset", "veryfast")
         self.ffmpeg = find_ffmpeg(s.get("ffmpeg_path", ""))
         self.dests = [Destination(i, self.ffmpeg, self) for i in range(3)]
@@ -287,18 +298,22 @@ class Streamer:
         out = None
         try:
             out = av.open(_Fanout(self), "w", format="mpegts")
-            vs = out.add_stream(self.encoder, rate=fps)
+            enc = gpu.resolve(self.encoder)
+            self.active_encoder = enc
+            pix = gpu.input_format(enc) or "yuv420p"
+            vs = out.add_stream(enc, rate=fps)
             vs.width, vs.height = self.width, self.height
-            vs.pix_fmt = "yuv420p"
+            vs.pix_fmt = pix
             vs.bit_rate = self.video_kbps * 1000
             vtb = Fraction(1, 1) / fps   # keep: vs.time_base changes to 1/90000 once muxing starts
             vs.time_base = vtb
             gop = int(round(float(fps) * 2))   # keyframe every 2 s (Facebook requirement)
-            opts = {"g": str(gop), "bf": "0"}
-            if self.encoder == "libx264":
-                opts.update(preset=self.preset, tune="zerolatency",
-                            **{"x264-params": f"keyint={gop}:min-keyint={gop}:scenecut=0:nal-hrd=cbr",
-                               "maxrate": f"{self.video_kbps}k", "bufsize": f"{self.video_kbps * 2}k"})
+            if enc == "libx264":
+                opts = {"g": str(gop), "bf": "0", "preset": self.preset, "tune": "zerolatency",
+                        "x264-params": f"keyint={gop}:min-keyint={gop}:scenecut=0:nal-hrd=cbr",
+                        "maxrate": f"{self.video_kbps}k", "bufsize": f"{self.video_kbps * 2}k"}
+            else:
+                opts = gpu.hw_options(enc, self.video_kbps, gop)
             vs.codec_context.options = opts
             aus = out.add_stream("aac", rate=SAMPLE_RATE)
             aus.layout = "stereo"
@@ -311,7 +326,8 @@ class Streamer:
                     continue
                 img = np.asarray(video).reshape(self.engine.height, self.engine.width, 4)
                 vf = av.VideoFrame.from_ndarray(img, format="bgra")
-                vf = vf.reformat(width=self.width, height=self.height, format="yuv420p")
+                if pix != "bgra" or (self.width, self.height) != (self.engine.width, self.engine.height):
+                    vf = vf.reformat(width=self.width, height=self.height, format=pix)
                 vf.pts = vpts
                 vf.time_base = vtb
                 vpts += 1
@@ -350,7 +366,7 @@ class Streamer:
         res = next((k for k, v in self.RESOLUTIONS.items() if v == (self.width, self.height)),
                    f"{self.width}x{self.height}")
         return {"resolution": res, "video_kbps": self.video_kbps, "audio_kbps": self.audio_kbps,
-                "encoder": self.encoder}
+                "encoder": self.encoder, "active_encoder": gpu.NAMES.get(gpu.resolve(self.encoder))}
 
     def apply_settings(self, resolution=None, video_kbps=None, audio_kbps=None, encoder=None):
         """Change stream size / bitrate. Running destinations restart with the new settings."""
@@ -360,7 +376,7 @@ class Streamer:
             self.video_kbps = max(300, min(50000, int(video_kbps)))
         if audio_kbps:
             self.audio_kbps = max(64, min(320, int(audio_kbps)))
-        if encoder in ("libx264", "h264_nvenc", "h264_qsv", "h264_amf"):
+        if encoder in gpu.ENCODERS:
             self.encoder = encoder
         live = [d.slot for d in self.dests if d.enabled]
         if live:

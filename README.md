@@ -341,6 +341,13 @@ Needs Windows 10 or 11 (64-bit) with the Microsoft Edge WebView2 runtime, which 
 Running from source instead: install Python 3.12, run `install.bat`, then `start.bat`
 (this opens the browser version).
 
+## Graphics card (GPU)
+
+Streaming, the 9:16 vertical stream and recording use the graphics card's video encoder by
+default (Encoder **Auto**): NVIDIA (NVENC), then Intel (Quick Sync), then AMD (AMF). Only a PC
+without one of these uses the CPU (x264). Clips are decoded on the graphics card too. Stream
+settings shows which encoder is in use. Choose **CPU (x264)** there to force the CPU.
+
 ## First run
 
 1. In vMix, go to **Settings > Outputs / NDI / SRT** and turn on NDI for an output.
