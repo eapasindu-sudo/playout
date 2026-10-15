@@ -14,6 +14,7 @@ import json
 import os
 import threading
 import time
+import certs
 import urllib.parse
 import urllib.request
 
@@ -102,7 +103,7 @@ class Backup:
     # ---- backup side -----------------------------------------------------
     def _get(self, path, timeout=3):
         req = urllib.request.Request(self.main_url + path, headers={"X-Playout-Key": self.key})
-        return urllib.request.urlopen(req, timeout=timeout)
+        return certs.urlopen(req, timeout=timeout)
 
     def _run(self):
         while True:

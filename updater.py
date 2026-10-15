@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import certs
 import urllib.error
 import urllib.request
 
@@ -75,7 +76,7 @@ class Updater:
         r = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Playout-Updater"})
         if self.token:
             r.add_header("Authorization", f"Bearer {self.token}")
-        return urllib.request.urlopen(r, timeout=30)
+        return certs.urlopen(r, timeout=30)
 
     def check(self):
         with self._lock:
@@ -96,6 +97,10 @@ class Updater:
                           if e.code == 404 and not self.token else f"Update check failed: HTTP {e.code}")
         except Exception as e:
             self.error = f"Update check failed (no internet?): {e}"
+            if "CERTIFICATE" in str(e):
+                self.error = ("Update check failed: this PC could not check GitHub's security certificate. "
+                              f"Download Playout-Setup.exe from https://github.com/{self.repo}/releases/latest "
+                              "in a browser and install it once.")
         self.checked = time.time()
         self.state = "ready" if self.file and os.path.isfile(self.file) and self.available else "idle"
         return self.info()

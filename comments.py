@@ -13,6 +13,7 @@ import json
 import re
 import threading
 import time
+import certs
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,7 +33,7 @@ def _get(url, data=None, headers=None, timeout=15):
         data = json.dumps(data).encode()
         h["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with certs.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
 
 

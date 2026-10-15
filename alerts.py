@@ -10,6 +10,7 @@ import shutil
 import socket
 import threading
 import time
+import certs
 import urllib.parse
 import urllib.request
 
@@ -78,7 +79,7 @@ class Alerts:
     def _post(self, method, params):
         url = f"https://api.telegram.org/bot{self.token}/{method}"
         data = urllib.parse.urlencode(params).encode()
-        with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=20) as r:
+        with certs.urlopen(urllib.request.Request(url, data=data), timeout=20) as r:
             return json.load(r)
 
     def _worker(self):

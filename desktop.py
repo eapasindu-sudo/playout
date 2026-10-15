@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 
+import certs  # HTTPS certificates from the Windows store (update checks on every PC)
 import paths
 
 HOME = paths.user_home()

@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import certs  # noqa: F401  (HTTPS certificates from the Windows store)
 from audio_out import AudioOut
 from recorder import Recorder
 from capture import list_capture_devices
