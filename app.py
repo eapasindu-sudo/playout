@@ -7,6 +7,7 @@ import io
 import json
 import os
 import secrets
+import shutil
 import signal
 import socket
 import sys
@@ -85,7 +86,7 @@ engine.cg = cgm
 sysmon = SystemMonitor()
 audio_out = AudioOut()
 engine.audio_out = audio_out
-recorder = Recorder(engine, os.path.join(ROOT, cfg.get("record_dir", "recordings")))
+recorder = Recorder(engine, store.data.get("record_folder") or os.path.join(ROOT, cfg.get("record_dir", "recordings")))
 engine.recorder = recorder
 loudness = Loudness(cfg["data_dir"], streamer.ffmpeg)
 engine.loudness = loudness
@@ -130,6 +131,7 @@ app.register_blueprint(make_blueprint(lambda: cfg["cg_dir"], lambda: (engine.wid
                                       lambda: engine.last_frame))
 fullscreen_on = False
 fullscreen_hook = None   # set by the desktop app: fn(on, screen) opens / closes the full screen output window
+folder_dialog_hook = None   # set by the desktop app: fn(start_folder) -> chosen folder or None (Windows folder picker)
 
 
 # ---- security: remote password, lock ---------------------------------------
@@ -407,6 +409,22 @@ def settings_api():
             d = b["sdi"] or {}
             sdi.configure(d.get("enabled"), d.get("device"), d.get("ffmpeg"))
             store.set(sdi=sdi.settings())
+        if "recording" in b:
+            folder = ((b["recording"] or {}).get("folder") or "").strip()
+            if folder and os.path.normcase(folder) != os.path.normcase(recorder.folder):
+                if recorder.recording:
+                    return jsonify(error="Stop the recording before changing the recording folder"), 400
+                try:
+                    os.makedirs(folder, exist_ok=True)
+                    test = os.path.join(folder, ".playout-write-test")
+                    with open(test, "w") as f:
+                        f.write("ok")
+                    os.remove(test)
+                except OSError as e:
+                    return jsonify(error=f"Cannot record into {folder}: {e.strerror or e}"), 400
+                recorder.folder = folder
+                watcher.folders[1:2] = [folder]
+                store.set(record_folder=folder)
         if "watch" in b:
             w = b["watch"] or {}
             store.set(watch=watch.configure(w.get("enabled"), w.get("folder"), w.get("move"), w.get("add_to_playlist")))
@@ -422,6 +440,7 @@ def settings_api():
                   "lock_password_set": bool(s["lock_hash"]), "lock_on_start": s["lock_on_start"]},
         update={"repo": updater.repo, "token_set": bool(updater.token), "auto_check": updater.auto_check},
         alerts=alerts.info(), sdi=sdi.info(), watch=watch.info(), backup=backup.info(),
+        recording={"folder": recorder.folder, "free_gb": _free_gb(recorder.folder)},
         need_password=bool(s["lock_hash"]) and not users(), users=bool(users()),
         version=VERSION)
 
@@ -1422,6 +1441,22 @@ def cg_manual_action(cid, action):
 def cg_all_out():
     cgm.all_out()
     return jsonify(cgm.status())
+
+
+def _free_gb(folder):
+    try:
+        return round(shutil.disk_usage(folder if os.path.isdir(folder) else os.path.dirname(folder) or ".").free / 1e9, 1)
+    except OSError:
+        return None
+
+
+@app.post("/api/pick_folder")
+def pick_folder():
+    """Windows folder picker on the playout PC (Settings > Recording > Browse)."""
+    if request.remote_addr not in ("127.0.0.1", "::1") or folder_dialog_hook is None:
+        return jsonify(error="Type the folder path (the folder picker works on the playout PC only)"), 400
+    start = (request.get_json(silent=True) or {}).get("start") or ""
+    return jsonify(folder=folder_dialog_hook(start) or "")
 
 
 @app.post("/api/open_media_folder")

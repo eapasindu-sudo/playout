@@ -193,6 +193,17 @@ def open_control_screen(webview, server, port):
         out["win"] = win
 
     server.fullscreen_hook = fullscreen
+
+    def pick_folder(start=""):
+        """Windows folder picker (Settings > Recording > Browse)."""
+        try:
+            kind = getattr(webview, "FOLDER_DIALOG", None) or webview.FileDialog.FOLDER
+            r = main_win.create_file_dialog(kind, directory=start if start and os.path.isdir(start) else "")
+        except Exception:
+            return None
+        return (r[0] if isinstance(r, (list, tuple)) else r) if r else None
+
+    server.folder_dialog_hook = pick_folder
     main_win.events.closed += lambda: fullscreen(False)
     import winicon
     main_win.events.shown += lambda: threading.Timer(0.5, winicon.set_icon, ("Endora Playout", "endora-playout.ico")).start()

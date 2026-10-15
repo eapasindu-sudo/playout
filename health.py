@@ -107,6 +107,23 @@ class Health:
                 on_live = True
             add("Live input", "warn" if on_live else "ok",
                 "not connected" + (f" ({e.live.source_name})" if e.live.source_name else ""))
+        for key, inp in list(getattr(e, "inputs", {}).items()):
+            if not key.startswith("dev:"):
+                continue
+            name = "USB: " + key[4:].split("|")[0]
+            if not inp.connected:
+                add(name, "warn", "no picture" + (f" ({inp.error[:120]})" if inp.error else ""))
+                continue
+            text, lvl = inp.mode or "connected", "ok"
+            got = inp.in_fps
+            if got and not any(abs(got - fps * k) < 1.5 for k in (1, 2)):
+                lvl = "warn"
+                text += f", {got:g} fps from the device on a {fps:g} fps output: set the device / ATEM to {fps:g} or {fps * 2:g} fps"
+            if "|" in key and "no sound" in text:
+                lvl = "warn"
+            if inp.error:
+                text += f" - {inp.error[:120]}"
+            add(name, lvl, text)
         r = self.recorder.info()
         if r["recording"]:
             lvl = "warn" if r.get("dropped") else "ok"

@@ -62,6 +62,21 @@ def list_capture_devices(ffmpeg=None):
     return out
 
 
+def device_modes(width, height, fps):
+    """Capture formats to ask a USB device for, best first. Many cheap USB HDMI grabbers give 1080p only at
+    5 fps uncompressed but 25 / 30 / 60 fps as MJPEG, so MJPEG is asked for first; the ATEM Mini (and other
+    UVC devices without MJPEG) then open with the size and frame rate, and the last try takes the device default."""
+    rate = f"{float(fps):g}"
+    size = f"{width}x{height}"
+    return [
+        ("mjpeg", {"vcodec": "mjpeg", "video_size": size, "framerate": rate}),
+        ("raw", {"video_size": size, "framerate": rate}),
+        ("mjpeg", {"vcodec": "mjpeg", "video_size": size}),
+        ("raw", {"video_size": size}),
+        ("default", {}),
+    ]
+
+
 def _ffmpeg():
     try:
         import imageio_ffmpeg
@@ -78,7 +93,8 @@ def open_args(key):
         video, _, audio = key[4:].partition("|")
         if sys.platform == "win32":
             url = f"video={video}" + (f":audio={audio}" if audio else "")
-            return url, "dshow", {"rtbufsize": "256M"}
+            # audio_buffer_size: small sound packets (the default is 500 ms blocks, which arrive late and in bursts)
+            return url, "dshow", {"rtbufsize": "512M", "audio_buffer_size": "40"}
         return video, "v4l2", {}
     if key.startswith("lavfi:"):
         return key[6:], "lavfi", {}
@@ -88,15 +104,20 @@ def open_args(key):
 class CaptureInput:
     """Reads a capture device on its own thread; the output loop takes the newest frame."""
 
-    MAX_AUDIO = SAMPLE_RATE // 4      # keep at most 250 ms of audio queued
-    TARGET_AUDIO = SAMPLE_RATE // 12  # trim back to ~80 ms when it builds up
+    MAX_AUDIO = SAMPLE_RATE // 2      # keep at most 500 ms of audio queued
+    TARGET_AUDIO = SAMPLE_RATE // 10  # trim back to ~100 ms when it builds up
+    MAX_FRAMES = 3                    # video frames held to smooth out uneven USB delivery
 
-    def __init__(self, key, width, height):
+    def __init__(self, key, width, height, fps=25):
         self.key = key
         self.width, self.height = width, height
+        self.fps = fps
         self.source_name = key
         self.error = ""
+        self.mode = ""                # what the device opened as, e.g. "1920x1080 25 fps mjpeg + sound"
+        self.in_fps = None            # frames per second really coming from the device
         self._video = None
+        self._frames = collections.deque()
         self._audio = collections.deque()
         self._audio_len = 0
         self._lock = threading.Lock()
@@ -117,15 +138,40 @@ class CaptureInput:
     def _make_bars(self):
         return make_bars(self.width, self.height)
 
+    def _open(self):
+        """Open the device, trying the capture formats from best to plain; with the sound device if possible."""
+        url, fmt, opts = open_args(self.key)
+        if fmt != "dshow":
+            return av.open(url, format=fmt, options=opts, timeout=5), "", ""
+        video, _, audio = self.key[4:].partition("|")
+        urls = [url] + ([f"video={video}"] if audio else [])
+        last = None
+        for u in urls:
+            for name, extra in device_modes(self.width, self.height, self.fps):
+                try:
+                    c = av.open(u, format=fmt, options={**opts, **extra}, timeout=5)
+                    note = "" if u == url or not audio else f"sound device {audio} did not open"
+                    return c, name, note
+                except Exception as e:
+                    last = e
+        raise last or RuntimeError("cannot open the device")
+
     def _run(self):
         while not self._stop.is_set():
             try:
-                url, fmt, opts = open_args(self.key)
-                with av.open(url, format=fmt, options=opts, timeout=5) as c:
-                    self.error = ""
+                c, mode, note = self._open()
+                with c:
+                    self.error = note
                     vs = c.streams.video[0] if c.streams.video else None
                     aus = c.streams.audio[0] if c.streams.audio else None
+                    if vs is not None:
+                        vs.thread_type = "AUTO"
+                        cc = vs.codec_context
+                        rate = vs.average_rate or vs.guessed_rate
+                        self.mode = (f"{cc.width}x{cc.height}" + (f" {float(rate):g} fps" if rate else "") +
+                                     (f" {cc.name}" if cc.name else "") + (" + sound" if aus else " (no sound)"))
                     resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE) if aus else None
+                    count, t0 = 0, time.time()
                     for packet in c.demux(*[s for s in (vs, aus) if s is not None]):
                         if self._stop.is_set():
                             return
@@ -133,13 +179,20 @@ class CaptureInput:
                             if packet.stream is vs:
                                 img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
                                 with self._lock:
-                                    self._video = np.ascontiguousarray(img).reshape(-1)
+                                    self._frames.append(np.ascontiguousarray(img).reshape(-1))
+                                    while len(self._frames) > self.MAX_FRAMES:
+                                        self._frames.popleft()
                                 self._last_frame_time = time.time()
+                                count += 1
+                                if time.time() - t0 >= 2:
+                                    self.in_fps = round(count / (time.time() - t0), 1)
+                                    count, t0 = 0, time.time()
                             elif resampler is not None:
                                 for rf in resampler.resample(frame):
                                     self._push_audio(rf.to_ndarray().reshape(-1, CHANNELS).T)
             except Exception as e:
                 self.error = str(e)
+                self.mode, self.in_fps = "", None
             if not self._stop.wait(2.0):   # device unplugged or busy: try again
                 continue
 
@@ -166,6 +219,10 @@ class CaptureInput:
         out = np.zeros((CHANNELS, n_samples), np.float32)
         got = 0
         with self._lock:
+            # one new frame per output frame, in order: a frame that comes a little early or late from the
+            # USB device still shows for its own frame time (no jumping back and forth)
+            if self._frames:
+                self._video = self._frames.popleft()
             video = self._video
             while got < n_samples and self._audio:
                 chunk = self._audio[0]

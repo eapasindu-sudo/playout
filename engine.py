@@ -390,7 +390,7 @@ class Engine:
                 elif key.startswith("url:"):
                     inp = UrlInput(key, self.width, self.height, self.ffmpeg)
                 else:
-                    inp = CaptureInput(key, self.width, self.height)
+                    inp = CaptureInput(key, self.width, self.height, self.fps)
                 self.inputs[key] = inp
             except Exception as e:
                 self.message = f"Cannot open {key}: {e}"

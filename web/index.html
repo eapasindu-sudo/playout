@@ -500,8 +500,9 @@
       <span>Fixed start</span><span style="display:flex; gap:6px"><input id="lvFixed" type="time" step="1"><button class="sm" onclick="$('lvFixed').value=''">Clear</button></span>
       <span>Live source</span>
       <span style="display:flex; gap:6px"><select id="lvSrc" style="flex:1" onchange="lvSrcChanged()"></select><button class="sm" onclick="loadInputs(true)" title="Search again">&#10227;</button></span>
-      <span class="lvDev">Video device</span><select class="lvDev" id="lvVid"></select>
+      <span class="lvDev">Video device</span><select class="lvDev" id="lvVid" onchange="lvGuessAudio()"></select>
       <span class="lvDev">Audio device</span><select class="lvDev" id="lvAud"></select>
+      <span class="lvDev"></span><span class="lvDev hint">ATEM Mini: video "Blackmagic Design" and its sound device (picked by itself). Set the ATEM to the same frame rate as Playout (ATEM Software Control &gt; Settings &gt; Video standard 1080p25) or the picture judders. Phone Remote &gt; Stream health shows what the device sends.</span>
       <span class="lvUrl">Feed address</span><input class="lvUrl" id="lvUrl" placeholder="srt://0.0.0.0:9000  or  rtmp://0.0.0.0:1935/live/key  or  https://youtube.com/watch?v=...">
       <span class="lvUrl"></span><span class="lvUrl hint">SRT / RTMP with 0.0.0.0 = Playout waits for the sender (vMix, OBS, a phone app) to connect to this PC. Also: srt://other-pc:9000, rtsp://camera, .m3u8 (HLS) links, YouTube / Facebook live links.</span>
       <span></span><span class="hint" id="lvHint">Main vMix input = the NDI source picked on the main screen. Plug in a USB / HDMI capture device (AverMedia, Elgato, Magewell...), press &#10227; and pick it here.</span>
@@ -725,7 +726,7 @@
   <header>Settings <span class="hint" id="setVer" style="margin-left:10px; font-weight:400"></span> <button class="sm" onclick="dSet.close()">Close</button></header>
   <div class="body" id="setBody">
     <div class="setnav"><a href="#" data-s="secFail">Failover</a><a href="#" data-s="secAudio">Audio</a><a href="#" data-s="secPw">Passwords</a>
-      <a href="#" data-s="secUsers">Users</a><a href="#" data-s="secAlerts">Alerts</a><a href="#" data-s="secBackup">Backup PC</a><a href="#" data-s="secSdi">SDI out</a>
+      <a href="#" data-s="secUsers">Users</a><a href="#" data-s="secAlerts">Alerts</a><a href="#" data-s="secBackup">Backup PC</a><a href="#" data-s="secRec">Recording</a><a href="#" data-s="secSdi">SDI out</a>
       <a href="#" data-s="secWatch">Watch folder</a><a href="#" data-s="secUpdate">Updates</a></div>
     <div class="setsec" id="secFail">Failover (live input lost)</div>
     <div class="form">
@@ -777,6 +778,12 @@
       <span>Files</span><label><input type="checkbox" id="bkMirror"> Mirror every clip and CG file of the main PC (not only the ones in the playlist). Files are only added, never deleted here.</label>
       <span>Status</span><span id="bkSt" class="hint"></span>
       <span></span><span class="hint">The backup copies the playlist, CGs and missing clips from the main PC and plays the same item at the same point, so vMix / the switcher can change to the backup's NDI output at any time. If the main PC stops, the backup carries on by itself and sends an alert.</span>
+    </div>
+
+    <div class="setsec" id="secRec">Recording</div>
+    <div class="form">
+      <span>Folder</span><span style="display:flex; gap:6px"><input id="recDir" placeholder="e.g. D:\Recordings" style="flex:1"><button class="sm" onclick="recBrowse()">Browse...</button></span>
+      <span></span><span class="hint" id="recFree">Recordings (REC button and scheduled recordings) are saved here. A big, fast drive is best (1 hour of 1080p 20 Mbps is about 9 GB).</span>
     </div>
 
     <div class="setsec" id="secSdi">SDI output (Blackmagic DeckLink)</div>
@@ -1145,8 +1152,16 @@ async function loadInputs(force) {
   $('lvVid').innerHTML = (vids.length ? '' : '<option value="">(no capture device found - plug it in and press &#10227;)</option>') +
     vids.map(n => `<option ${n === wv ? 'selected' : ''}>${esc(n)}</option>`).join('');
   $('lvAud').innerHTML = '<option value="">(no audio)</option>' + auds.map(n => `<option ${n === wa ? 'selected' : ''}>${esc(n)}</option>`).join('');
-  if (!wa && wv) { const guess = auds.find(a => a.toLowerCase().includes(wv.toLowerCase().split(' ')[0])); if (guess) $('lvAud').value = guess; }
+  if (!wa) lvGuessAudio();
   lvSrcChanged();
+}
+// the sound of the same device (ATEM Mini: video "Blackmagic Design", sound "... (Blackmagic Design)")
+function lvGuessAudio() {
+  const v = ($('lvVid').value || '').toLowerCase(); if (!v) return;
+  const words = v.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['video', 'capture', 'camera', 'device', 'webcam'].includes(w));
+  const auds = [...$('lvAud').options].map(o => o.value).filter(Boolean);
+  const guess = auds.find(a => a.toLowerCase().includes(v)) || auds.find(a => words.some(w => a.toLowerCase().includes(w)));
+  $('lvAud').value = guess || '';
 }
 function lvSrcChanged() {
   document.querySelectorAll('.lvDev').forEach(e => e.style.display = $('lvSrc').value === 'dev' ? '' : 'none');
@@ -1479,12 +1494,18 @@ async function openSettings(focus) {
   const sd = SET.sdi; $('sdiOn').checked = sd.enabled; $('sdiFf').value = sd.ffmpeg || '';
   $('sdiDev').innerHTML = sd.device ? `<option selected>${esc(sd.device)}</option>` : '<option value="">(press Find cards)</option>';
   $('sdiSt').textContent = sd.enabled ? sd.status + (sd.error ? ' - ' + sd.error : '') : 'off';
+  $('recDir').value = SET.recording?.folder || '';
+  $('recFree').textContent = `Recordings (REC button and scheduled recordings) are saved here` + (SET.recording?.free_gb != null ? ` - ${SET.recording.free_gb} GB free.` : '.') + ' A big, fast drive is best (1 hour of 1080p 20 Mbps is about 9 GB).';
   const wf = SET.watch; $('wfOn').checked = wf.enabled; $('wfDir').value = wf.folder || ''; $('wfMove').checked = wf.move; $('wfAdd').checked = wf.add_to_playlist;
   $('wfLog').textContent = (wf.error ? 'Problem: ' + wf.error + '\n' : '') + (wf.log.slice(0, 6).map(l => l.time.slice(5, 16) + '  ' + l.text).join('\n') || 'nothing yet');
   loadUsers();
   pollUpdate();
   dSet.showModal();
   if (focus === 'update') $('secUpdate').scrollIntoView();
+}
+async function recBrowse() {
+  const r = await api('/api/pick_folder', {start: $('recDir').value.trim()}).catch(e => ({error: String(e)}));
+  if (r.error) say(r.error); else if (r.folder) $('recDir').value = r.folder;
 }
 async function saveSettings() {
   const body = {
@@ -1499,12 +1520,13 @@ async function saveSettings() {
     backup: {role:$('bkRole').value, main_url:$('bkUrl').value.trim(), key:$('bkKey').value, takeover_after:+$('bkAfter').value || 5, take_streams:$('bkStreams').checked, mirror:$('bkMirror').checked},
     sdi: {enabled:$('sdiOn').checked, ffmpeg:$('sdiFf').value.trim(), device:$('sdiDev').value},
     watch: {enabled:$('wfOn').checked, folder:$('wfDir').value.trim(), move:$('wfMove').checked, add_to_playlist:$('wfAdd').checked},
+    recording: {folder:$('recDir').value.trim()},
   };
   if (body.backup.role === 'backup' && (!body.backup.main_url || !body.backup.key)) { say('A backup PC needs the main PC address and the sync key.'); return; }
   if (body.backup.role === 'main' && !body.backup.key) { say('Set a sync key on the main PC (the same one goes on the backup PC).'); return; }
   if (body.failover.mode === 'clip' && !body.failover.file) { say('Pick the filler clip.'); return; }
   const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (!r.ok) { say('Settings were not saved: ' + (r.status === 403 ? 'wrong password or not an admin' : 'error ' + r.status)); return; }
+  if (!r.ok) { const e = await r.json().catch(() => ({})); say('Settings were not saved: ' + (e.error || (r.status === 403 ? 'wrong password or not an admin' : 'error ' + r.status))); return; }
   SET = await r.json(); NORM = SET.audio; if ($('pwLock').value !== '********') adminPw = $('pwLock').value;
   dSet.close(); $('msg').textContent = 'Settings saved';
 }

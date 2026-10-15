@@ -210,6 +210,21 @@ or only save it under a name.
 by itself at the chosen time (the on-air item finishes first). **Scheduled recording** starts and stops
 recordings at set times, every day or on chosen days / a date.
 
+## Recording folder
+
+**Settings > Recording > Folder**: where REC and scheduled recordings are saved (**Browse...** opens the Windows
+folder picker). Playout checks it can write there and shows the free space.
+
+## USB capture (ATEM Mini, HDMI grabbers)
+
+A live card's **USB / HDMI capture device** opens the device at the output size and frame rate, asking for
+MJPEG first (cheap USB HDMI grabbers give 1080p smoothly only as MJPEG), then uncompressed, then the device
+default. Frames are played in order with a small buffer, so uneven USB delivery does not judder. The sound
+device of the same box is picked by itself (ATEM Mini: "Blackmagic Design"), and the sound comes in small
+40 ms packets. **ATEM Mini: set ATEM Software Control > Settings > Video standard to 1080p25** (the same as
+Playout), otherwise 30 / 60 fps on a 25 fps output judders. The stream health page shows what each USB
+device really sends (size, fps, sound).
+
 ## Clip check
 
 Every clip is checked once in the background (at low priority, it never slows down what is on air) when it is
