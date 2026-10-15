@@ -606,12 +606,30 @@ def playlist_delete():
 
 
 # ---- preview -----------------------------------------------------------
+_pv_lock = threading.Lock()
+_pv_cache = {}          # width -> (frame it was made from, jpeg)
+
+
 def _jpeg(width=640):
-    img = Image.frombuffer("RGBA", (engine.width, engine.height), bytes(engine.last_frame), "raw", "BGRA", 0, 1)
-    img = img.convert("RGB").resize((width, int(width * engine.height / engine.width)))
-    buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=70)
-    return buf.getvalue()
+    """The program picture as a small JPEG. Made once per new frame and shared by every
+    preview window (desktop app, remotes), so more viewers cost nothing extra."""
+    frame = engine.last_frame
+    with _pv_lock:
+        hit = _pv_cache.get(width)
+        if hit and hit[0] is frame:
+            return hit[1]
+        img = Image.frombuffer("RGB", (engine.width, engine.height), frame, "raw", "BGRX", 0, 1)
+        f = engine.width // width
+        if f >= 2:
+            img = img.reduce(f)             # fast box shrink first
+        h = int(width * engine.height / engine.width)
+        if img.size != (width, h):
+            img = img.resize((width, h), Image.BILINEAR)
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=75)
+        data = buf.getvalue()
+        _pv_cache[width] = (frame, data)
+        return data
 
 
 @app.get("/api/preview.jpg")
@@ -624,12 +642,22 @@ def preview():
 
 @app.get("/api/preview.mjpg")
 def preview_stream():
+    """Live preview: every new program frame (up to 25 per second), not every 10th of a second."""
+    w = max(160, min(engine.width, int(request.args.get("w") or 640)))
+
     def gen():
+        last = None
+        period = 1.0 / min(25.0, float(engine.fps))
         while True:
-            frame = _jpeg()
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-            time.sleep(0.1)
-    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+            t0 = time.monotonic()
+            frame = engine.last_frame
+            if frame is not last:
+                last = frame
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + _jpeg(w) + b"\r\n"
+            time.sleep(max(0.005, period - (time.monotonic() - t0)))
+    resp = Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/api/output.mjpg")
