@@ -344,6 +344,7 @@
         <button onclick="openComposerHelp()" title="Open CG Composer to make CGs">CG Composer</button>
         <button onclick="openReport()" title="Commercials aired per client, as PDF / Excel">Ad Report</button>
         <button class="lockable adminonly" onclick="openSchedule()" title="Playlist for each day, scheduled recordings">Day Schedule</button>
+        <button onclick="openHealth()" title="Stream, output, live input, recording, CPU and disk: what is OK and what needs a look">Health</button>
         <button onclick="openRemote()" title="Control Playout from a phone or tablet">Phone Remote</button>
         <button class="lockable adminonly" onclick="openBooking()" title="Spots booked per client against spots aired, invoices">Ad Booking</button>
         <button class="lockable adminonly" onclick="openSettings()" title="Failover, audio level, passwords, alerts, SDI, backup PC, users, updates">Settings</button>
@@ -849,6 +850,12 @@
     </div>
   </div>
   <div class="foot"><button class="blue" onclick="saveSettings()">Save</button></div>
+</dialog>
+
+<!-- Health -->
+<dialog id="dHealth" style="width:min(760px, 96vw); height:min(820px, 92vh); padding:0">
+  <header>Health <button class="sm" onclick="dHealth.close(); $('hlFrame').src = 'about:blank'">Close</button></header>
+  <iframe id="hlFrame" style="width:100%; height:calc(100% - 52px); border:0; background:#111"></iframe>
 </dialog>
 
 <!-- Phone remote -->
@@ -1882,6 +1889,7 @@ async function saveBooking() {
 function makeInvoice() { const c = $('bkInvClient').value; if (!c) return; getFile(`/api/bookings/invoice.pdf?client=${encodeURIComponent(c)}&from=${$('bkFrom').value}&to=${$('bkTo').value}`); }
 
 // ---------------------------------------------------------------- phone remote
+function openHealth() { $('hlFrame').src = '/health'; dHealth.showModal(); }
 async function openRemote() {
   const r = await api('/api/remote_info');
   $('rmBody').innerHTML = !r.enabled ? '<p>Phone remote is turned off. Turn it on in <b>Settings &gt; Passwords</b>.</p>' :
