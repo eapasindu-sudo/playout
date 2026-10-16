@@ -208,6 +208,8 @@ class Engine:
         self._fo_checked = False
         self.heartbeat = time.monotonic()   # output loop alive (watchdog)
         self.loop_errors = 0
+        self.late_frames = 0                # frames that took longer than one frame time to make
+        self.load = 0.0                     # average work per frame / frame time (1.0 = no time to spare)
         self._running = False
         self._thread = None
 
@@ -612,8 +614,17 @@ class Engine:
     def _run(self):
         self._k = 0
         self._last_version = -1
+        # the loop keeps its own clock: frame k goes out at start + k / fps. A frame that took too long is
+        # made up by the next ones (no waiting), so over any second exactly fps frames and 48000 sound
+        # samples go to NDI, the stream and the recording. (Waiting a full frame after a late one, as the
+        # NDI sender's own clock does, lets the program fall behind real time: the stream then runs short
+        # of sound and the sound breaks up.)
+        period = 1.0 / float(self.fps)
+        due = time.perf_counter()
         while self._running:
             self.heartbeat = time.monotonic()
+            due += period
+            t0 = time.perf_counter()
             try:
                 self._tick()
             except Exception:
@@ -626,7 +637,17 @@ class Engine:
                 try:
                     self.output.send(self.black, np.zeros((CHANNELS, self._samples_for(0)), np.float32))
                 except Exception:
-                    time.sleep(float(1 / self.fps))
+                    pass
+            now = time.perf_counter()
+            work = now - t0
+            self.load = self.load * 0.98 + (work / period) * 0.02      # share of the frame time the work takes
+            wait = due - now
+            if wait > 0:
+                time.sleep(wait)
+            else:
+                self.late_frames += 1
+                if wait < -1.0:          # stalled for over a second: start the clock again, don't rush
+                    due = time.perf_counter()
 
     def _tick(self):
         n = self._samples_for(self._k)
@@ -733,9 +754,9 @@ class Engine:
         self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
         self.last_frame = video
         try:
-            self.output.send(video, audio)   # blocks to frame rate (NDI clock)
+            self.output.send(video, audio)   # the loop itself keeps the frame rate (see _run)
         except Exception:
-            time.sleep(float(1 / self.fps))
+            pass
         if self.streamer is not None:
             self.streamer.push(video, audio)
         if self.audio_out is not None:

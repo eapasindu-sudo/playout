@@ -150,10 +150,10 @@ def fit_audio(a, n_samples):
 
 
 class NDIOutput:
-    """The playout's program output as an NDI source. The sender paces the loop."""
+    """The playout's program output as an NDI source. The engine's loop keeps the frame rate itself."""
 
     def __init__(self, name, width, height, fps: Fraction):
-        self.sender = Sender(name, clock_video=True, clock_audio=False)
+        self.sender = Sender(name, clock_video=False, clock_audio=False)
         vf = VideoSendFrame()
         vf.set_resolution(width, height)
         vf.set_frame_rate(fps)

@@ -14,6 +14,7 @@ import av
 import numpy as np
 
 import gpu
+from framequeue import FrameQueue
 from gpu import ENCODERS
 from ndi_io import SAMPLE_RATE
 
@@ -83,7 +84,7 @@ class Recorder:
         self.part = 1
         self.error = ""
         self.dropped = self.frames = 0
-        self._q = queue.Queue(maxsize=max(8, int(float(self.engine.fps))))   # 1 s of frames at most (RAM)
+        self._q = FrameQueue(max(8, int(float(self.engine.fps))))   # 1 s of frames at most (RAM)
         self._on = True
         self.started = time.time()
         self._thread = threading.Thread(target=self._run, daemon=True, name="recorder")
@@ -104,9 +105,7 @@ class Recorder:
         """Called by the engine's output loop for every program frame."""
         if not self._on:
             return
-        try:
-            self._q.put_nowait((video, audio))
-        except queue.Full:
+        if not self._q.put(video, audio):
             self.dropped += 1
 
     # ---- encoder thread -----------------------------------------------
@@ -159,7 +158,7 @@ class Recorder:
             vpts = apts = 0
             while self._on or not self._q.empty():
                 try:
-                    video, audio = self._q.get(timeout=0.5)
+                    video, audio, frames = self._q.get(timeout=0.5)
                 except queue.Empty:
                     continue
                 if self.split and vpts >= int(self.split * 60 * float(self.engine.fps)):
@@ -181,7 +180,7 @@ class Recorder:
                 if pix != "bgra" or (w, h) != (self.engine.width, self.engine.height):
                     vf = vf.reformat(width=w, height=h, format=pix, interpolation="FAST_BILINEAR")
                 vf.pts, vf.time_base = vpts, vtb
-                vpts += 1
+                vpts += frames
                 for pkt in vs.encode(vf):
                     out.mux(pkt)
                 af = av.AudioFrame.from_ndarray(np.ascontiguousarray(audio, dtype=np.float32),

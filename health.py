@@ -94,7 +94,13 @@ class Health:
         fps = float(self.engine.fps)
         if self.out_fps is not None:
             lvl = "ok" if self.out_fps >= fps * 0.95 else "warn" if self.out_fps >= fps * 0.8 else "bad"
-            add("Program output", lvl, f"{self.out_fps:g} of {fps:g} fps")
+            load = getattr(self.engine, "load", 0.0)
+            text = f"{self.out_fps:g} of {fps:g} fps"
+            if load >= 0.9:
+                lvl = "bad" if load >= 1.0 else "warn" if lvl == "ok" else lvl
+                text += (f", PC busy {load * 100:.0f}% of each frame: choose a lower output format "
+                         f"(Settings > Output format, e.g. 1080p 25) so sound and picture stay smooth")
+            add("Program output", lvl, text)
         e = self.engine
         if getattr(e, "failover_active", False):
             add("Live input", "bad", "LOST - filler on air")

@@ -20,6 +20,7 @@ import av
 import numpy as np
 
 import gpu
+from framequeue import FrameQueue
 
 from ndi_io import SAMPLE_RATE
 
@@ -194,7 +195,7 @@ class Streamer:
         self.preset = s.get("preset", "veryfast")
         self.ffmpeg = find_ffmpeg(s.get("ffmpeg_path", ""))
         self.dests = [Destination(i, self.ffmpeg, self) for i in range(3)]
-        self._q = queue.Queue(maxsize=8)
+        self._q = FrameQueue(8)
         self._lock = threading.Lock()
         self._thread = None
         self._encoding = False
@@ -259,15 +260,13 @@ class Streamer:
         """Called by the engine's output loop for every program frame."""
         if not self._encoding:
             return
-        try:
-            self._q.put_nowait((video, audio))
-        except queue.Full:
+        if not self._q.put(video, audio):
             self.dropped += 1
 
     # -- encoder thread --------------------------------------------------
     def _start_encoder(self):
         self._encoding = True
-        self._q = queue.Queue(maxsize=8)
+        self._q = FrameQueue(8)
         self._thread = threading.Thread(target=self._encode, daemon=True, name="stream encoder")
         self._thread.start()
 
@@ -321,7 +320,7 @@ class Streamer:
             vpts = apts = 0
             while self._encoding:
                 try:
-                    video, audio = self._q.get(timeout=0.5)
+                    video, audio, frames = self._q.get(timeout=0.5)
                 except queue.Empty:
                     continue
                 img = np.asarray(video).reshape(self.engine.height, self.engine.width, 4)
@@ -330,7 +329,7 @@ class Streamer:
                     vf = vf.reformat(width=self.width, height=self.height, format=pix, interpolation="FAST_BILINEAR")
                 vf.pts = vpts
                 vf.time_base = vtb
-                vpts += 1
+                vpts += frames
                 for pkt in vs.encode(vf):
                     out.mux(pkt)
                 af = av.AudioFrame.from_ndarray(np.ascontiguousarray(audio, dtype=np.float32),
