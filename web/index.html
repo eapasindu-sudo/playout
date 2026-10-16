@@ -120,6 +120,8 @@
   .dest .st { color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .srcrow { display:grid; grid-template-columns: 12px auto minmax(0,1fr) auto; gap:8px; align-items:center; padding:2px 10px 6px; }
   .srcrow select { min-width:0; width:100%; }
+  .marow { display:flex; gap:8px; align-items:center; padding:2px 10px 6px 30px; flex-wrap:wrap; }
+  .marow .hint { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
   .dot.ok { background:var(--green); box-shadow:0 0 6px var(--green); } .dot.bad { background:var(--red); }
   /* system meters (header) */
   .sys { display:flex; gap:10px; align-items:center; }
@@ -320,10 +322,10 @@
         <select id="aoDev" onchange="setAO({device: this.value})"></select>
         <input type="range" id="aoVol" min="0" max="150" style="width:80px" title="Volume" onchange="setAO({volume: this.value / 100})">
       </div>
-      <div class="srcrow" title="Program sound processing: on air, stream, recording and NDI">
+      <div class="marow" title="Program sound processing: on air, stream, recording and NDI">
         <button class="sm" id="maLim" onclick="setMaster({limiter: !S.master?.limiter})" title="Broadcast limiter: nothing goes over the ceiling; loud parts are turned down smoothly (no distortion)">Limiter</button>
         <button class="sm" id="maAgc" onclick="setMaster({agc: !S.master?.agc})" title="Auto level: quiet and loud sources come out at the same level (set the level in Settings > Audio)">Auto level</button>
-        <span class="hint" id="maInfo" style="white-space:nowrap"></span>
+        <span class="hint" id="maInfo"></span>
       </div>
       <div class="hint" style="padding:0 10px 8px" id="liveInfo"></div>
     </div>
