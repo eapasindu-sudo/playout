@@ -1380,6 +1380,18 @@ def cg_upload():
     return jsonify(saved=saved, rejected=rejected)
 
 
+@app.post("/api/cg/library/delete")
+def cg_library_delete():
+    """Remove a CG Composer preset (.cgp) from the CG library. Its video / picture stays in the CG folder,
+    and manual CGs already made from it keep working."""
+    name = safe_name((request.get_json(silent=True) or {}).get("preset") or "")
+    p = os.path.join(cfg["cg_dir"], name)
+    if not name.lower().endswith(PRESET_EXT) or not os.path.isfile(p):
+        return jsonify(error="CG not found"), 404
+    os.remove(p)
+    return jsonify(ok=True)
+
+
 # ---- squeeze feed (L-ad) ------------------------------------------------------
 def _squeeze_presets():
     return [p for p in list_presets(cfg["cg_dir"]) if (p.get("cfg") or {}).get("squeeze")]

@@ -1942,13 +1942,26 @@ function renderCGFiles() {
     <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(p.file)}">
     <div style="min-width:0"><div class="nm">${esc(p.name)}</div>
       <div class="st">CG Composer preset - ${esc(p.file)}${p.cfg.key && p.cfg.key !== 'none' ? ' - ' + p.cfg.key + ' key' : ''}</div></div>
-    <div class="bt lockable"><button class="sm" onclick="addPreset(${i})">+ Manual</button></div></div>`).join('')
+    <div class="bt lockable"><button class="sm" onclick="addPreset(${i})">+ Manual</button><button class="sm" onclick="delPreset(${i})">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No CGs yet. Make one in CG Composer and press Save to Playout, or Import a .cgp file.</div>';
 }
 async function addPreset(i) {
   const r = await api('/api/cgfx/preset/' + encodeURIComponent(cgPresets[i].name), {});
   if (r.error) { say(r.error); return; }
   cgManual.push({...r.cfg, name: r.cfg.name || cgPresets[i].name.replace(/\.cgp$/i, '')}); saveManual(); cgTab('man');
+}
+async function delPreset(i) {
+  const p = cgPresets[i]; if (!p) return;
+  if (!await ask(`Delete "${p.name.replace(/\.cgp$/i, '')}" from the CG library? (The video / picture stays in the CG folder. Manual CGs made from it keep working.)`)) return;
+  const r = await api('/api/cg/library/delete', {preset: p.name});
+  if (r.error) say(r.error);
+  await loadCGFiles(); renderCGFiles();
+}
+async function delManualCG(id) {
+  const i = cgManual.findIndex(c => c.id === id); if (i < 0) return;
+  if (!await ask(`Delete the manual CG "${cgManual[i].name || cgManual[i].file}"? (It goes off air first. The file stays in the CG library / folder.)`)) return;
+  const j = cgManual.findIndex(c => c.id === id); if (j < 0) return;
+  await cgTake(id, 'out'); cgManual.splice(j, 1); saveManual();
 }
 async function uploadCG(input) {
   const fd = new FormData(); for (const f of input.files) fd.append('files', f);
@@ -1985,7 +1998,7 @@ function renderManual() {
       : `<img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}">`}
     <div style="min-width:0"><div class="nm">${esc(c.name || c.file)}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
-      <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button></div></div>`).join('')
+      <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button><button class="sm lockable" onclick="delManualCG('${c.id}')">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No manual CGs. Press <b>+ Add CG</b>. They go on air with IN, even while a commercial plays.</div>';
 }
 // Squeeze feed (L-ad): program squeezed into the green area of an overlay
