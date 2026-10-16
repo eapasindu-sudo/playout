@@ -341,6 +341,12 @@ Needs Windows 10 or 11 (64-bit) with the Microsoft Edge WebView2 runtime, which 
 Running from source instead: install Python 3.12, run `install.bat`, then `start.bat`
 (this opens the browser version).
 
+## Recording in parts
+
+The recording panel has a file length choice: one file, or a new file every 30, 40, 60 or 120
+minutes. Each part is a normal MP4 that plays on its own, named by its start time; no frame is
+lost between parts.
+
 ## Program sound: limiter and auto level
 
 Main screen (under PC sound): **Limiter** and **Auto level** buttons; Settings > Audio sets the

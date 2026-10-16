@@ -19,6 +19,7 @@ from ndi_io import SAMPLE_RATE
 
 BITRATES = (10, 20, 50)            # Mbps choices on screen
 RESOLUTIONS = {"720p": (1280, 720), "1080p": (1920, 1080)}
+SPLITS = (0, 30, 40, 60, 120)      # minutes per file (0 = one file)
 
 
 class Recorder:
@@ -28,6 +29,8 @@ class Recorder:
         self.resolution = "1080p"
         self.mbps = 20
         self.encoder = "auto"
+        self.split = 0                 # start a new file every this many minutes (0 = never)
+        self.part = 0
         self.active_encoder = None
         self.file = None
         self.started = None
@@ -39,7 +42,9 @@ class Recorder:
         self._on = False
 
     # ---- settings ------------------------------------------------------
-    def configure(self, resolution=None, mbps=None, encoder=None):
+    def configure(self, resolution=None, mbps=None, encoder=None, split=None):
+        if split is not None and int(split) in SPLITS:
+            self.split = int(split)    # can change while recording: from the next file on
         if self._on:
             return self.info()          # settings are locked while recording
         if resolution in RESOLUTIONS:
@@ -51,7 +56,7 @@ class Recorder:
         return self.info()
 
     def settings(self):
-        return {"resolution": self.resolution, "mbps": self.mbps, "encoder": self.encoder}
+        return {"resolution": self.resolution, "mbps": self.mbps, "encoder": self.encoder, "split": self.split}
 
     def using(self):
         return gpu.NAMES.get(self.active_encoder or gpu.resolve(self.encoder))
@@ -63,7 +68,7 @@ class Recorder:
             size = os.path.getsize(self.file)
         return {**self.settings(), "using": self.using(), "recording": self._on, "file": os.path.basename(self.file) if self.file else "",
                 "folder": self.folder, "elapsed": round(up), "size_mb": round(size / 1048576, 1),
-                "dropped": self.dropped, "error": self.error}
+                "dropped": self.dropped, "error": self.error, "part": self.part}
 
     @property
     def recording(self):
@@ -74,7 +79,8 @@ class Recorder:
         if self._on:
             return self.info()
         os.makedirs(self.folder, exist_ok=True)
-        self.file = os.path.join(self.folder, dt.datetime.now().strftime("PGM_%Y-%m-%d_%H-%M-%S.mp4"))
+        self.file = self._new_name()
+        self.part = 1
         self.error = ""
         self.dropped = self.frames = 0
         self._q = queue.Queue(maxsize=max(8, int(float(self.engine.fps))))   # 1 s of frames at most (RAM)
@@ -83,6 +89,9 @@ class Recorder:
         self._thread = threading.Thread(target=self._run, daemon=True, name="recorder")
         self._thread.start()
         return self.info()
+
+    def _new_name(self):
+        return os.path.join(self.folder, dt.datetime.now().strftime("PGM_%Y-%m-%d_%H-%M-%S.mp4"))
 
     def stop(self):
         self._on = False
@@ -153,6 +162,20 @@ class Recorder:
                     video, audio = self._q.get(timeout=0.5)
                 except queue.Empty:
                     continue
+                if self.split and vpts >= int(self.split * 60 * float(self.engine.fps)):
+                    # next file: finish this one (playable on its own) and go on without losing a frame
+                    for st in (vs, aus):
+                        for pkt in st.encode(None):
+                            out.mux(pkt)
+                    out.close()
+                    out = None
+                    self.file = self._new_name()
+                    if os.path.exists(self.file):
+                        self.file = self.file[:-4] + f"_{self.part + 1}.mp4"
+                    self.part += 1
+                    out, vs, aus, (w, h) = self._open(enc)
+                    pix = vs.pix_fmt
+                    vpts = apts = 0
                 img = np.asarray(video).reshape(self.engine.height, self.engine.width, 4)
                 vf = av.VideoFrame.from_ndarray(img, format="bgra")
                 if pix != "bgra" or (w, h) != (self.engine.width, self.engine.height):

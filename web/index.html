@@ -363,6 +363,7 @@
       <div class="recrow lockable">
         <select id="recRes" onchange="setRec()"><option value="1080p">1080p</option><option value="720p">720p</option></select>
         <select id="recMbps" onchange="setRec()"><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="50">50 Mbps</option></select>
+        <select id="recSplit" onchange="setRec()" title="Start a new file every 30 / 40 / 60 / 120 minutes (no frame is lost between files)"><option value="0">One file</option><option value="30">30 min files</option><option value="40">40 min files</option><option value="60">60 min files</option><option value="120">120 min files</option></select>
         <select id="recEnc" onchange="setRec()"><option value="auto">Auto (GPU)</option><option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA</option><option value="h264_qsv">Intel</option><option value="h264_amf">AMD</option></select>
       </div>
       <div class="recrow">
@@ -2247,16 +2248,16 @@ async function pollRec(r) {
   $('bRec').classList.toggle('on', on); $('bRec').innerHTML = on ? '&#9632; STOP REC' : '&#9679; REC';
   ['recRes', 'recMbps', 'recEnc'].forEach(id => $(id).disabled = on);
   if (document.activeElement?.closest?.('.recrow') == null) {
-    $('recRes').value = REC.resolution; $('recMbps').value = String(REC.mbps); $('recEnc').value = REC.encoder; $('recEnc').title = 'Recording with: ' + (REC.using || '');
+    $('recRes').value = REC.resolution; $('recMbps').value = String(REC.mbps); $('recSplit').value = String(REC.split || 0); $('recEnc').value = REC.encoder; $('recEnc').title = 'Recording with: ' + (REC.using || '');
   }
-  $('recFmt').textContent = `- ${REC.resolution} ${REC.mbps} Mbps MP4`;
+  $('recFmt').textContent = `- ${REC.resolution} ${REC.mbps} Mbps MP4` + (REC.split ? `, new file every ${REC.split} min` : '');
   $('recPanel').className = on ? 'recon' : 'recoff';
   $('recSt').style.color = REC.error ? 'var(--orange)' : '';
-  $('recSt').textContent = on ? `${fmtUp(REC.elapsed)}  ${REC.size_mb >= 1024 ? (REC.size_mb / 1024).toFixed(2) + ' GB' : REC.size_mb + ' MB'}  ${REC.file}`
+  $('recSt').textContent = on ? `${fmtUp(REC.elapsed)}  ${REC.size_mb >= 1024 ? (REC.size_mb / 1024).toFixed(2) + ' GB' : REC.size_mb + ' MB'}  ${REC.file}` + (REC.split && REC.part > 1 ? `  (file ${REC.part})` : '')
                               : (REC.error || (REC.file ? 'NOT RECORDING - last: ' + REC.file : 'NOT RECORDING'));
   $('recSt').title = (REC.error ? REC.error + '\n' : '') + (REC.folder || '') + (REC.dropped ? `\n${REC.dropped} frames dropped (try a GPU encoder)` : '');
 }
-const setRec = () => api('/api/record', {resolution:$('recRes').value, mbps:+$('recMbps').value, encoder:$('recEnc').value}).then(pollRec);
+const setRec = () => api('/api/record', {resolution:$('recRes').value, mbps:+$('recMbps').value, encoder:$('recEnc').value, split:+$('recSplit').value}).then(pollRec);
 async function toggleRec() {
   if (REC.recording && !await ask('Stop recording?')) return;
   pollRec(await api('/api/record/' + (REC.recording ? 'stop' : 'start'), {}));

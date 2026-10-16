@@ -778,7 +778,7 @@ def open_composer():
 def record_info():
     if request.method == "POST":
         b = request.get_json(silent=True) or {}
-        recorder.configure(b.get("resolution"), b.get("mbps"), b.get("encoder"))
+        recorder.configure(b.get("resolution"), b.get("mbps"), b.get("encoder"), b.get("split"))
         store.set(record_settings=recorder.settings())
     return jsonify(recorder.info())
 
@@ -1600,7 +1600,7 @@ def start_backend():
                 store.set(**{k: {**store.data[k], "encoder": "auto"}})
         store.set(gpu_auto=True)
     rs = store.data.get("record_settings") or {}
-    recorder.configure(rs.get("resolution"), rs.get("mbps"), rs.get("encoder"))
+    recorder.configure(rs.get("resolution"), rs.get("mbps"), rs.get("encoder"), rs.get("split"))
     st = store.data.get("stinger") or {}
     engine.set_stinger(st.get("file"), st.get("cut"), st.get("auto"))
     saved = store.data.get("stream_settings") or {}
