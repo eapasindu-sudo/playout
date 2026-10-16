@@ -65,6 +65,55 @@ def list_capture_devices(ffmpeg=None):
 NATIVE = ("blackmagic", "atem", "decklink", "ultrastudio", "intensity", "elgato", "magewell", "aja")
 
 
+# software "cameras" (vMix / OBS outputs, phone apps...): not shown in the Live input list unless
+# switched on in Settings > Live inputs
+VIRTUAL = re.compile(r"vmix|obs virtual|virtual|droidcam|xsplit|snap camera|nvidia broadcast|imaging edge|"
+                     r"manycam|splitcam|epoccam|ndi webcam|newtek|iriun|camo|streamlabs|wirecast", re.I)
+
+
+def default_shown(name):
+    return not VIRTUAL.search(name or "")
+
+
+class DeviceWatch:
+    """Looks for USB capture devices every few seconds, so a device plugged in shows up by itself."""
+
+    def __init__(self, ffmpeg=None, every=5.0):
+        self.ffmpeg, self.every = ffmpeg, every
+        self.devices = []
+        self.changed = 0.0             # when the list last changed
+        self.on_added = None           # fn(names of video devices plugged in since the last look)
+        self._lock = threading.Lock()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True, name="usb devices").start()
+
+    def scan(self):
+        found = list_capture_devices(self.ffmpeg)
+        added = []
+        with self._lock:
+            if found != self.devices:
+                old = {d["name"] for d in self.devices if d["kind"] == "video"}
+                added = [d["name"] for d in found if d["kind"] == "video" and d["name"] not in old] if self.changed else []
+                self.devices = found
+                self.changed = time.time()
+        if added and self.on_added:
+            self.on_added(added)
+        return found
+
+    def _run(self):
+        while True:
+            try:
+                self.scan()
+            except Exception:
+                pass
+            time.sleep(self.every)
+
+    def get(self):
+        with self._lock:
+            return list(self.devices)
+
+
 def device_modes(width, height, fps, name=""):
     """Capture formats to ask a USB device for, best first. Many cheap USB HDMI grabbers give 1080p only at
     5 fps uncompressed but 25 / 30 / 60 fps as MJPEG, so MJPEG is asked for first; the ATEM Mini (and other

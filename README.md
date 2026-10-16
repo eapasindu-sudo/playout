@@ -367,7 +367,9 @@ the left, slide in or rise up. They work for lower thirds, tickers, clocks, coun
 
 The **Live input** picker (top right) lists the vMix / NDI outputs and the USB capture devices.
 Pick **USB: Blackmagic Design + ...** there and every live card on "Main input" shows the ATEM
-directly. Blackmagic / Elgato / Magewell / AJA devices are opened in the format they send
+directly. Only NDI sources on the network now and real USB devices are listed; software cameras
+(vMix Video, OBS Virtual Camera...) are hidden unless ticked in Settings > Live inputs. A device
+plugged in shows up by itself within about 5 seconds. Blackmagic / Elgato / Magewell / AJA devices are opened in the format they send
 (no conversion asked of the device); set the ATEM to the same frame rate as the output.
 
 ## Output format

@@ -314,7 +314,7 @@
         <span class="dot" id="srcDot"></span>
         <span class="lbl" style="text-align:left">Live input (vMix / USB)</span>
         <select id="mainSrc" onchange="pickSource(this.value)"></select>
-        <button class="sm" title="Search the network and USB devices again" onclick="refreshSources(); refreshDevices()">&#10227;</button>
+        <button class="sm" title="Search the network and USB devices again" onclick="refreshSources(); refreshDevices(true)">&#10227;</button>
       </div>
       <div class="srcrow" title="Program sound on this PC's speakers / headphones">
         <span class="dot" id="aoDot"></span>
@@ -740,7 +740,7 @@
 <dialog id="dSet" style="width:min(760px, 96vw)">
   <header>Settings <span class="hint" id="setVer" style="margin-left:10px; font-weight:400"></span> <button class="sm" onclick="dSet.close()">Close</button></header>
   <div class="body" id="setBody">
-    <div class="setnav"><a href="#" data-s="secOut">Output format</a><a href="#" data-s="secFail">Failover</a><a href="#" data-s="secAudio">Audio</a><a href="#" data-s="secPw">Passwords</a>
+    <div class="setnav"><a href="#" data-s="secOut">Output format</a><a href="#" data-s="secUsb">Live inputs</a><a href="#" data-s="secFail">Failover</a><a href="#" data-s="secAudio">Audio</a><a href="#" data-s="secPw">Passwords</a>
       <a href="#" data-s="secUsers">Users</a><a href="#" data-s="secAlerts">Alerts</a><a href="#" data-s="secBackup">Backup PC</a><a href="#" data-s="secRec">Recording</a><a href="#" data-s="secSdi">SDI out</a>
       <a href="#" data-s="secWatch">Watch folder</a><a href="#" data-s="secUpdate">Updates</a></div>
     <div class="setsec" id="secOut">Output format (program out, NDI, full screen, stream source)</div>
@@ -748,6 +748,12 @@
       <span>Size</span><select id="outRes"><option value="720p">720p (1280x720)</option><option value="1080p">1080p HD (1920x1080)</option><option value="2160p">4K UHD (3840x2160)</option></select>
       <span>Frame rate</span><select id="outFps"><option value="25">25 fps (PAL, Sri Lanka TV)</option><option value="50">50 fps</option><option value="29.97">29.97 fps</option><option value="30">30 fps</option><option value="59.94">59.94 fps</option><option value="60">60 fps</option><option value="23.976">23.976 fps</option><option value="24">24 fps</option></select>
       <span></span><span class="hint" id="outInfo">Set it to what vMix / the ATEM sends, so nothing has to be converted. 4K needs a strong PC (4x the work of 1080p). Playout restarts to change it (about 20 seconds off air).</span>
+    </div>
+
+    <div class="setsec" id="secUsb">Live inputs (USB capture devices)</div>
+    <div class="form">
+      <span>Show</span><div id="usbList" style="display:flex; flex-direction:column; gap:4px"></div>
+      <span></span><span class="hint">Tick the devices that should be in the Live input list (top right) and on live cards: a Blackmagic ATEM in USB mode, a capture card, a camera. Software "cameras" (vMix Video, OBS Virtual Camera...) are not USB inputs and are off unless you tick them. A device plugged in later shows up by itself within a few seconds. Only NDI sources that are on the network now are listed.</span>
     </div>
 
     <div class="setsec" id="secFail">Failover (live input lost)</div>
@@ -1178,7 +1184,7 @@ async function loadInputs(force) {
   $('lvSrc').value = cur.startsWith('dev:') ? 'dev' : cur.startsWith('url:') ? 'url' : cur;
   $('lvUrl').value = cur.startsWith('url:') ? cur.slice(4) : '';
   const [wv, wa] = cur.startsWith('dev:') ? cur.slice(4).split('|') : ['', ''];
-  const vids = inputs.devices.filter(d => d.kind === 'video').map(d => d.name);
+  const vids = inputs.devices.filter(d => d.kind === 'video' && (d.shown !== false || ('dev:' + d.name) === cur.split('|')[0])).map(d => d.name);
   const auds = inputs.devices.filter(d => d.kind === 'audio').map(d => d.name);
   if (wv && !vids.includes(wv)) vids.push(wv);
   if (wa && !auds.includes(wa)) auds.push(wa);
@@ -1319,6 +1325,12 @@ async function loadSources() {
 async function openSrc() { await loadSources(); dSrc.showModal(); }
 async function setSource() { await api('/api/live_source', {name:$('srcSel').value}); dSrc.close(); poll(); }
 
+async function fillUsbList() {
+  await refreshDevices(true);
+  const vids = devList.filter(d => d.kind === 'video');
+  $('usbList').innerHTML = vids.length ? vids.map(d => `<label><input type="checkbox" data-dev="${esc(d.name)}" ${d.shown !== false ? 'checked' : ''}> ${esc(d.name)}</label>`).join('')
+    : '<span class="hint">No USB video device found. Plug in the Blackmagic (USB-C) and wait a few seconds.</span>';
+}
 // program sound: limiter + auto level
 async function setMaster(ch) { try { S.master = await api('/api/master_audio', ch); } catch (e) { say('Could not change the sound setting: ' + e); } showMaster(); }
 function showMaster() {
@@ -1337,7 +1349,7 @@ function guessAudio(video, auds) {
 }
 function devKeys() {
   const auds = devList.filter(d => d.kind === 'audio').map(d => d.name);
-  return devList.filter(d => d.kind === 'video').map(d => { const a = guessAudio(d.name, auds); return 'dev:' + d.name + (a ? '|' + a : ''); });
+  return devList.filter(d => d.kind === 'video' && d.shown !== false).map(d => { const a = guessAudio(d.name, auds); return 'dev:' + d.name + (a ? '|' + a : ''); });
 }
 function fillSources() {
   const sel = $('mainSrc'); if (document.activeElement === sel) return;
@@ -1354,7 +1366,14 @@ function fillSources() {
       `<option value="${esc(k)}" ${k === cur ? 'selected' : ''}>${esc(srcLabel(k))}</option>`).join('') + '</optgroup>' : '');
   shownSource = S.live_source;
 }
-async function refreshDevices() { try { devList = (await api('/api/inputs')).devices || []; } catch (e) {} fillSources(); }
+// USB devices are looked for every 5 s on the PC: a device plugged in shows up here by itself
+let devChanged = null;
+async function refreshDevices(rescan) {
+  let r; try { r = await api('/api/inputs' + (rescan ? '?rescan=1' : '')); } catch (e) { return; }
+  devList = r.devices || [];
+  if (r.changed !== devChanged) { devChanged = r.changed; inputs.loaded = false; }
+  fillSources();
+}
 async function refreshSources() { try { sourceList = await api('/api/sources'); } catch (e) {} fillSources(); }
 async function pickSource(name) { await api('/api/live_source', {name}); await poll(); fillSources(); }
 
@@ -1551,6 +1570,7 @@ async function openSettings(focus) {
   $('sdiDev').innerHTML = sd.device ? `<option selected>${esc(sd.device)}</option>` : '<option value="">(press Find cards)</option>';
   $('sdiSt').textContent = sd.enabled ? sd.status + (sd.error ? ' - ' + sd.error : '') : 'off';
   $('recDir').value = SET.recording?.folder || '';
+  fillUsbList();
   const of = SET.output || {}; $('outRes').value = of.resolution || '1080p'; $('outFps').value = of.fps || '25';
   $('outInfo').textContent = `Running now: ${of.running || '?'}` + (of.restart_needed ? ' (the new format starts after a restart)' : '') + '. Set it to what vMix / the ATEM sends, so nothing has to be converted. 4K needs a strong PC (4x the work of 1080p). Playout restarts to change it (about 20 seconds off air).';
   $('recFree').textContent = `Recordings (REC button and scheduled recordings) are saved here` + (SET.recording?.free_gb != null ? ` - ${SET.recording.free_gb} GB free.` : '.') + ' A big, fast drive is best (1 hour of 1080p 20 Mbps is about 9 GB).';
@@ -1580,13 +1600,14 @@ async function saveSettings() {
     watch: {enabled:$('wfOn').checked, folder:$('wfDir').value.trim(), move:$('wfMove').checked, add_to_playlist:$('wfAdd').checked},
     recording: {folder:$('recDir').value.trim()},
     output: {resolution:$('outRes').value, fps:$('outFps').value},
+    usb_show: Object.fromEntries([...document.querySelectorAll('#usbList input[data-dev]')].map(x => [x.dataset.dev, x.checked])),
   };
   if (body.backup.role === 'backup' && (!body.backup.main_url || !body.backup.key)) { say('A backup PC needs the main PC address and the sync key.'); return; }
   if (body.backup.role === 'main' && !body.backup.key) { say('Set a sync key on the main PC (the same one goes on the backup PC).'); return; }
   if (body.failover.mode === 'clip' && !body.failover.file) { say('Pick the filler clip.'); return; }
   const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   if (!r.ok) { const e = await r.json().catch(() => ({})); say('Settings were not saved: ' + (e.error || (r.status === 403 ? 'wrong password or not an admin' : 'error ' + r.status))); return; }
-  SET = await r.json(); NORM = SET.audio; if ($('pwLock').value !== '********') adminPw = $('pwLock').value;
+  SET = await r.json(); NORM = SET.audio; refreshDevices(); if ($('pwLock').value !== '********') adminPw = $('pwLock').value;
   await setMaster({limiter:$('maLimOn').checked, ceiling:+$('maCeil').value, agc:$('maAgcOn').checked, target:+$('maTarget').value});
   dSet.close(); $('msg').textContent = 'Settings saved';
   if (SET.output?.restart_needed) {
@@ -2305,7 +2326,7 @@ document.addEventListener('keydown', e => {
 })();
 poll(); setInterval(poll, 200);
 pollStream(); setInterval(pollStream, 1000);
-refreshSources(); setInterval(refreshSources, 5000); refreshDevices();
+refreshSources(); setInterval(refreshSources, 5000); refreshDevices(); setInterval(refreshDevices, 5000);
 pollSys(); setInterval(pollSys, 2000);
 pollRec(); setInterval(() => pollRec(), 1000);
 pollAO(); setInterval(() => pollAO(), 5000);

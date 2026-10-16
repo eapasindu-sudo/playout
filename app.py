@@ -23,7 +23,7 @@ import certs  # noqa: F401  (HTTPS certificates from the Windows store)
 import gpu
 from audio_out import AudioOut
 from recorder import Recorder
-from capture import list_capture_devices
+from capture import DeviceWatch, default_shown
 from cg import CGManager, cg_info, cg_kind, cg_preview, list_cg
 from cgedit import PRESET_EXT, list_presets, make_blueprint, read_cgp, update_preset
 from cgfx import render_still
@@ -101,6 +101,17 @@ store = Store(cfg["data_dir"])
 engine = Engine(cfg, cfg["media_dir"], cfg["log_dir"])
 scheduler = Scheduler(engine)
 streamer = Streamer(engine, cfg)
+usb = DeviceWatch(streamer.ffmpeg)        # USB capture devices, looked for every 5 s (plug in = shows up)
+
+
+def _usb_added(names):
+    choice = store.data.get("usb_show") or {}
+    shown = [n for n in names if choice.get(n, default_shown(n))]
+    if shown:
+        engine.message = "USB device plugged in: " + ", ".join(shown) + " - pick it in Live input (top right)"
+
+
+usb.on_added = _usb_added
 cgm = CGManager(cfg["cg_dir"], engine.width, engine.height, engine.fps)
 engine.cg = cgm
 sysmon = SystemMonitor()
@@ -454,6 +465,8 @@ def settings_api():
                 save_output_format(res, fps)
             except OSError as e:
                 return jsonify(error=f"Could not save config.json: {e}"), 400
+        if "usb_show" in b:
+            store.set(usb_show={str(k)[:200]: bool(v) for k, v in (b["usb_show"] or {}).items()})
         if "watch" in b:
             w = b["watch"] or {}
             store.set(watch=watch.configure(w.get("enabled"), w.get("folder"), w.get("move"), w.get("add_to_playlist")))
@@ -1334,7 +1347,11 @@ def system_stats():
 def inputs():
     own = f"({cfg.get('output_name', 'PLAYOUT PGM')})"
     ndi = [n for n in engine.finder.names() if not n.endswith(own)]
-    return jsonify(ndi=ndi, devices=list_capture_devices(streamer.ffmpeg), main=engine.live.source_name)
+    if request.args.get("rescan"):
+        usb.scan()
+    choice = store.data.get("usb_show") or {}
+    devs = [{**d, "shown": choice.get(d["name"], default_shown(d["name"]))} for d in usb.get()]
+    return jsonify(ndi=ndi, devices=devs, main=engine.live.source_name, changed=usb.changed)
 
 
 # ---- CG ----------------------------------------------------------------
@@ -1619,6 +1636,7 @@ def start_backend():
     updater.start_auto()
     watcher.start()
     health.start()
+    usb.start()
     threading.Thread(target=gpu.best, daemon=True, name="gpu check").start()   # find the GPU encoder now
     sd = store.data.get("sdi") or {}
     sdi.configure(sd.get("enabled"), sd.get("device"), sd.get("ffmpeg"))
