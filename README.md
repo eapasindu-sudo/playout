@@ -44,6 +44,16 @@ screen (empty = half way).
 - **Auto Stinger** uses it for every change: Next, playing a playlist item, and clip to clip in
   Automatic mode (it starts early so the cut lands exactly on the end of the clip).
 
+### USB capture picture format
+A USB device (Blackmagic ATEM in USB mode, HDMI capture card) comes in as the device sends it: Playout reads
+the formats the device offers and uses its own one (live card > Picture: Auto). Pick another size / frame
+rate there if needed. "Same for Playout output" sets Playout's output to the device's format (after a restart).
+
+### Graphics card driver
+Settings > Output shows the graphics card and whether its driver is installed. Without one ("Microsoft Basic
+Display Adapter") nothing runs on the GPU; "Install graphics driver" gets it from Windows Update (Windows asks
+to allow it), or "Maker's driver page" opens the NVIDIA / AMD / Intel download page.
+
 ### GPU video decoding
 Clips and video CGs are decoded on the graphics card when the PC has one (D3D11 / NVIDIA / Intel),
 which keeps CPU use down. Set `"hwaccel": "off"` in `config.json` to decode on the CPU. Use a GPU

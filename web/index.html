@@ -554,9 +554,12 @@
       <span>Fixed start</span><span style="display:flex; gap:6px"><input id="lvFixed" type="time" step="1"><button class="sm" onclick="$('lvFixed').value=''">Clear</button></span>
       <span>Live source</span>
       <span style="display:flex; gap:6px"><select id="lvSrc" style="flex:1" onchange="lvSrcChanged()"></select><button class="sm" onclick="loadInputs(true)" title="Search again">&#10227;</button></span>
-      <span class="lvDev">Video device</span><select class="lvDev" id="lvVid" onchange="lvGuessAudio()"></select>
+      <span class="lvDev">Video device</span><select class="lvDev" id="lvVid" onchange="lvGuessAudio(); lvFmtLoad()"></select>
       <span class="lvDev">Audio device</span><select class="lvDev" id="lvAud"></select>
-      <span class="lvDev"></span><span class="lvDev hint">ATEM Mini: video "Blackmagic Design" and its sound device (picked by itself). Set the ATEM to the same frame rate as Playout (ATEM Software Control &gt; Settings &gt; Video standard 1080p25) or the picture judders. Phone Remote &gt; Stream health shows what the device sends.</span>
+      <span class="lvDev">Picture</span>
+      <span class="lvDev" style="display:flex; gap:6px"><select id="lvFmt" style="flex:1" onchange="lvFmtSet()"></select><button class="sm" id="lvMatch" onclick="lvMatch()" title="Make Playout's own output the same size and frame rate">Same for Playout output</button></span>
+      <span class="lvDev"></span><span class="lvDev hint" id="lvFmtInfo"></span>
+      <span class="lvDev"></span><span class="lvDev hint">ATEM Mini: video "Blackmagic Design" and its sound device (picked by itself). The picture comes in as the device sends it (Picture: Auto); press "Same for Playout output" so Playout's output matches it and nothing judders. Phone Remote &gt; Stream health shows what the device sends.</span>
       <span class="lvUrl">Feed address</span><input class="lvUrl" id="lvUrl" placeholder="srt://0.0.0.0:9000  or  rtmp://0.0.0.0:1935/live/key  or  https://youtube.com/watch?v=...">
       <span class="lvUrl"></span><span class="lvUrl hint">SRT / RTMP with 0.0.0.0 = Playout waits for the sender (vMix, OBS, a phone app) to connect to this PC. Also: srt://other-pc:9000, rtsp://camera, .m3u8 (HLS) links, YouTube / Facebook live links.</span>
       <span>ATEM camera</span>
@@ -823,6 +826,8 @@
       <span>Size</span><select id="outRes"><option value="720p">720p (1280x720)</option><option value="1080p">1080p HD (1920x1080)</option><option value="2160p">4K UHD (3840x2160)</option></select>
       <span>Frame rate</span><select id="outFps"><option value="25">25 fps (PAL, Sri Lanka TV)</option><option value="50">50 fps</option><option value="29.97">29.97 fps</option><option value="30">30 fps</option><option value="59.94">59.94 fps</option><option value="60">60 fps</option><option value="23.976">23.976 fps</option><option value="24">24 fps</option></select>
       <span></span><span class="hint" id="outInfo">Set it to what vMix / the ATEM sends, so nothing has to be converted. 4K needs a strong PC (4x the work of 1080p). Playout restarts to change it (about 20 seconds off air).</span>
+      <span>Graphics card</span><span id="gpuDrv" class="hint">checking...</span>
+      <span></span><span style="display:flex; gap:6px"><button class="sm" id="gpuInst" onclick="gpuInstall()">Install graphics driver</button><button class="sm" onclick="gpuPage()">Maker's driver page</button><button class="sm" onclick="gpuShow(true)">Check again</button></span>
     </div>
 
     <div class="setsec" id="secUsb">Live inputs (USB capture devices)</div>
@@ -1274,6 +1279,41 @@ async function loadInputs(force) {
   $('lvAud').innerHTML = '<option value="">(no audio)</option>' + auds.map(n => `<option ${n === wa ? 'selected' : ''}>${esc(n)}</option>`).join('');
   if (!wa) lvGuessAudio();
   lvSrcChanged();
+  lvFmtLoad();
+}
+// a USB device's picture format: Auto = what it sends by itself (detected), or a format it offers
+let lvFmts = null;
+async function lvFmtLoad(fresh) {
+  const name = $('lvVid').value; lvFmts = null;
+  if ($('lvSrc').value !== 'dev' || !name) { $('lvFmt').innerHTML = ''; $('lvFmtInfo').textContent = ''; return; }
+  $('lvFmt').innerHTML = '<option>Reading the device...</option>';
+  let r; try { r = await api('/api/usb/formats?name=' + encodeURIComponent(name) + (fresh ? '&fresh=1' : '')); } catch (e) { r = null; }
+  if (!r || r.error) { $('lvFmt').innerHTML = '<option value="">Auto: as the device sends it</option>'; return; }
+  if ($('lvVid').value !== name) return;
+  lvFmts = r;
+  const same = f => r.chosen && f.w === r.chosen.w && f.h === r.chosen.h && f.fps === r.chosen.fps && f.codec === r.chosen.codec && (f.pix || '') === (r.chosen.pix || '');
+  $('lvFmt').innerHTML = `<option value="">Auto: as the device sends it${r.native ? ' (' + esc(r.native.label) + ')' : ''}</option>` +
+    r.formats.map((f, i) => `<option value="${i}" ${same(f) ? 'selected' : ''}>${esc(f.label)}${f.codec === 'raw' && f.pix ? ' ' + esc(f.pix) : ''}</option>`).join('');
+  const o = r.output || {};
+  $('lvFmtInfo').textContent = (r.mode ? 'Coming in now: ' + r.mode + '. ' : '') + `Playout output: ${o.resolution} ${o.fps} fps` +
+    (o.restart_needed ? ' (after a restart)' : '') + (r.output_same ? ' - the same, good.' : r.can_match ? ' - different: press "Same for Playout output".' : '.');
+  $('lvMatch').disabled = !r.can_match || r.output_same;
+}
+async function lvFmtSet() {
+  const name = $('lvVid').value, i = $('lvFmt').value;
+  const r = await api('/api/usb/format', {name, format: i === '' ? null : lvFmts.formats[+i]}).catch(e => ({error: String(e)}));
+  if (r.error) say('Could not change the picture format: ' + r.error);
+  setTimeout(lvFmtLoad, 1500);
+}
+async function lvMatch() {
+  const r = await api('/api/usb/format', {name: $('lvVid').value, match_output: true}).catch(e => ({error: String(e)}));
+  if (r.error) { say(r.error); return; }
+  const o = r.output || {};
+  if (o.restart_needed && o.can_restart && await ask(`Playout output is now set to ${o.resolution} ${o.fps} fps. Restart Playout now to use it? (about 20 seconds off air)`)) {
+    await api('/api/restart', {}); say('Restarting Playout...'); return;
+  }
+  say(`Playout output set to ${o.resolution} ${o.fps} fps` + (o.restart_needed ? ' (starts after a restart)' : ''));
+  lvFmtLoad();
 }
 // the sound of the same device (ATEM Mini: video "Blackmagic Design", sound "... (Blackmagic Design)")
 function lvGuessAudio() {
@@ -1282,6 +1322,7 @@ function lvGuessAudio() {
 }
 function lvSrcChanged() {
   document.querySelectorAll('.lvDev').forEach(e => e.style.display = $('lvSrc').value === 'dev' ? '' : 'none');
+  if ($('lvSrc').value === 'dev' && !lvFmts) lvFmtLoad();
   document.querySelectorAll('.lvUrl').forEach(e => e.style.display = $('lvSrc').value === 'url' ? '' : 'none');
 }
 function lvSource() {
@@ -1651,7 +1692,7 @@ async function openSettings(focus) {
   $('sdiDev').innerHTML = sd.device ? `<option selected>${esc(sd.device)}</option>` : '<option value="">(press Find cards)</option>';
   $('sdiSt').textContent = sd.enabled ? sd.status + (sd.error ? ' - ' + sd.error : '') : 'off';
   $('recDir').value = SET.recording?.folder || '';
-  fillUsbList();
+  fillUsbList(); gpuShow();
   const of = SET.output || {}; $('outRes').value = of.resolution || '1080p'; $('outFps').value = of.fps || '25';
   $('outInfo').textContent = `Running now: ${of.running || '?'}` + (of.restart_needed ? ' (the new format starts after a restart)' : '') + '. Set it to what vMix / the ATEM sends, so nothing has to be converted. 4K needs a strong PC (4x the work of 1080p). Playout restarts to change it (about 20 seconds off air).';
   $('recFree').textContent = `Recordings (REC button and scheduled recordings) are saved here` + (SET.recording?.free_gb != null ? ` - ${SET.recording.free_gb} GB free.` : '.') + ' A big, fast drive is best (1 hour of 1080p 20 Mbps is about 9 GB).';
@@ -1662,6 +1703,23 @@ async function openSettings(focus) {
   dSet.showModal();
   if (focus === 'update') $('secUpdate').scrollIntoView();
 }
+// graphics card driver: without it Windows runs the card as "Microsoft Basic Display Adapter" (no GPU work at all)
+async function gpuShow(fresh) {
+  const r = await api('/api/gpu_driver' + (fresh ? '?check=1' : '')).catch(() => null);
+  if (!r) return;
+  const cards = (r.cards || []).map(c => c.name + (c.ok ? (c.driver ? ' (driver ' + c.driver + ')' : '') : ' - NO DRIVER')).join(', ');
+  const inst = {running: 'Installing from Windows Update...', done: 'Driver installed.', none: '', failed: 'Install failed.'}[r.install] || '';
+  $('gpuDrv').textContent = (cards || 'No graphics card found (or not Windows).') + (r.missing ? ' Playout cannot use the GPU until a driver is installed.' : '') +
+    (inst ? ' ' + inst : '') + (r.install_log && r.install !== 'running' ? ' ' + r.install_log.split('\n').slice(-2).join(' ') : '');
+  $('gpuDrv').style.color = r.missing ? 'var(--orange)' : '';
+  $('gpuInst').disabled = r.install === 'running';
+  if (r.install === 'running') setTimeout(gpuShow, 3000);
+}
+async function gpuInstall() {
+  if (!await ask('Install the graphics card driver from Windows Update? Windows asks to allow it. The screen may go black for a moment while it installs, so do this when not on air.')) return;
+  await api('/api/gpu_driver/install', {}); gpuShow();
+}
+async function gpuPage() { const r = await api('/api/gpu_driver/page', {}); if (r.error) say(r.error); }
 async function recBrowse() {
   const r = await api('/api/pick_folder', {start: $('recDir').value.trim()}).catch(e => ({error: String(e)}));
   if (r.error) say(r.error); else if (r.folder) $('recDir').value = r.folder;
