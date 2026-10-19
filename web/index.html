@@ -411,6 +411,7 @@
         <div class="cgbar">
           <button class="lockable" onclick="addManualCG()">+ Add CG</button>
           <button class="lockable" onclick="openTextCG()" title="Ticker, name / title lower third, clock, countdown, text">+ Text CG</button>
+          <button class="lockable" onclick="openWebCG()" title="Paste a scoreboard / overlay link (cricket score, any browser-source overlay)">+ Scoreboard link</button>
           <span style="flex:1"></span>
           <button class="red" onclick="api('/api/cg/all_out', {}).then(pollCG)" title="Take every CG off air">ALL OUT</button>
         </div>
@@ -474,6 +475,28 @@
     </div>
   </div>
   <div class="foot"><button class="blue" onclick="cmLookSave()">Save</button></div>
+</dialog>
+
+<!-- Web overlay: a scoreboard / overlay link keyed over the program -->
+<dialog id="dWeb" style="width:min(760px, 96vw)">
+  <header>Scoreboard / overlay link <button class="sm" onclick="dWeb.close()">Close</button></header>
+  <div class="body">
+    <img class="tcg-prev" id="wbPrev" alt="preview" style="max-width:100%; min-height:120px; background:#000">
+    <div class="hint" id="wbMsg" style="min-height:1.3em"></div>
+    <div class="form" style="grid-template-columns: 110px 1fr; margin-top:8px">
+      <span>Name</span><input id="wbName" placeholder="Cricket score">
+      <span>Link</span><span style="display:flex; gap:6px"><input id="wbUrl" style="flex:1" placeholder="https://... (the overlay / browser source link of the scoreboard)"><button class="sm" onclick="wbPrev()">Preview</button></span>
+      <span>Page size</span><span style="display:flex; gap:6px; align-items:center">W <input class="num" id="wbPW" type="number" style="width:80px" placeholder="1920"> H <input class="num" id="wbPH" type="number" style="width:80px" placeholder="1080">
+        <span class="hint">empty = the output size (what the link is made for, usually 1920 x 1080)</span></span>
+      <span>Position</span><span style="display:flex; gap:6px; align-items:center">X <input class="num" id="wbX" type="number" style="width:80px"> Y <input class="num" id="wbY" type="number" style="width:80px">
+        Size <input class="num" id="wbZ" type="number" style="width:70px" min="10" max="400"> %</span>
+      <span>Fade</span><span style="display:flex; gap:6px; align-items:center"><input class="num" id="wbFade" type="number" style="width:70px" min="0" max="100"> frames</span>
+      <span>Show</span><label><input type="checkbox" id="wbLive"> Only on live (hide during commercials)</label>
+      <span></span><span class="hint">The page's own background must be see-through (overlay / OBS / vMix browser-source links are). The score keeps updating by itself while it is on air.
+        It goes out on everything Playout sends: NDI ENDORA PLAYOUT FINAL, SDI / HDMI (into the ATEM), streams and recordings.</span>
+    </div>
+  </div>
+  <div class="foot"><button class="red" id="wbDel" onclick="wbDelete()">Delete</button><span style="flex:1"></span><button class="blue" onclick="wbSave()">Save</button></div>
 </dialog>
 
 <!-- Squeeze feed position -->
@@ -767,7 +790,7 @@
   <div class="body">
     <div class="setsec">Playout's NDI outputs</div>
     <div class="form">
-      <span>Program output</span>
+      <span>Final output<br><span class="hint">program with CGs, overlays</span></span>
       <span style="display:flex; gap:6px; align-items:center; flex-wrap:wrap"><label><input type="checkbox" id="noOn" onchange="ndiOut()"> On</label>
         <input id="noName" style="flex:1; min-width:180px" maxlength="80" title="The name vMix / OBS / monitors see"><button class="sm" onclick="ndiOut()">Rename</button></span>
       <span>Clean feed</span><label><input type="checkbox" id="noClean" onchange="ndiOut()"> "<span class="noN"></span> - Clean": the program without CGs, squeeze and stingers, with sound (archive, second channel)</label>
@@ -879,7 +902,7 @@
       <span>FFmpeg</span><span style="display:flex; gap:6px"><input id="sdiFf" placeholder="C:\ffmpeg-decklink\bin\ffmpeg.exe" style="flex:1"><button class="sm" onclick="sdiFind()">Find cards</button></span>
       <span>Output</span><select id="sdiDev"></select>
       <span>Status</span><span id="sdiSt" class="hint"></span>
-      <span></span><span class="hint">Needs Blackmagic Desktop Video and an ffmpeg.exe built with DeckLink support (the FFmpeg inside Playout does not have it). Set the card's video format in Blackmagic Desktop Video Setup to match Playout's format (top of the screen). vMix can also send the PLAYOUT PGM NDI to its own DeckLink output.</span>
+      <span></span><span class="hint">Needs Blackmagic Desktop Video and an ffmpeg.exe built with DeckLink support (the FFmpeg inside Playout does not have it). Set the card's video format in Blackmagic Desktop Video Setup to match Playout's format (top of the screen). vMix can also send the ENDORA PLAYOUT FINAL NDI to its own DeckLink output.</span>
     </div>
 
     <div class="setsec" id="secWatch">Watch folder</div>
@@ -2045,7 +2068,7 @@ async function pollCG() {
     el.className = 'cgrow ' + st;
     const live = st === 'on' || st === 'in';
     el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
-      (c.live_only ? ' - live only' : '') + (c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
+      (c.live_only ? ' - live only' : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
     el.querySelector('.in').classList.toggle('red', live);
   }
   const card = r.card || [];
@@ -2053,10 +2076,12 @@ async function pollCG() {
 }
 function renderManual() {
   $('cgList').innerHTML = cgManual.map(c => `<div class="cgrow" id="mc_${c.id}">
-    ${c.kind === 'text' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#ffb36b">${{lower3:'NAME', ticker:'TICKER', clock:'CLOCK', countdown:'COUNT', text:'TEXT'}[c.style] || 'TEXT'}</div>`
+    ${c.kind === 'web' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#6bc1ff">WEB</div>`
+      : c.kind === 'text' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#ffb36b">${{lower3:'NAME', ticker:'TICKER', clock:'CLOCK', countdown:'COUNT', text:'TEXT'}[c.style] || 'TEXT'}</div>`
       : `<img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}">`}
-    <div style="min-width:0"><div class="nm">${esc(c.name || c.file)}</div><div class="st" data-f="st"></div></div>
+    <div style="min-width:0"><div class="nm">${esc(c.name || c.file || 'Scoreboard')}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
+      ${c.kind === 'web' ? `<button class="sm" onclick="cgTake('${c.id}', 'reload')" title="Load the page again">Reload</button>` : ''}
       <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button><button class="sm lockable" onclick="delManualCG('${c.id}')">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No manual CGs. Press <b>+ Add CG</b>. They go on air with IN, even while a commercial plays.</div>';
 }
@@ -2219,8 +2244,44 @@ function addManualCG(file) { openCG('manual', file ? {file} : null, cfg => { cgM
 function editManualCG(id) {
   const i = cgManual.findIndex(c => c.id === id); if (i < 0) return;
   if (cgManual[i].kind === 'text') return openTextCG(cgManual[i]);
+  if (cgManual[i].kind === 'web') return openWebCG(cgManual[i]);
   openCG('manual', cgManual[i], cfg => { cgManual[i] = {...cfg, id}; saveManual(); }, () => { cgTake(id, 'out'); cgManual.splice(i, 1); saveManual(); });
 }
+
+// Web overlay (scoreboard link)
+let wbEdit = null;
+const webHost = u => { try { return new URL(u).host; } catch (e) { return u || ''; } };
+function openWebCG(c) {
+  wbEdit = c || null; c = c || {};
+  $('wbName').value = c.name || ''; $('wbUrl').value = c.url || '';
+  $('wbPW').value = c.page_w || ''; $('wbPH').value = c.page_h || '';
+  $('wbX').value = c.x || 0; $('wbY').value = c.y || 0; $('wbZ').value = c.zoom || 100;
+  $('wbFade').value = c.fade ?? 8; $('wbLive').checked = !!c.live_only;
+  $('wbDel').style.display = c.id ? '' : 'none'; $('wbMsg').textContent = ''; $('wbPrev').removeAttribute('src');
+  dWeb.showModal();
+  if (c.url) wbPrev();
+}
+const wbCfg = () => ({...(wbEdit || {}), kind:'web', name:$('wbName').value.trim() || webHost($('wbUrl').value.trim()), url:$('wbUrl').value.trim(),
+  page_w:+$('wbPW').value || 0, page_h:+$('wbPH').value || 0, x:+$('wbX').value || 0, y:+$('wbY').value || 0, zoom:+$('wbZ').value || 100,
+  fade:Math.max(0, +$('wbFade').value || 0), live_only:$('wbLive').checked});
+async function wbPrev() {
+  const c = wbCfg();
+  if (!/^https?:\/\//i.test(c.url)) { $('wbMsg').textContent = 'Paste the overlay link (it starts with http:// or https://)'; return; }
+  $('wbMsg').textContent = 'Opening the page...';
+  const r = await fetch('/api/webcg/snapshot', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...c, w:960})});
+  if (!r.ok) { $('wbMsg').textContent = (await r.json().catch(() => ({}))).error || 'Preview failed'; return; }
+  const b = await r.blob(); const old = $('wbPrev').src; $('wbPrev').src = URL.createObjectURL(b); if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+  const err = r.headers.get('X-Error');
+  $('wbMsg').textContent = err ? 'Problem: ' + err : 'Over the program as it is now. Nothing shows? The page may need a moment, or its background is not see-through.';
+}
+function wbSave() {
+  const c = wbCfg();
+  if (!/^https?:\/\//i.test(c.url)) { $('wbMsg').textContent = 'Paste the overlay link (it starts with http:// or https://)'; return; }
+  const i = wbEdit && wbEdit.id ? cgManual.findIndex(x => x.id === wbEdit.id) : -1;
+  if (i >= 0) cgManual[i] = c; else cgManual.push(c);
+  saveManual(); dWeb.close();
+}
+async function wbDelete() { if (wbEdit && wbEdit.id) { dWeb.close(); await delManualCG(wbEdit.id); } }
 
 // CG setup (General / Colour Key / Position) runs in an iframe shared with CG Composer
 let cgCtx = null, cgFrameReady = false, cgQueued = null;

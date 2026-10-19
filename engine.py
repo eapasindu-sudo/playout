@@ -160,7 +160,7 @@ class Engine:
         self.finder = SourceFinder()
         self.live = MainInput(self.finder, self.width, self.height, self.fps)
         self.master = MasterAudio()          # program sound: auto level + limiter
-        self.output_name = cfg.get("output_name", "PLAYOUT PGM")
+        self.output_name = cfg.get("output_name", "ENDORA PLAYOUT FINAL")
         self.output = NDIOutput(self.output_name, self.width, self.height, self.fps)   # None = NDI output off
         self.extra = {}              # "clean" / "preview": ExtraOutput (NDI Sources panel)
         self.ndi_key = {"source": "", "on": False}   # an NDI source with alpha keyed over the program

@@ -10,6 +10,8 @@ A CG layer config (dict):
     fade                fade in/out length in frames
     delay, duration     live-card CGs: seconds after the card starts / seconds on screen (0 = whole card)
     live_only           manual CGs: hide while a commercial is on air, show again on live
+
+A web overlay (kind "web": a scoreboard or other overlay link) is drawn by webcg.WebRenderer.
 """
 import os
 import threading
@@ -250,6 +252,64 @@ class CGLayer:
         self._cache = []
 
 
+class WebLayer(CGLayer):
+    """A web page overlay (cricket scoreboard link...). The page stays loaded while the CG is off air,
+    so IN is instant and the score is already current; pictures are only taken while it is on."""
+
+    def __init__(self, cfg, fps, width, height):
+        from webcg import WebRenderer
+        self.cfg = dict(cfg)
+        self.fps = float(fps)
+        self.path, self.kind = "", "web"
+        self.fade = max(0, int(cfg.get("fade", 8)))
+        self.delay_frames = int(float(cfg.get("delay") or 0) * self.fps)
+        dur = float(cfg.get("duration") or 0)
+        self.duration_frames = int(dur * self.fps) if dur > 0 else None
+        self.state = "wait" if self.delay_frames else "in"
+        self.level, self.ticks, self.on_ticks = 0, 0, 0
+        self.want_audio, self.audio = False, None
+        self._image = self._player = self._last = self._fx = self._replay = None
+        self._cache, self._cache_bytes, self._cache_ok = [], 0, False
+        url = str(cfg.get("url") or "").strip()
+        self.r = None
+        if not url.lower().startswith(("http://", "https://", "file:")):
+            self._error = "Paste the overlay link (it starts with http:// or https://)"
+            self.state = "off"
+            return
+        self._error = ""
+        self.r = WebRenderer(url, int(cfg.get("page_w") or 0) or width, int(cfg.get("page_h") or 0) or height,
+                             cfg.get("zoom") or 100, cfg.get("rate") or 10)
+
+    @property
+    def error(self):
+        return self._error or (self.r.error if self.r else "")
+
+    @error.setter
+    def error(self, v):
+        self._error = v
+
+    @property
+    def dead(self):
+        return self.r is None
+
+    def tick(self, n_samples=0):
+        out = super().tick(n_samples)
+        if self.r is not None:
+            self.r.active = self.state != "off"
+        return out
+
+    def _frame(self, n):
+        return self.r.frame if self.r else None
+
+    def reload(self):
+        if self.r:
+            self.r.reload()
+
+    def close(self):
+        if self.r:
+            self.r.close()
+
+
 def Fraction_from(fps):
     from fractions import Fraction
     return Fraction(fps).limit_denominator(1001)
@@ -275,6 +335,8 @@ class CGManager:
         self.on_change = None
 
     def _layer(self, cfg):
+        if cfg.get("kind") == "web":
+            return WebLayer(cfg, self.fps, self.width, self.height)
         if cfg.get("kind") == "text":
             return TextLayer(cfg, self.width, self.height, self.fps)
         return CGLayer(cfg, self.folder, self.fps)
@@ -296,6 +358,9 @@ class CGManager:
                     del self._manual_layers[cid]
                 elif isinstance(layer, TextLayer) and cfg.get("kind") == "text":
                     layer.update(cfg)      # new ticker / name text goes on air at once
+                elif isinstance(layer, WebLayer) and _changed(layer.cfg, cfg) and not layer.visible:
+                    layer.close()                  # new link / size: a fresh page, loaded off air
+                    self._manual_layers[cid] = self._off_layer(cfg)
                 elif _changed(layer.cfg, cfg) and layer.visible:
                     layer.close()
                     new = self._layer({**cfg, "fade": 0})
@@ -304,8 +369,24 @@ class CGManager:
                     self._manual_layers[cid] = new
                 else:
                     layer.cfg.update({k: cfg.get(k) for k in ("live_only", "name")})
+            for c in clean:                       # web overlays load their page now, ready for IN
+                if c.get("kind") == "web" and c["id"] not in self._manual_layers:
+                    self._manual_layers[c["id"]] = self._off_layer(c)
         if self.on_change:
             self.on_change(self.manual)
+
+    def _off_layer(self, cfg):
+        layer = self._layer(cfg)
+        layer.state = "off"
+        return layer
+
+    def reload(self, cid):
+        with self._lock:
+            layer = self._manual_layers.get(cid)
+            if isinstance(layer, WebLayer):
+                layer.reload()
+                return True
+        return False
 
     def take_in(self, cid):
         with self._lock:
@@ -313,7 +394,7 @@ class CGManager:
             if cfg is None:
                 return False
             layer = self._manual_layers.get(cid)
-            if layer and layer.visible:
+            if layer and (layer.visible or isinstance(layer, WebLayer) and not layer.dead):
                 layer.take_in()
                 return True
             if layer:
@@ -557,13 +638,14 @@ class CGManager:
     def status(self):
         with self._lock:
             on = {cid: l.state for cid, l in self._manual_layers.items() if l.visible or l.state == "wait"}
+            errors = {cid: l.error for cid, l in self._manual_layers.items() if isinstance(l, WebLayer) and l.error}
             card = [{"file": l.cfg.get("file") or l.cfg.get("name"), "state": l.state} for l in self._card_layers]
-            return {"manual_on": on, "card": card, "card_id": self._card_id, "squeeze": self.squeeze_state}
+            return {"manual_on": on, "manual_errors": errors, "card": card, "card_id": self._card_id, "squeeze": self.squeeze_state}
 
 
 def _changed(a, b):
     return any(a.get(k) != b.get(k) for k in FX_KEYS)
 
 
-FX_KEYS = ("file", "x", "y", "zoom", "zoom_x", "zoom_y", "rotate", "crop", "loop", "key", "key_color",
+FX_KEYS = ("file", "url", "page_w", "page_h", "rate", "x", "y", "zoom", "zoom_x", "zoom_y", "rotate", "crop", "loop", "key", "key_color",
            "key_similarity", "key_blend", "key_spill", "luma_threshold", "luma_softness")
