@@ -97,6 +97,7 @@ class WebRenderer:
         self.active = True               # take pictures (off while the CG is off air: the page stays loaded)
         self._reload = False
         self._pending = None             # latest picture from the browser, not decoded yet
+        self._unacked = None             # screencast picture not acknowledged yet (the browser waits for it)
         self._straight = False           # _pending is a screenshot (straight alpha), not a screencast picture
         self._wait, self._frames_seen = 1.5, 0
         self._running = True
@@ -192,9 +193,17 @@ class WebRenderer:
         self.loaded = True
 
     def _got_frame(self, ws, p):
-        """The browser sent a new picture (it only does when the page changed): keep the latest."""
+        """The browser sent a new picture (it only does when the page changed): keep the latest. The browser
+        sends the next one only after this one is acknowledged, so it is acknowledged when it is used: while
+        the CG is off air the browser stops making pictures (each one is a full-size PNG: a moving
+        scoreboard page would otherwise keep the CPU busy all the time)."""
         self._pending, self._straight = p["data"], False
-        self._send(ws, "Page.screencastFrameAck", {"sessionId": p["sessionId"]})
+        self._unacked = p["sessionId"]
+
+    def _ack(self, ws):
+        sid, self._unacked = self._unacked, None
+        if sid is not None:
+            self._send(ws, "Page.screencastFrameAck", {"sessionId": sid})
 
     def _send(self, ws, method, params):
         self._id += 1
@@ -232,7 +241,10 @@ class WebRenderer:
                 self.error = ""
                 self._pending = None
                 # the browser sends a picture only when the page changes (a still score costs nothing)
-                self._call(ws, "Page.startScreencast", {"format": "png", "everyNthFrame": 1})
+                self._unacked = None
+                # the page draws at up to 60 pictures a second; take only about as many as are used
+                nth = max(1, int(60 * self.interval))
+                self._call(ws, "Page.startScreencast", {"format": "png", "everyNthFrame": nth})
                 ws.settimeout(self.interval)
                 last = got = time.monotonic()
                 while self._running:
@@ -258,6 +270,7 @@ class WebRenderer:
                             last = 0.0
                     if self.active and self._pending is not None and now - last >= self.interval:
                         data, self._pending, last = self._pending, None, now
+                        self._ack(ws)                      # ready for the next picture
                         img, off = self._decode(data, premultiplied=not self._straight)
                         self.frame = (img, off) if img is not None else None
                         self.frames += 1
