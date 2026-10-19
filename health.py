@@ -19,6 +19,7 @@ class Health:
     def __init__(self, engine, streamer, recorder, sysmon, alerts=None, viewers=None):
         self.engine, self.streamer, self.recorder, self.sysmon = engine, streamer, recorder, sysmon
         self.alerts = alerts
+        self.atem = None                # AtemLink (ATEM & Cameras)
         self.viewers = viewers          # fn() -> {"YouTube": 123, "Facebook": 45}
         self.out_fps = None
         self._k = None
@@ -136,6 +137,39 @@ class Health:
             if inp.error:
                 text += f" - {inp.error[:120]}"
             add(name, lvl, text)
+        for i in e.ndi_inputs() if hasattr(e, "ndi_inputs") else []:
+            name = f"NDI in: {i['source']}"
+            if not i["connected"]:
+                add(name, "warn", f"{i['use']}: not connected (is the source on and on this network?)")
+                continue
+            f, got = i["format"], i["in_fps"]
+            text, lvl = f"{i['use']}: " + (f"{f['width']}x{f['height']}" if f.get("width") else "connected"), "ok"
+            if got is not None:
+                text += f", {got:g} fps received"
+                if got < 1:
+                    lvl, text = "bad", text + " - no pictures coming in"
+                elif f.get("fps") and abs(got - f["fps"]) > max(1.5, f["fps"] * 0.1):
+                    lvl, text = "warn", text + f" of {f['fps']:g} (network too slow?)"
+            if f.get("fps") and not any(abs(f["fps"] - fps * k) < 0.1 for k in (0.5, 1, 2)):
+                lvl = "warn" if lvl == "ok" else lvl
+                text += f"; the source runs at {f['fps']:g} fps on a {fps:g} fps output: set it to {fps:g} fps"
+            if i.get("dropped"):
+                text += f", {i['dropped']} dropped"
+            add(name, lvl, text)
+        if getattr(e, "output", True) is None:
+            add("NDI output", "warn", "Program NDI output is OFF (NDI panel)")
+        at = getattr(self, "atem", None)
+        if at is not None and (at.auto.get("enabled") or at.linked):
+            a = at.atem
+            if not at.running:
+                add("ATEM", "bad" if at.auto.get("enabled") else "warn", "ATEM Switcher not running: Playout cannot switch the ATEM")
+            elif not at.linked:
+                add("ATEM", "warn", "connecting to the ATEM Switcher...")
+            elif not a.get("connected"):
+                add("ATEM", "bad" if at.auto.get("enabled") else "warn", f"ATEM not connected{' (' + a['ip'] + ')' if a.get('ip') else ''}")
+            else:
+                add("ATEM", "warn" if at.error else "ok", f"{a.get('model') or 'ATEM'} at {a.get('ip')}, on air: {at.label(a.get('program'))}"
+                    + (f" - {at.error}" if at.error else ""))
         r = self.recorder.info()
         if r["recording"]:
             lvl = "warn" if r.get("dropped") else "ok"

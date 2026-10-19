@@ -43,6 +43,7 @@ from loudness import Loudness
 from updater import Updater
 from version import VERSION
 from alerts import Alerts, Watcher
+from atem_link import AtemLink
 from backup import Backup
 from booking import Bookings, invoice_pdf
 from sdi import SdiOutput, list_devices as sdi_devices
@@ -98,7 +99,11 @@ def save_output_format(res, fps):
     return raw
 media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
 store = Store(cfg["data_dir"])
+if (store.data.get("ndi") or {}).get("name"):
+    cfg["output_name"] = store.data["ndi"]["name"]     # renamed in the NDI Sources panel
 engine = Engine(cfg, cfg["media_dir"], cfg["log_dir"])
+atem = AtemLink(engine.asrun, cfg.get("atem_switcher") or None)
+engine.listeners.append(atem.on_air)
 scheduler = Scheduler(engine)
 streamer = Streamer(engine, cfg)
 usb = DeviceWatch(streamer.ffmpeg)        # USB capture devices, looked for every 5 s (plug in = shows up)
@@ -134,6 +139,7 @@ watch = WatchFolder(engine, cfg["media_dir"], loudness)
 backup = Backup(engine, cgm, streamer, cfg["media_dir"], cfg["cg_dir"], alerts)
 comments = Comments(cgm, lambda: store.data.get("comments") or {}, lambda c: store.set(comments=c))
 health = Health(engine, streamer, recorder, sysmon, alerts, lambda: comments.viewers)
+health.atem = atem
 planner.active = lambda: backup.role != "backup"     # a backup PC takes its playlist from the main PC
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 RUN_FLAG = os.path.join(cfg["data_dir"], "running.flag")   # left behind = last run did not close normally
@@ -182,9 +188,10 @@ def sec():
 
 
 OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png")
-LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen", "/api/preview.jpg")   # + CG Composer   # full screen output window
+LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen", "/api/preview.jpg",
+              "/atem", "/api/atem", "/api/atem/open")   # + the ATEM & Cameras window   # + CG Composer   # full screen output window
 ADMIN_ONLY = ("/api/restart", "/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
-              "/api/sdi", "/api/alerts", "/api/backup")
+              "/api/sdi", "/api/alerts", "/api/backup", "/api/ndi/output", "/api/atem/settings")
 
 
 def users():
@@ -851,10 +858,107 @@ def stinger_browse():
 
 
 # ---- live input --------------------------------------------------------
+def own_output(name):
+    """Playout's own NDI outputs (program, clean, preview): never offered as an input."""
+    o = engine.output_name
+    return any(name.endswith(f"({o}{x})") for x in ("", " - Clean", " - Preview"))
+
+
 @app.get("/api/sources")
 def sources():
-    own = f"({cfg.get('output_name', 'PLAYOUT PGM')})"
-    return jsonify([n for n in engine.finder.names() if not n.endswith(own)])   # never our own output
+    return jsonify([n for n in engine.finder.names() if not own_output(n)])   # never our own output
+
+
+# ---- NDI Sources panel ---------------------------------------------------
+@app.get("/api/ndi")
+def ndi_info():
+    return jsonify(sources=[d for d in engine.finder.details() if not own_output(d["name"])],
+                   outputs=engine.ndi_outputs(), inputs=engine.ndi_inputs(), key=engine.key_info(),
+                   audio_pairs=engine.audio_pairs)
+
+
+@app.post("/api/ndi/output")
+def ndi_output():
+    b = request.get_json(silent=True) or {}
+    try:
+        out = engine.set_ndi_outputs(b.get("enabled"), b.get("name"), b.get("clean"), b.get("preview"))
+    except Exception as e:
+        return jsonify(error=f"NDI output: {e}"), 400
+    store.set(ndi={"enabled": out["enabled"], "name": out["name"], "clean": bool(out["clean"]),
+                   "preview": bool(out["preview"])})
+    return jsonify(out)
+
+
+@app.post("/api/ndi/key")
+def ndi_key():
+    b = request.get_json(silent=True) or {}
+    k = engine.set_ndi_key(b.get("source"), b.get("on"))
+    store.set(ndi_key={"source": k["source"], "on": False})     # after a restart the key starts off air
+    return jsonify(k)
+
+
+@app.post("/api/ndi/audio")
+def ndi_audio():
+    b = request.get_json(silent=True) or {}
+    try:
+        pairs = engine.set_audio_pair(str(b.get("source") or ""), b.get("pair"))
+    except (TypeError, ValueError):
+        return jsonify(error="bad channel pair"), 400
+    store.set(ndi_audio_pairs=pairs)
+    return jsonify(pairs)
+
+
+# ---- ATEM & Sony cameras (the ATEM Switcher app) ------------------------------
+@app.get("/atem")
+def atem_page():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "atem.html")
+
+
+_lan_cache = [0.0, []]
+
+
+@app.get("/api/atem")
+def atem_info():
+    st = atem.info()
+    if time.time() - _lan_cache[0] > 30:
+        _lan_cache[:] = [time.time(), lan_addresses()]
+    st["phone_urls"] = [f"http://{ip}:{atem.port}" for ip in _lan_cache[1]]
+    return jsonify(st)
+
+
+@app.post("/api/atem/open")
+def atem_open():
+    """Functions > ATEM & Cameras: start the ATEM Switcher and open its window (like CG Composer)."""
+    ok, err = atem.launch()
+    if not ok:
+        return jsonify(ok=False, error=err)
+    if not is_local() or (request.get_json(silent=True) or {}).get("browser"):
+        return jsonify(ok=True, window=False)
+    import subprocess
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--atem"]
+    else:
+        cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop.py"), "--atem"]
+    try:
+        subprocess.Popen(cmd, close_fds=True)
+    except Exception as e:
+        return jsonify(ok=True, window=False, error=str(e))
+    return jsonify(ok=True, window=True)
+
+
+@app.post("/api/atem/cmd")
+def atem_cmd():
+    b = request.get_json(silent=True) or {}
+    ok, err = atem.command(b.get("cmd"), b.get("input"))
+    return jsonify(ok=ok, error=err), (200 if ok else 409)
+
+
+@app.post("/api/atem/settings")
+def atem_settings():
+    b = request.get_json(silent=True) or {}
+    st = atem.configure(b.get("auto"), b.get("start_with_playout"))
+    store.set(atem=st)
+    return jsonify(st)
 
 
 @app.post("/api/master_audio")
@@ -1317,6 +1421,14 @@ def trigger(action):
     return "OK"
 
 
+@app.get("/trigger/atem/<any('cut', 'auto'):cmd>")
+@app.get("/trigger/atem/<any('program', 'preview'):cmd>/<int:inp>")
+def trigger_atem(cmd, inp=None):
+    """Stream Deck / Companion / vMix scripts: /trigger/atem/cut, /trigger/atem/program/2 ..."""
+    ok, err = atem.command(cmd, inp)
+    return ("OK", 200) if ok else (err, 409)
+
+
 @app.get("/trigger/item/<path:name>")
 def trigger_item(name):
     for it in engine.playlist:
@@ -1345,8 +1457,7 @@ def system_stats():
 # ---- live card sources -------------------------------------------------
 @app.get("/api/inputs")
 def inputs():
-    own = f"({cfg.get('output_name', 'PLAYOUT PGM')})"
-    ndi = [n for n in engine.finder.names() if not n.endswith(own)]
+    ndi = [n for n in engine.finder.names() if not own_output(n)]
     if request.args.get("rescan"):
         usb.scan()
     choice = store.data.get("usb_show") or {}
@@ -1621,6 +1732,18 @@ def start_backend():
     engine.set_playlist(store.data.get("playlist", []))
     engine.on_change = lambda items: store.set(playlist=items)
     engine.set_live_source(cfg.get("live_source") or store.data.get("live_source"))
+    nd = store.data.get("ndi") or {}
+    try:
+        engine.set_ndi_outputs(nd.get("enabled", True), None, nd.get("clean", False), nd.get("preview", False))
+    except Exception as e:
+        engine.message = f"NDI output: {e}"
+    for src, pair in (store.data.get("ndi_audio_pairs") or {}).items():
+        engine.set_audio_pair(src, pair)
+    if (store.data.get("ndi_key") or {}).get("source"):
+        engine.set_ndi_key(store.data["ndi_key"]["source"], False)
+    at = store.data.get("atem") or {}
+    atem.configure(at.get("auto"), at.get("start_with_playout"))
+    atem.start()
     streamer.load(store.data.get("stream_destinations"))
     if not store.data.get("gpu_auto"):
         # from 1.0.24 streaming and recording use the graphics card by default (CPU only if there is none)
@@ -1704,6 +1827,7 @@ def shutdown():
     audio_out.close()
     scheduler.stop()
     streamer.stop_all()
+    atem.stop()
     engine.shutdown()
 
 

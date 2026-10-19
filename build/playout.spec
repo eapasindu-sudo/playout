@@ -3,7 +3,7 @@ import sys
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hidden = [("../web", "web")], [], []
-pkgs = ["cyndilib", "av", "imageio_ffmpeg", "sounddevice", "_sounddevice_data", "fpdf", "openpyxl", "qrcode", "yt_dlp", "certifi", "truststore"]
+pkgs = ["cyndilib", "websocket", "av", "imageio_ffmpeg", "sounddevice", "_sounddevice_data", "fpdf", "openpyxl", "qrcode", "yt_dlp", "certifi", "truststore"]
 if sys.platform == "win32":
     pkgs += ["webview", "clr_loader", "pythonnet"]
 for pkg in pkgs:
@@ -15,7 +15,8 @@ for pkg in pkgs:
 hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths", "squeeze", "comments", "health",
            "capture", "cg", "system", "audio_out", "psutil", "cgfx", "cgedit", "composer", "recorder",
            "loudness", "gpu", "textlooks", "audiofx", "framequeue", "report", "importer", "updater", "version",
-           "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon", "certs"]
+           "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon", "certs",
+           "ndi_extra", "atem_link", "atemwin"]
 
 import glob, os
 datas += [(os.path.join(SPECPATH, n), ".") for n in ("endora-cgcomposer.ico", "endora-playout.ico")]   # window icons

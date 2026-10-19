@@ -11,3 +11,4 @@ media/*
 *.zip
 cg/*
 !cg/.keep
+build/atem/

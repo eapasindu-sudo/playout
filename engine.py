@@ -31,6 +31,7 @@ import numpy as np
 from audiofx import MasterAudio
 from media import ClipPlayer, probe
 from capture import CaptureInput, UrlInput, make_bars
+from ndi_extra import ExtraOutput, still_frame
 from ndi_io import CHANNELS, SAMPLE_RATE, LiveInput, NDIOutput, SourceFinder
 
 FADE = 480  # 10 ms audio fade at every cut, avoids clicks
@@ -159,7 +160,16 @@ class Engine:
         self.finder = SourceFinder()
         self.live = MainInput(self.finder, self.width, self.height, self.fps)
         self.master = MasterAudio()          # program sound: auto level + limiter
-        self.output = NDIOutput(cfg.get("output_name", "PLAYOUT PGM"), self.width, self.height, self.fps)
+        self.output_name = cfg.get("output_name", "PLAYOUT PGM")
+        self.output = NDIOutput(self.output_name, self.width, self.height, self.fps)   # None = NDI output off
+        self.extra = {}              # "clean" / "preview": ExtraOutput (NDI Sources panel)
+        self.ndi_key = {"source": "", "on": False}   # an NDI source with alpha keyed over the program
+        self.key_input = None
+        self.audio_pairs = {}        # NDI source name -> channel pair to take (0 = 1-2, 1 = 3-4, ...)
+        self._preview_next = None    # id of the item the Preview output shows
+        self._stills = {}            # (file, in) -> first picture of the clip, for the Preview output
+        self.listeners = []          # fn(item, state, idle) when what is on air changes (ATEM link)
+        self._air_key = None
         self.black = np.zeros(self.width * self.height * 4, np.uint8)
         self.black[3::4] = 255
 
@@ -229,6 +239,152 @@ class Engine:
                     self._filler = None
             return dict(f)
 
+    # -- NDI outputs, key, sound channels (NDI Sources panel) --------------------
+    def set_ndi_outputs(self, enabled=None, name=None, clean=None, preview=None):
+        """Program NDI output on / off and its name; the extra Clean and Preview outputs on / off."""
+        with self._lock:
+            name = (str(name).strip()[:80] if name is not None else "") or self.output_name
+            renamed = name != self.output_name
+            self.output_name = name
+            want = (self.output is not None) if enabled is None else bool(enabled)
+            old = []
+            if self.output is not None and (renamed or not want):
+                old.append(self.output)
+                self.output = None
+            if want and self.output is None:
+                self.output = NDIOutput(self.output_name, self.width, self.height, self.fps)
+            extra = dict(self.extra)
+            for kind, on in (("clean", clean), ("preview", preview)):
+                cur = extra.get(kind)
+                on = (cur is not None) if on is None else bool(on)
+                if cur is not None and (renamed or not on):
+                    old.append(extra.pop(kind))
+                if on and kind not in extra:
+                    extra[kind] = ExtraOutput(f"{self.output_name} - {kind.title()}", self.width, self.height,
+                                              self.fps, sound=(kind == "clean"))
+            self.extra = extra           # a new dict: the output loop never sees it half changed
+            if old:
+                # the output loop may be sending on an old one this very moment: close it a little later
+                threading.Timer(0.5, lambda: [o.close() for o in old]).start()
+            return self.ndi_outputs()
+
+    def ndi_outputs(self):
+        prog = None
+        if self.output is not None:
+            on_pgm, on_pvw = self.output.tally()
+            prog = {"name": self.output.name, "connections": self.output.connections(), "tally": [on_pgm, on_pvw]}
+        return {"name": self.output_name, "enabled": self.output is not None, "program": prog,
+                "clean": self.extra["clean"].info() if "clean" in self.extra else None,
+                "preview": self.extra["preview"].info() if "preview" in self.extra else None}
+
+    def set_ndi_key(self, source=None, on=None):
+        """An NDI source with alpha (graphics from vMix, CasparCG, a titler PC) keyed over the program."""
+        with self._lock:
+            if source is not None and source != self.ndi_key["source"]:
+                self.ndi_key["source"] = source
+                if self.key_input is not None:
+                    old, self.key_input = self.key_input, None
+                    old.set_source(None)          # (also stops the output loop opening it again)
+                    old.close()
+            if on is not None:
+                self.ndi_key["on"] = bool(on)
+            if self.ndi_key["source"] and self.key_input is None:
+                self.key_input = LiveInput(self.finder, self.width, self.height)
+                self.key_input.keep_alpha = True
+                self.key_input.set_source(self.ndi_key["source"])
+            return self.key_info()
+
+    def key_info(self):
+        k = self.key_input
+        return dict(self.ndi_key, **({"input": k.info()} if k is not None else {}))
+
+    def set_audio_pair(self, source, pair):
+        with self._lock:
+            pair = max(0, min(7, int(pair or 0)))
+            if pair:
+                self.audio_pairs[source] = pair
+            else:
+                self.audio_pairs.pop(source, None)
+            return dict(self.audio_pairs)
+
+    def ndi_inputs(self):
+        """Every NDI source Playout is receiving now, with what it sends."""
+        out = []
+        if not self.live.is_device and self.live.source_name:
+            out.append(dict(self.live.ndi.info(), use="Main input"))
+        for key, inp in list(self.inputs.items()):
+            if key.startswith("ndi:"):
+                out.append(dict(inp.info(), use="Live card"))
+        if self.key_input is not None:
+            out.append(dict(self.key_input.info(), use="Key over program"))
+        return out
+
+    def _ndi_receivers(self):
+        """(source key used by live cards, LiveInput) of every NDI input."""
+        rx = []
+        if not self.live.is_device and self.live.source_name:
+            rx.append(("", self.live.ndi))
+        rx += [(k, i) for k, i in list(self.inputs.items()) if k.startswith("ndi:")]
+        return rx
+
+    def _tally(self, source, next_item):
+        """NDI tally: red on the source on air, green on the next live card's source. Sound channel pairs."""
+        prog = "" if source == "LIVE" else source[5:] if source.startswith("LIVE:") else None
+        nxt = None
+        if next_item is not None and next_item.get("type") == "live":
+            nxt = next_item.get("source") or ""
+            if nxt == self.live.source_name:
+                nxt = ""
+        for key, inp in self._ndi_receivers():
+            if key == self.live.source_name:
+                key = ""
+            inp.set_tally(prog == key, nxt == key)
+            inp.audio_pair = self.audio_pairs.get(inp.source_name, 0)
+        if self.key_input is not None:
+            self.key_input.set_tally(bool(self.ndi_key.get("on")), False)
+
+    def _preview_frame(self, n, live_v):
+        """What the Preview output shows: the next item."""
+        item = self._item(self._preview_next)
+        if item is None:
+            return self.black
+        if item["type"] == "live":
+            key = item.get("source") or ""
+            on = self._item(self.on_air) or {}
+            if on.get("type") == "live" and (on.get("source") or "") == key:
+                return self.clean_frame                      # the same source is on air already
+            if not key or key == self.live.source_name:
+                return live_v if live_v is not None else self.black
+            if key == "bars":
+                return self.bars
+            inp = self.inputs.get(key)
+            v = inp.grab(n)[0] if inp is not None else None
+            return v if v is not None else self.black
+        sk = (item.get("file"), _num(item.get("in")))
+        if sk not in self._stills:
+            if len(self._stills) > 8:
+                self._stills.clear()
+            self._stills[sk] = None
+            path = os.path.join(self.media_dir, item.get("file") or "")
+
+            def load():
+                self._stills[sk] = still_frame(path, sk[1], self.width, self.height)
+            threading.Thread(target=load, daemon=True, name="preview still").start()
+        v = self._stills.get(sk)
+        return v if v is not None else self.black
+
+    def _notify_air(self):
+        key = (self.on_air if self.state == "PLAYING" else None, self.state, self.idle)
+        if key == self._air_key:
+            return
+        self._air_key = key
+        item = self._item(self.on_air) if self.state == "PLAYING" else None
+        for fn in list(self.listeners):
+            try:
+                fn(item, self.state, self.idle)
+            except Exception:
+                logging.error("on-air listener error:\n%s", traceback.format_exc())
+
     # -- playlist editing ----------------------------------------------
     def set_playlist(self, items):
         with self._lock:
@@ -261,6 +417,10 @@ class Engine:
                     d = it.get("duration")
                     it["duration"] = float(d) if d not in (None, "", 0, "0") else None
                     it["name"] = it.get("name") or "LIVE"
+                    try:
+                        it["atem_input"] = max(0, int(it.get("atem_input") or 0))   # ATEM camera on air with it
+                    except (TypeError, ValueError):
+                        it["atem_input"] = 0
                 else:
                     continue
                 it["squeeze"] = os.path.basename(str(it.get("squeeze") or ""))
@@ -604,7 +764,12 @@ class Engine:
         self.live.close()
         for inp in self.inputs.values():
             inp.close()
-        self.output.close()
+        if self.key_input is not None:
+            self.key_input.close()
+        for ex in self.extra.values():
+            ex.close()
+        if self.output is not None:
+            self.output.close()
         self.finder.close()
 
     def _samples_for(self, k):
@@ -635,7 +800,8 @@ class Engine:
                     print("output loop error:", traceback.format_exc())
                 self.message = "Output error (see log) - still running"
                 try:
-                    self.output.send(self.black, np.zeros((CHANNELS, self._samples_for(0)), np.float32))
+                    if self.output is not None:
+                        self.output.send(self.black, np.zeros((CHANNELS, self._samples_for(0)), np.float32))
                 except Exception:
                     pass
             now = time.perf_counter()
@@ -669,6 +835,7 @@ class Engine:
                 if self.on_air:
                     self._refresh_preload()
             item = self._item(self.on_air)
+            self._preview_next = self._next_id()
             if self.on_air and item is None and self.player is None:
                 self._stop_to_live()   # the on-air live card was deleted
                 self._changed()
@@ -741,6 +908,18 @@ class Engine:
                     audio = np.clip(audio + sa, -1.0, 1.0)
             except Exception as e:
                 self.message = f"CG error: {e}"
+        if self.key_input is not None and self.ndi_key.get("on"):
+            kv, _ = self.key_input.grab(n)
+            if kv is not None:
+                from cg import composite
+                out = np.array(video, copy=True).reshape(self.height, self.width, 4)
+                composite(out, kv.reshape(self.height, self.width, 4), 0, 0)
+                video = out.reshape(-1)
+        if self._k % 5 == 0:
+            try:
+                self._tally(source, self._item(self._preview_next))
+            except Exception:
+                pass
         if source != self.last_source:
             audio = audio.copy()
             m = min(FADE, audio.shape[1])
@@ -754,9 +933,19 @@ class Engine:
         self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
         self.last_frame = video
         try:
-            self.output.send(video, audio)   # the loop itself keeps the frame rate (see _run)
+            if self.output is not None:
+                self.output.send(video, audio)   # the loop itself keeps the frame rate (see _run)
         except Exception:
             pass
+        ex = self.extra
+        if "clean" in ex:
+            ex["clean"].push(self.clean_frame, audio)
+        if "preview" in ex:
+            try:
+                ex["preview"].push(self._preview_frame(n, live_v), audio)
+            except Exception:
+                pass
+        self._notify_air()
         if self.streamer is not None:
             self.streamer.push(video, audio)
         if self.audio_out is not None:
@@ -903,7 +1092,10 @@ class Engine:
                 "live_connected": self.live.connected,
                 "failover": dict(self.failover, active=self.failover_active),
                 "inputs": {k: bool(getattr(v, "connected", False)) for k, v in self.inputs.items()},
-                "output": self.output.sender.ndi_name,
+                "output": self.output_name,
+                "ndi_out": self.output is not None,
+                "ndi_extra": sorted(self.extra),
+                "ndi_key": dict(self.ndi_key),
                 "fps": fps,
                 "width": self.width,
                 "height": self.height,

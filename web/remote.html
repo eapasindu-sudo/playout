@@ -69,6 +69,10 @@
   <div class="msg" id="msg"></div>
 </div>
 
+<div class="card" id="atemCard" style="display:none"><h2 style="display:flex">ATEM <span style="flex:1"></span><a id="atemLink" style="color:#8d9299; text-transform:none; letter-spacing:0" target="_blank">Full switcher + cameras &rsaquo;</a></h2>
+  <div class="grid" id="atemPgm" style="grid-template-columns:repeat(4, 1fr); margin-top:0"></div>
+  <div class="grid"><button class="red" onclick="atem('cut')">CUT</button><button class="blue" onclick="atem('auto')">AUTO</button><span class="msg" id="atemMsg" style="margin:0; align-self:center"></span></div>
+</div>
 <div class="card"><h2>Playlist</h2><div id="pl"></div></div>
 <div class="card"><h2 style="display:flex">Manual CG <span style="flex:1"></span><button class="sm red" onclick="api('/api/cg/all_out', {}).then(pollCG)">ALL OUT</button></h2><div id="cg"></div></div>
 <div class="card"><h2>Recording &amp; streams</h2>
@@ -162,6 +166,25 @@ function nextPic() { pv.src = '/api/preview.jpg?' + Date.now(); }
 pv.onload = () => setTimeout(nextPic, 300);
 pv.onerror = () => setTimeout(nextPic, 2000);
 nextPic();
+// ATEM (when the ATEM Switcher is running on the playout PC): tap an input = straight on air
+let AT = {};
+async function pollAtem() {
+  try { AT = await api('/api/atem'); } catch (e) { return; }
+  const a = AT.atem || {}, show = AT.linked && a.connected;
+  $('atemCard').style.display = show ? '' : 'none';
+  if (!show) return;
+  $('atemLink').href = `${location.protocol}//${location.hostname}:${AT.port}/`;
+  const k = JSON.stringify([a.sources, a.program, a.preview]);
+  if ($('atemPgm').dataset.k !== k) {
+    $('atemPgm').dataset.k = k;
+    $('atemPgm').innerHTML = (a.sources || []).map(x => `<button class="${x.id === a.program ? 'red' : x.id === a.preview ? 'green' : ''}" onclick="atemTake(${x.id})">${esc(x.label)}</button>`).join('');
+  }
+  $('atemMsg').textContent = AT.error || '';
+}
+async function atemTake(n) { const x = (AT.atem?.sources || []).find(s => s.id === n); if (await ask(`Put ${x ? x.label : n} on air on the ATEM?`)) atem('program', n); }
+const atem = (cmd, input) => fetch('/api/atem/cmd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd, input})})
+  .then(r => r.json()).then(r => { if (!r.ok) $('atemMsg').textContent = r.error; pollAtem(); });
+pollAtem(); setInterval(pollAtem, 1000);
 poll(); setInterval(poll, 500);
 pollCG(); setInterval(pollCG, 1500);
 pollRec(); setInterval(pollRec, 2000);

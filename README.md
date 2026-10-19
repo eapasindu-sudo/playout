@@ -393,11 +393,70 @@ settings shows which encoder is in use. Choose **CPU (x264)** there to force the
 4. Build the playlist with **+ Live Card** and **+ Commercials**, then press **Play**.
 5. Save it under **Playlist Manager** so you can load it again tomorrow.
 
+## NDI panel
+
+**Functions > NDI** shows everything NDI in one place:
+
+- **Playout's NDI outputs.** The program output can be turned on or off and renamed (the name vMix / OBS /
+  monitors see; default `PLAYOUT PGM`). Two extra outputs can be turned on:
+  - **`<name> - Clean`**: the program without CGs, squeeze, comments and stingers, with sound (for an
+    archive recorder or a second channel).
+  - **`<name> - Preview`**: what goes on air next: the next live card's source as it is now, or the first
+    picture of the next clip (no sound), for a studio or director's monitor.
+  The status line shows how many receivers watch each output, and whether a vision mixer has the program on air.
+  The extra outputs send from their own threads, so they never hold up the program output.
+- **NDI sources on the network**, with the PC they come from, what Playout uses them for (main input,
+  live card, key), the format they send (size, frame rate, colour format, alpha), the frames per second really
+  received, dropped frames, and **Use as main input / Disconnect**.
+- **Sound channels**: for a source with more than 2 channels, pick the pair Playout takes (Ch 1-2, 3-4, ...).
+- **NDI tally**: Playout tells NDI sources when they are on air (red) or next (green); cameras and vMix that
+  support NDI tally light up.
+- **Key over the program**: an NDI source with alpha (graphics from vMix, CasparCG or a titler PC) goes over
+  the program, above the CGs. **KEY ON AIR / KEY OFF**. After a restart the key starts off air.
+
+Health (and the phone health page) shows each NDI input: not connected, no pictures coming in, a source at a
+different frame rate from the output, dropped frames, and a warning while the program NDI output is off.
+
+## ATEM & Cameras (Blackmagic ATEM + Sony camera control)
+
+**Functions > ATEM & Cameras** opens the ATEM Switcher in its own window, like CG Composer (pressing it
+again brings the window to the front). It is the same app as
+[ATEM Web Switcher](https://github.com/eapasindu-sudo/atem-web-switcher) and comes with Playout (the installer
+puts it in `Program Files\Playout\atem`, with the Sony camera bridge). Start menu: **ATEM & Cameras**.
+
+- **Switcher + Cameras**: PROGRAM / PREVIEW, CUT, AUTO, T-bar, and the Sony **CCU** (iris, shutter, ISO,
+  white balance, ND, focus, REC) for FX3 / FX30 / FX6 / A7 IV / A7S III and other Sony bodies with PC Remote.
+- **MORE** (in the switcher): transition style and rate, Fade to Black, upstream keys with picture-in-picture
+  corners, downstream keys (ON / AUTO / TIE), the audio mixer (level, OFF / ON / AFV, master) and macros.
+- **Setup**: the ATEM's IP address, Sony cameras (add / find on the network), connected phones and the QR
+  code for phones and tablets (`http://PLAYOUT-PC:3000`).
+- **Playout link**: what Playout switches on the ATEM by itself:
+  - a **live card with an ATEM camera** (Edit on the live card > ATEM camera) puts that camera on air on
+    the ATEM when the card goes on air (also at a stinger's cut point);
+  - **clips / commercials** switch the ATEM to the input Playout's own output is plugged into;
+  - **TAKE LIVE / end of playlist** goes back to a main camera;
+  - by a **cut** or by **AUTO** (the ATEM's own transition);
+  - **Start ATEM Switcher with Playout**.
+
+When the ATEM is connected, the main screen shows an **ATEM** row: PGM / PVW buttons, CUT and AUTO, and the
+last switch. A switch only shows as done when the ATEM itself says so; when the ATEM does not follow within
+3 seconds the screen says so. The phone remote gets the same ATEM buttons. Every ATEM program change is
+written to the **Air Logs** (type `atem`; the Ad Report only counts clips).
+
+The ATEM must be on the network (Ethernet) with the playout PC. Sony cameras join the same network with
+PC Remote on (see the ATEM Web Switcher README). The installer lets the switcher page and the Sony camera
+search through Windows Firewall, and installs the Microsoft Visual C++ runtime the Sony SDK needs when the
+PC does not have it. Running from source: put `ATEM-Switcher.exe` (and its `sony` folder) in `build\atem`,
+or start ATEM Switcher yourself: Playout uses any ATEM Switcher answering on port 3000 (`atem_switcher` in
+`config.json` points at another copy).
+
 ## Control from vMix scripts / Stream Deck / Companion
 
 Plain GET URLs:
 `/trigger/play`, `/trigger/pause`, `/trigger/next`, `/trigger/stop` (or `/trigger/live`),
 `/trigger/item/<item name>` (plays that playlist item now).
+ATEM (ATEM & Cameras): `/trigger/atem/cut`, `/trigger/atem/auto`, `/trigger/atem/program/<input>`,
+`/trigger/atem/preview/<input>`.
 
 ## Air logs
 
@@ -413,6 +472,7 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `live_source` | NDI source to use at start (can also be picked on screen) |
 | `width`, `height`, `fps` | program format. fps can be `25`, `50`, `29.97`, `30`, `59.94` or `60` |
 | `web_port` | control screen port |
+| `atem_switcher` | another ATEM-Switcher.exe to start (default: the one that comes with Playout) |
 
 ## Files
 
@@ -423,7 +483,11 @@ You can view it and download it from **Functions > Air Logs**, and use it as pro
 | `paths.py` | where user files live |
 | `engine.py` | output clock, playlist runner, as-run log |
 | `streamer.py` | H.264/AAC encoder and the 3 stream destinations |
-| `ndi_io.py` | NDI input (frame sync) and output |
+| `ndi_io.py` | NDI input (frame sync, format / fps / tally, sound channel pair) and output |
+| `ndi_extra.py` | extra NDI outputs: Clean feed and Preview |
+| `atem_link.py` | ATEM & Cameras: starts the ATEM Switcher, follows and switches the ATEM |
+| `atemwin.py` | the ATEM & Cameras window |
+| `web/atem.html` | ATEM & Cameras page (switcher, setup, Playout link) |
 | `media.py` | clip decoding and thumbnails (FFmpeg via PyAV) |
 | `scheduler.py` | fixed-time items, day playlists, scheduled recording |
 | `cg.py` | CG layers (PNG / JPEG / MOV with alpha), manual and live-card CGs, stingers |

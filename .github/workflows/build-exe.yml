@@ -63,6 +63,15 @@ jobs:
           Get-Content "$env:PLAYOUT_HOME\logs\playout.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
           if (-not $ok) { throw "Playout.exe did not start" }
           "Playout.exe started and answered on port 8080"
+      - name: ATEM Switcher + Sony camera control (latest release of eapasindu-sudo/atem-web-switcher)
+        shell: pwsh
+        run: |
+          # the switcher's own installer carries ATEM-Switcher.exe and the Sony bridge + Sony SDK runtime files;
+          # they go into Playout's installer as {app}\atem (Functions > ATEM & Cameras)
+          Invoke-WebRequest https://github.com/eapasindu-sudo/atem-web-switcher/raw/main/download/ATEM-Switcher-Setup.exe -OutFile "$env:RUNNER_TEMP\atem-setup.exe"
+          & "$env:ProgramFiles\7-Zip\7z.exe" x -y "-obuild\atem" "$env:RUNNER_TEMP\atem-setup.exe" ATEM-Switcher.exe sony | Out-Null
+          if (-not (Test-Path build\atem\ATEM-Switcher.exe)) { throw "ATEM-Switcher.exe not found in the ATEM Switcher installer" }
+          Get-ChildItem build\atem -Recurse -File | Select-Object FullName, Length
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
@@ -82,8 +91,17 @@ jobs:
             Start-Sleep -Seconds 2
             try { $r = Invoke-RestMethod http://localhost:8080/api/state; if ($r.output) { $ok = $true; break } } catch {}
           }
+          # Functions > ATEM & Cameras: the bundled ATEM Switcher starts and answers on port 3000
+          $atem = $null
+          if ($ok) {
+            try { Invoke-RestMethod -Method Post http://localhost:8080/api/atem/open -ContentType application/json -Body '{"browser":true}' | Out-Null } catch {}
+            for ($i = 0; $i -lt 15; $i++) { Start-Sleep -Seconds 1; try { $atem = Invoke-RestMethod http://localhost:8080/api/atem; if ($atem.linked) { break } } catch {} }
+            "ATEM Switcher: installed=$($atem.installed) running=$($atem.running) linked=$($atem.linked)"
+          }
+          Get-Process ATEM-Switcher, sony-bridge -ErrorAction SilentlyContinue | Stop-Process -Force
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           if (-not $ok) { throw "Installed Playout.exe did not start" }
+          if (-not ($atem -and $atem.linked)) { throw "The ATEM Switcher that comes with Playout did not start" }
           # update the installed Playout the way the Update button does (update.ps1 + request file)
           if (-not (Test-Path "$env:ProgramFiles\Playout\update.ps1")) { throw "update.ps1 not installed" }
           Copy-Item build\output\Playout-Setup.exe "$env:TEMP\Playout-Setup-9.9.9.exe"

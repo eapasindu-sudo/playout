@@ -13,3 +13,4 @@ qrcode>=7.4
 yt-dlp>=2024.1
 truststore>=0.9
 certifi>=2024.2
+websocket-client>=1.7

@@ -9,6 +9,7 @@ second PC can open http://PLAYOUT-PC:8080 as a remote control.
     Playout.exe --app        the Playout window itself, without the launcher
     Playout.exe --headless   no window (used by the build test)
     Playout.exe --composer   CG Composer (separate CG preparation window)
+    Playout.exe --atem       ATEM & Cameras (ATEM switcher + Sony camera control window)
 """
 import os
 import socket
@@ -83,6 +84,9 @@ def main():
     if "--composer" in sys.argv:
         import composer
         return composer.main()
+    if "--atem" in sys.argv:
+        import atemwin
+        return atemwin.main()
 
     if paths.FROZEN and not ({"--app", "--headless", "--no-launcher"} & set(sys.argv)):
         return supervise()
