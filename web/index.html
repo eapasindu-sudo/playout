@@ -820,7 +820,7 @@
   <div class="body" id="setBody">
     <div class="setnav"><a href="#" data-s="secOut">Output format</a><a href="#" data-s="secUsb">Live inputs</a><a href="#" data-s="secFail">Failover</a><a href="#" data-s="secAudio">Audio</a><a href="#" data-s="secPw">Passwords</a>
       <a href="#" data-s="secUsers">Users</a><a href="#" data-s="secAlerts">Alerts</a><a href="#" data-s="secBackup">Backup PC</a><a href="#" data-s="secRec">Recording</a><a href="#" data-s="secSdi">SDI out</a>
-      <a href="#" data-s="secWatch">Watch folder</a><a href="#" data-s="secUpdate">Updates</a></div>
+      <a href="#" data-s="secWatch">Watch folder</a><a href="#" data-s="secUpdate">Diagnostics &amp; updates</a></div>
     <div class="setsec" id="secOut">Output format (program out, NDI, full screen, stream source)</div>
     <div class="form">
       <span>Size</span><select id="outRes"><option value="720p">720p (1280x720)</option><option value="1080p">1080p HD (1920x1080)</option><option value="2160p">4K UHD (3840x2160)</option></select>
@@ -918,8 +918,9 @@
       <span>Last files</span><span id="wfLog" class="hint" style="white-space:pre-line"></span>
     </div>
 
-    <div class="setsec" id="secUpdate">Updates</div>
+    <div class="setsec" id="secUpdate">Diagnostics &amp; updates</div>
     <div class="form">
+      <span>Diagnostics</span><span style="display:flex; gap:6px; align-items:center"><a class="sm" href="/api/diagnostics" download><button class="sm" type="button">Make diagnostics file</button></a><span class="hint">A zip of what Playout is doing on this PC (no passwords or stream keys). Send it to support. A copy is kept in Documents\Playout\diagnostics.</span></span>
       <span>Version</span><span id="upCur" class="mono"></span>
       <span>Status</span><span id="upSt"></span>
       <span></span><span style="display:flex; gap:6px"><button class="sm" onclick="upCheck()">Check now</button><button class="sm" id="upDl" onclick="upDownload()">Download</button><button class="sm red" id="upInst" onclick="upInstall()">Install &amp; restart</button></span>

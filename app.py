@@ -54,6 +54,8 @@ import report
 import textcg
 
 import paths
+import diag
+diag.install()                # recent log lines for the diagnostics file
 
 ROOT = paths.user_home()      # config, media, playlists, logs
 BUNDLE = paths.bundle_dir()   # the control screen page
@@ -1356,6 +1358,25 @@ def schedule_load_today():
         return jsonify(ok=False, error="No playlist is set for today")
     store.set(day_list_loaded=dt.date.today().isoformat())
     return jsonify(ok=planner.load(name), name=name)
+
+
+# ---- diagnostics -------------------------------------------------------------------
+@app.get("/api/diagnostics")
+def diagnostics():
+    """A zip that shows what Playout is doing on this PC (no passwords or stream keys in it). A copy is
+    kept in Documents\\Playout\\diagnostics."""
+    if not is_local():
+        abort(403)
+    data = diag.build(ROOT, cfg, store.data, health, sysmon, engine, streamer)
+    name = f"playout-diagnostics-{dt.datetime.now():%Y%m%d-%H%M%S}.zip"
+    folder = os.path.join(ROOT, "diagnostics")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, name), "wb") as f:
+            f.write(data)
+    except OSError:
+        pass
+    return Response(data, mimetype="application/zip", headers={"Content-Disposition": f"attachment; filename={name}"})
 
 
 # ---- updates -------------------------------------------------------------------
