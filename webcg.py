@@ -97,6 +97,7 @@ class WebRenderer:
         self.active = True               # take pictures (off while the CG is off air: the page stays loaded)
         self._reload = False
         self._pending = None             # latest picture from the browser, not decoded yet
+        self._straight = False           # _pending is a screenshot (straight alpha), not a screencast picture
         self._wait, self._frames_seen = 1.5, 0
         self._running = True
         self._proc = None
@@ -192,14 +193,14 @@ class WebRenderer:
 
     def _got_frame(self, ws, p):
         """The browser sent a new picture (it only does when the page changed): keep the latest."""
-        self._pending = p["data"]
+        self._pending, self._straight = p["data"], False
         self._send(ws, "Page.screencastFrameAck", {"sessionId": p["sessionId"]})
 
     def _send(self, ws, method, params):
         self._id += 1
         ws.send(json.dumps({"id": self._id, "method": method, "params": params}))
 
-    def _decode(self, data):
+    def _decode(self, data, premultiplied=True):
         im = Image.open(io.BytesIO(base64.b64decode(data))).convert("RGBA")
         box = im.getchannel("A").getbbox()
         if box is None:
@@ -214,7 +215,7 @@ class WebRenderer:
         # screencast pictures come premultiplied: back to straight alpha for the CG blend
         al = out[..., 3:4].astype(np.uint16)
         part = (al > 0) & (al < 255)
-        if part.any():
+        if premultiplied and part.any():
             rgb = out[..., :3].astype(np.uint16) * 255 // np.maximum(al, 1)
             out[..., :3] = np.where(part, np.minimum(rgb, 255), out[..., :3]).astype(np.uint8)
         return out, (dx, dy)
@@ -233,7 +234,7 @@ class WebRenderer:
                 # the browser sends a picture only when the page changes (a still score costs nothing)
                 self._call(ws, "Page.startScreencast", {"format": "png", "everyNthFrame": 1})
                 ws.settimeout(self.interval)
-                last = 0.0
+                last = got = time.monotonic()
                 while self._running:
                     if self._reload:
                         self._reload = False
@@ -245,9 +246,19 @@ class WebRenderer:
                     except websocket.WebSocketTimeoutException:
                         pass
                     now = time.monotonic()
+                    if self._pending is not None:
+                        got = now
+                    elif self.active and now - got > 5:
+                        # the screencast can go quiet (the page did not change, or the browser stopped sending):
+                        # take a picture directly, so a CG put on air always shows the page as it is now
+                        got = now
+                        shot = self._call(ws, "Page.captureScreenshot", {"format": "png"}, timeout=10)
+                        if shot.get("data") and self._pending is None:
+                            self._pending, self._straight = shot["data"], True   # not premultiplied
+                            last = 0.0
                     if self.active and self._pending is not None and now - last >= self.interval:
                         data, self._pending, last = self._pending, None, now
-                        img, off = self._decode(data)
+                        img, off = self._decode(data, premultiplied=not self._straight)
                         self.frame = (img, off) if img is not None else None
                         self.frames += 1
                         self.error = ""
