@@ -97,6 +97,7 @@ class WebRenderer:
         self.active = True               # take pictures (off while the CG is off air: the page stays loaded)
         self._reload = False
         self._pending = None             # latest picture from the browser, not decoded yet
+        self._last_data = None
         self._unacked = None             # screencast picture not acknowledged yet (the browser waits for it)
         self._straight = False           # _pending is a screenshot (straight alpha), not a screencast picture
         self._wait, self._frames_seen = 1.5, 0
@@ -117,8 +118,12 @@ class WebRenderer:
                 "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
                 "--disable-backgrounding-occluded-windows", "--disable-extensions", "--disable-sync",
                 "--disable-breakpad", "--disable-crash-reporter", "--disable-component-update", "--no-pings",
-                "--renderer-process-limit=1", "--disable-features=Translate,MediaRouter,OptimizationHints,BackForwardCache",
+                "--renderer-process-limit=1", "--disable-features=Translate,MediaRouter,OptimizationHints,BackForwardCache,CalculateNativeWinOcclusion",
                 "--force-device-scale-factor=1", f"--window-size={self.width},{self.height}", "about:blank"]
+        if sys.platform == "win32":
+            # draw the page on the graphics card (Direct3D 11), not in software on the CPU
+            args[1:1] = ["--use-angle=d3d11", "--enable-gpu-rasterization", "--ignore-gpu-blocklist",
+                         "--enable-zero-copy", "--enable-features=CanvasOopRasterization"]
         if sys.platform != "win32" and hasattr(os, "geteuid") and os.geteuid() == 0:
             args[1:1] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]   # Linux as root (test machines / containers)
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -271,8 +276,10 @@ class WebRenderer:
                     if self.active and self._pending is not None and now - last >= self.interval:
                         data, self._pending, last = self._pending, None, now
                         self._ack(ws)                      # ready for the next picture
-                        img, off = self._decode(data, premultiplied=not self._straight)
-                        self.frame = (img, off) if img is not None else None
+                        if data != self._last_data:        # same picture again: nothing to decode
+                            self._last_data = data
+                            img, off = self._decode(data, premultiplied=not self._straight)
+                            self.frame = (img, off) if img is not None else None
                         self.frames += 1
                         self.error = ""
                     if self._proc is None or self._proc.poll() is not None:
