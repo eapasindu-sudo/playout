@@ -107,7 +107,7 @@ class AtemLink:
         try:
             env = dict(os.environ, PORT=str(self.port))
             flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            self.proc = subprocess.Popen([self.exe, "--no-window"], env=env, cwd=os.path.dirname(self.exe),
+            self.proc = subprocess.Popen([self.exe, "--no-window", "--embedded"], env=env, cwd=os.path.dirname(self.exe),
                                          creationflags=flags, close_fds=True)
         except OSError as e:
             return False, f"Could not start the ATEM Switcher: {e}"

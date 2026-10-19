@@ -426,6 +426,8 @@ puts it in `Program Files\Playout\atem`, with the Sony camera bridge). Start men
 
 - **Switcher + Cameras**: PROGRAM / PREVIEW, CUT, AUTO, T-bar, and the Sony **CCU** (iris, shutter, ISO,
   white balance, ND, focus, REC) for FX3 / FX30 / FX6 / A7 IV / A7S III and other Sony bodies with PC Remote.
+- **MORE** (in the switcher): transition style and rate, Fade to Black, upstream keys with picture-in-picture
+  corners, downstream keys (ON / AUTO / TIE), the audio mixer (level, OFF / ON / AFV, master) and macros.
 - **Setup**: the ATEM's IP address, Sony cameras (add / find on the network), connected phones and the QR
   code for phones and tablets (`http://PLAYOUT-PC:3000`).
 - **Playout link**: what Playout switches on the ATEM by itself:
