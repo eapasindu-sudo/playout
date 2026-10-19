@@ -68,6 +68,20 @@ atexit.register(_kill_all)
 close_all = _kill_all          # Playout closing: no browser is left running
 
 
+def _quiet_crashes():
+    """Windows: a browser that crashes must not leave an "Application Error" box on the playout screen.
+    The error mode is inherited by the browser processes Playout starts; Playout then starts it again."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+        k.SetErrorMode(k.GetErrorMode() | 0x0001 | 0x0002 | 0x8000)
+    except Exception:
+        pass
+
+
 class WebRenderer:
     """One headless browser page; .frame is the latest (bgra image, (dx, dy)) cropped to what is drawn."""
 
@@ -82,6 +96,8 @@ class WebRenderer:
         self.frames = 0
         self.active = True               # take pictures (off while the CG is off air: the page stays loaded)
         self._reload = False
+        self._pending = None             # latest picture from the browser, not decoded yet
+        self._wait, self._frames_seen = 1.5, 0
         self._running = True
         self._proc = None
         self._dir = None
@@ -98,10 +114,13 @@ class WebRenderer:
                 "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--mute-audio",
                 "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
                 "--disable-backgrounding-occluded-windows", "--disable-extensions", "--disable-sync",
+                "--disable-breakpad", "--disable-crash-reporter", "--disable-component-update", "--no-pings",
+                "--renderer-process-limit=1", "--disable-features=Translate,MediaRouter,OptimizationHints,BackForwardCache",
                 "--force-device-scale-factor=1", f"--window-size={self.width},{self.height}", "about:blank"]
         if sys.platform != "win32" and hasattr(os, "geteuid") and os.geteuid() == 0:
             args[1:1] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]   # Linux as root (test machines / containers)
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        _quiet_crashes()
         self._proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                       creationflags=flags)
         _procs.add(self._proc)
@@ -147,8 +166,15 @@ class WebRenderer:
         self._id += 1
         ws.send(json.dumps({"id": self._id, "method": method, "params": params or {}}))
         end = time.monotonic() + timeout
+        import websocket
         while time.monotonic() < end:
-            msg = json.loads(ws.recv())
+            try:
+                msg = json.loads(ws.recv())
+            except websocket.WebSocketTimeoutException:
+                continue
+            if msg.get("method") == "Page.screencastFrame":
+                self._got_frame(ws, msg["params"])
+                continue
             if msg.get("id") == self._id:
                 if "error" in msg:
                     raise RuntimeError(msg["error"].get("message", "DevTools error"))
@@ -164,9 +190,17 @@ class WebRenderer:
             raise RuntimeError(f"Could not open the page: {r['errorText']}")
         self.loaded = True
 
-    def _grab(self, ws):
-        r = self._call(ws, "Page.captureScreenshot", {"format": "png", "fromSurface": True})
-        im = Image.open(io.BytesIO(base64.b64decode(r["data"]))).convert("RGBA")
+    def _got_frame(self, ws, p):
+        """The browser sent a new picture (it only does when the page changed): keep the latest."""
+        self._pending = p["data"]
+        self._send(ws, "Page.screencastFrameAck", {"sessionId": p["sessionId"]})
+
+    def _send(self, ws, method, params):
+        self._id += 1
+        ws.send(json.dumps({"id": self._id, "method": method, "params": params}))
+
+    def _decode(self, data):
+        im = Image.open(io.BytesIO(base64.b64decode(data))).convert("RGBA")
         box = im.getchannel("A").getbbox()
         if box is None:
             return None, (0, 0)                     # nothing drawn (yet)
@@ -176,7 +210,14 @@ class WebRenderer:
             im = im.resize((max(1, round(im.width * self.zoom)), max(1, round(im.height * self.zoom))), Image.BILINEAR)
             dx, dy = round(dx * self.zoom), round(dy * self.zoom)
         a = np.asarray(im)
-        return np.ascontiguousarray(a[..., [2, 1, 0, 3]]), (dx, dy)
+        out = np.ascontiguousarray(a[..., [2, 1, 0, 3]])
+        # screencast pictures come premultiplied: back to straight alpha for the CG blend
+        al = out[..., 3:4].astype(np.uint16)
+        part = (al > 0) & (al < 255)
+        if part.any():
+            rgb = out[..., :3].astype(np.uint16) * 255 // np.maximum(al, 1)
+            out[..., :3] = np.where(part, np.minimum(rgb, 255), out[..., :3]).astype(np.uint8)
+        return out, (dx, dy)
 
     def _run(self):
         import websocket
@@ -188,19 +229,30 @@ class WebRenderer:
                 ws = websocket.create_connection(url, timeout=15, suppress_origin=True, http_no_proxy=["127.0.0.1", "localhost"])
                 self._open(ws)
                 self.error = ""
+                self._pending = None
+                # the browser sends a picture only when the page changes (a still score costs nothing)
+                self._call(ws, "Page.startScreencast", {"format": "png", "everyNthFrame": 1})
+                ws.settimeout(self.interval)
+                last = 0.0
                 while self._running:
-                    t0 = time.monotonic()
                     if self._reload:
                         self._reload = False
                         self._call(ws, "Page.reload", {"ignoreCache": True}, timeout=30)
-                    if self.active:
-                        img, off = self._grab(ws)
+                    try:
+                        msg = json.loads(ws.recv())
+                        if msg.get("method") == "Page.screencastFrame":
+                            self._got_frame(ws, msg["params"])
+                    except websocket.WebSocketTimeoutException:
+                        pass
+                    now = time.monotonic()
+                    if self.active and self._pending is not None and now - last >= self.interval:
+                        data, self._pending, last = self._pending, None, now
+                        img, off = self._decode(data)
                         self.frame = (img, off) if img is not None else None
                         self.frames += 1
                         self.error = ""
                     if self._proc is None or self._proc.poll() is not None:
                         raise RuntimeError("The browser stopped")
-                    time.sleep(max(0.0, self.interval - (time.monotonic() - t0)))
             except Exception as e:
                 if self._running:
                     self.error = str(e)[:200] or type(e).__name__
@@ -214,7 +266,12 @@ class WebRenderer:
                 self._stop_browser()
                 self.loaded = False
             if self._running:
-                time.sleep(3)                       # try again: the PC or the page may be back
+                # try again (the page or the PC may be back), waiting longer each time it fails at once
+                self._wait = 3 if self.frames > self._frames_seen else min(60, self._wait * 2)
+                self._frames_seen = self.frames
+                end = time.monotonic() + self._wait
+                while self._running and time.monotonic() < end:
+                    time.sleep(0.2)
 
     def reload(self):
         self._reload = True

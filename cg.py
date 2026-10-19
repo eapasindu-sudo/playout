@@ -87,8 +87,29 @@ def cg_preview(path, cache_dir):
     return out
 
 
+def _rgba(buf):
+    """A PIL image drawing straight into a C-contiguous (h, w, 4) uint8 numpy buffer: no copies."""
+    h, w = buf.shape[:2]
+    im = Image.frombuffer("RGBA", (w, h), buf, "raw", "RGBA", 0, 1)
+    im.readonly = 0
+    return im
+
+
+def _inplace_works():
+    try:
+        buf = np.zeros((2, 2, 4), np.uint8)
+        _rgba(buf).paste(Image.new("RGBA", (2, 2), (9, 9, 9, 255)), (0, 0))
+        return int(buf[0, 0, 0]) == 9
+    except Exception:
+        return False
+
+
+_INPLACE = _inplace_works()   # a Pillow that copies on paste: blend a copy and write it back
+
+
 def composite(dst, src, x, y, opacity=255):
-    """Alpha-blend src (h,w,4 BGRA) onto dst (H,W,4 BGRA) at x,y, in place, region only."""
+    """Alpha-blend src (h,w,4 BGRA) onto dst (H,W,4 BGRA) at x,y, in place, region only.
+    See-through margins of the CG are skipped, and the blend runs in C on the picture itself."""
     H, W = dst.shape[:2]
     h, w = src.shape[:2]
     dx0, dy0 = max(0, x), max(0, y)
@@ -96,19 +117,30 @@ def composite(dst, src, x, y, opacity=255):
     if dx0 >= dx1 or dy0 >= dy1 or opacity <= 0:
         return
     s = src[dy0 - y:dy1 - y, dx0 - x:dx1 - x]
-    d = dst[dy0:dy1, dx0:dx1]
     a = s[..., 3]
+    if a.size > 100_000:                 # a big CG (often a full-frame PNG with a small graphic): only its drawn part
+        box = Image.fromarray(np.ascontiguousarray(a)).getbbox()
+        if box is None:
+            return
+        l, t, r, b = box
+        s, a = s[t:b, l:r], a[t:b, l:r]
+        dx0, dy0, dx1, dy1 = dx0 + l, dy0 + t, dx0 + r, dy0 + b
+    d = dst[dy0:dy1, dx0:dx1]
     if opacity >= 255 and a.min() == 255:
         d[..., :3] = s[..., :3]          # fully opaque (JPEG): plain copy
         return
-    if opacity < 255:
-        s = s.copy()
-        s[..., 3] = (s[..., 3].astype(np.uint16) * opacity // 255).astype(np.uint8)
-    # PIL's alpha blend runs in C: about 4x faster than numpy on a full 1080p picture
-    dh, dw = d.shape[:2]
-    out = Image.alpha_composite(Image.frombuffer("RGBA", (dw, dh), np.ascontiguousarray(d), "raw", "RGBA", 0, 1),
-                                Image.frombuffer("RGBA", (dw, dh), np.ascontiguousarray(s), "raw", "RGBA", 0, 1))
-    d[..., :3] = np.asarray(out)[..., :3]
+    mask = np.ascontiguousarray(a) if opacity >= 255 else (a.astype(np.uint16) * opacity // 255).astype(np.uint8)
+    keep = d[..., 3].copy()              # the program's own alpha stays as it is
+    buf = d if d.flags.c_contiguous else np.ascontiguousarray(d)
+    if _INPLACE:
+        _rgba(buf).paste(Image.fromarray(np.ascontiguousarray(s), "RGBA"), (0, 0), Image.fromarray(mask, "L"))
+    else:
+        im = Image.fromarray(buf if buf is not d else buf.copy(), "RGBA")
+        im.paste(Image.fromarray(np.ascontiguousarray(s), "RGBA"), (0, 0), Image.fromarray(mask, "L"))
+        buf = np.asarray(im)
+    if buf is not d:
+        d[...] = buf
+    d[..., 3] = keep
 
 
 class CGLayer:
@@ -325,6 +357,7 @@ class CGManager:
         self._lock = threading.Lock()
         self.manual = []              # list of cfg dicts (saved)
         self._manual_layers = {}      # id -> CGLayer
+        self._warming = set()         # manual CG ids being loaded ahead
         self._card_layers = []        # CGLayer for the on-air live card
         self._card_id = None
         self._stinger = None          # CGLayer of a stinger transition in progress (drawn on top)
@@ -358,6 +391,10 @@ class CGManager:
                     del self._manual_layers[cid]
                 elif isinstance(layer, TextLayer) and cfg.get("kind") == "text":
                     layer.update(cfg)      # new ticker / name text goes on air at once
+                elif isinstance(layer, CGLayer) and not isinstance(layer, WebLayer) and not layer.visible \
+                        and _changed(layer.cfg, cfg):
+                    layer.close()                  # off air with old settings: loaded again below
+                    del self._manual_layers[cid]
                 elif isinstance(layer, WebLayer) and _changed(layer.cfg, cfg) and not layer.visible:
                     layer.close()                  # new link / size: a fresh page, loaded off air
                     self._manual_layers[cid] = self._off_layer(cfg)
@@ -372,13 +409,41 @@ class CGManager:
             for c in clean:                       # web overlays load their page now, ready for IN
                 if c.get("kind") == "web" and c["id"] not in self._manual_layers:
                     self._manual_layers[c["id"]] = self._off_layer(c)
+        self._warm_all()
         if self.on_change:
             self.on_change(self.manual)
 
     def _off_layer(self, cfg):
         layer = self._layer(cfg)
         layer.state = "off"
+        layer.warm = True
         return layer
+
+    # Manual picture / video CGs are loaded ahead, off air (picture rendered, video decoder open with its
+    # first frames ready), so IN puts them on at once instead of opening the file on the output frame.
+    def _warm_all(self):
+        with self._lock:
+            todo = [c for c in self.manual if c.get("kind") not in ("text", "web") and c.get("file")
+                    and c["id"] not in self._manual_layers and c["id"] not in self._warming]
+            self._warming.update(c["id"] for c in todo)
+        if todo:
+            threading.Thread(target=self._warm, args=(todo,), daemon=True, name="cg warm").start()
+
+    def _warm(self, cfgs):
+        for cfg in cfgs:
+            try:
+                layer = self._off_layer(cfg)          # built off the output thread
+            except Exception:
+                layer = None
+            with self._lock:
+                self._warming.discard(cfg["id"])
+                cur = next((c for c in self.manual if c["id"] == cfg["id"]), None)
+                if layer is None:
+                    continue
+                if cur is None or cfg["id"] in self._manual_layers or _changed(cur, cfg) or layer.error:
+                    layer.close()
+                    continue
+                self._manual_layers[cfg["id"]] = layer
 
     def reload(self, cid):
         with self._lock:
@@ -394,7 +459,8 @@ class CGManager:
             if cfg is None:
                 return False
             layer = self._manual_layers.get(cid)
-            if layer and (layer.visible or isinstance(layer, WebLayer) and not layer.dead):
+            if layer and (layer.visible or getattr(layer, "warm", False) or isinstance(layer, WebLayer) and not layer.dead):
+                layer.warm = False
                 layer.take_in()
                 return True
             if layer:
@@ -608,9 +674,15 @@ class CGManager:
             for layer in [l for l in self._comments if l.state == "off"]:
                 layer.close()
             self._comments = [l for l in self._comments if l.state != "off"]
+            rewarm = False
             for cfg in self.manual:
                 layer = self._manual_layers.get(cfg["id"])
                 if layer is None:
+                    continue
+                if layer.state == "off" and not getattr(layer, "warm", False) and type(layer) is CGLayer:
+                    layer.close()                 # went off air: load it again, ready for the next IN
+                    del self._manual_layers[cfg["id"]]
+                    rewarm = True
                     continue
                 r = layer.tick()
                 if r is None:
@@ -628,6 +700,8 @@ class CGManager:
                 if st.state == "off":
                     st.close()
                     self._stinger = None
+        if rewarm:
+            self._warm_all()
         if not jobs:
             return frame_flat if base is None else base.reshape(-1)
         out = np.array(frame_flat, copy=True).reshape(self.height, self.width, 4) if base is None else base
