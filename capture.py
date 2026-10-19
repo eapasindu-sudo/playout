@@ -19,6 +19,8 @@ import time
 import av
 import numpy as np
 
+import gpucg
+
 from ndi_io import CHANNELS, SAMPLE_RATE, fit_audio
 
 
@@ -326,10 +328,9 @@ class CaptureInput:
                                 if ft - kept < gap:      # device sends faster than the output uses
                                     continue
                                 kept = ft
-                                img = frame.reformat(width=self.width, height=self.height, format="bgra",
-                                                     interpolation="FAST_BILINEAR").to_ndarray()
+                                img = gpucg.to_bgra(frame, self.width, self.height)
                                 with self._lock:
-                                    self._frames.append(np.ascontiguousarray(img).reshape(-1))
+                                    self._frames.append(img)
                                     while len(self._frames) > self.MAX_FRAMES:
                                         self._frames.popleft()
                             elif resampler is not None:
@@ -473,10 +474,9 @@ class UrlInput(CaptureInput):
                             break
                         for frame in packet.decode():
                             if packet.stream is vs:
-                                img = frame.reformat(width=self.width, height=self.height, format="bgra",
-                                                     interpolation="FAST_BILINEAR").to_ndarray()
+                                img = gpucg.to_bgra(frame, self.width, self.height)
                                 with self._lock:
-                                    self._video = np.ascontiguousarray(img).reshape(-1)
+                                    self._video = img
                                 self._last_frame_time = time.time()
                             elif resampler is not None:
                                 for rf in resampler.resample(frame):
