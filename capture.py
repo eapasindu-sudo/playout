@@ -121,8 +121,11 @@ def device_modes(width, height, fps, name=""):
     rate = f"{float(fps):g}"
     size = f"{width}x{height}"
     if any(k in name.lower() for k in NATIVE):
-        # broadcast devices (Blackmagic ATEM in USB mode...): take the picture exactly as the device sends it
-        return [("native", {})] + [m for m in device_modes(width, height, fps) if m[0] != "default"]
+        # broadcast devices (Blackmagic ATEM in USB mode...): the picture as the device sends it, at
+        # Playout's size and frame rate when the device offers it (an ATEM sending 1080p60 into a 25 fps
+        # output means 35 pictures a second decoded for nothing); otherwise its own default
+        return [("native", {"video_size": size, "framerate": rate}), ("native", {})] + \
+            [m for m in device_modes(width, height, fps) if m[0] != "default"]
     return [
         ("mjpeg", {"vcodec": "mjpeg", "video_size": size, "framerate": rate}),
         ("raw", {"video_size": size, "framerate": rate}),
@@ -149,7 +152,9 @@ def open_args(key):
         if sys.platform == "win32":
             url = f"video={video}" + (f":audio={audio}" if audio else "")
             # audio_buffer_size: small sound packets (the default is 500 ms blocks, which arrive late and in bursts)
-            return url, "dshow", {"rtbufsize": "512M", "audio_buffer_size": "40"}
+            # rtbufsize: room for a short hiccup only; a big buffer fills up when the PC is busy and then
+            # the picture runs seconds behind (the "delay" on USB capture)
+            return url, "dshow", {"rtbufsize": "64M", "audio_buffer_size": "40"}
         return video, "v4l2", {}
     if key.startswith("lavfi:"):
         return key[6:], "lavfi", {}
@@ -173,6 +178,7 @@ class CaptureInput:
         self.error = ""
         self.mode = ""                # what the device opened as, e.g. "1920x1080 25 fps mjpeg + sound"
         self.in_fps = None            # frames per second really coming from the device
+        self.dropped = 0              # old pictures skipped to stay in time
         self._video = None
         self._frames = collections.deque()
         self._audio = collections.deque()
@@ -230,22 +236,38 @@ class CaptureInput:
                                      (f" {cc.name}" if cc.name else "") + (" + sound" if aus else " (no sound)"))
                     resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE) if aus else None
                     count, t0 = 0, time.time()
+                    gap = 0.9 / float(self.fps)         # keep at most one picture per output frame
+                    kept, behind = -1e9, None            # (time of the last picture kept, clock offset)
+                    self.dropped = 0
                     for packet in c.demux(*[s for s in (vs, aus) if s is not None]):
                         if self._stop.is_set():
                             return
                         for frame in packet.decode():
                             if packet.stream is vs:
+                                now = time.time()
+                                self._last_frame_time = now
+                                count += 1
+                                if now - t0 >= 2:
+                                    self.in_fps = round(count / (now - t0), 1)
+                                    count, t0 = 0, now
+                                # running behind (the PC was busy): skip old pictures until caught up,
+                                # so the delay never builds up
+                                if frame.time is not None:
+                                    off = now - frame.time
+                                    behind = off if behind is None or off < behind else behind + (off - behind) * 0.001
+                                    if off - behind > 0.12:
+                                        self.dropped += 1
+                                        continue
+                                ft = frame.time if frame.time is not None else now
+                                if ft - kept < gap:      # device sends faster than the output uses
+                                    continue
+                                kept = ft
                                 img = frame.reformat(width=self.width, height=self.height, format="bgra",
                                                      interpolation="FAST_BILINEAR").to_ndarray()
                                 with self._lock:
                                     self._frames.append(np.ascontiguousarray(img).reshape(-1))
                                     while len(self._frames) > self.MAX_FRAMES:
                                         self._frames.popleft()
-                                self._last_frame_time = time.time()
-                                count += 1
-                                if time.time() - t0 >= 2:
-                                    self.in_fps = round(count / (time.time() - t0), 1)
-                                    count, t0 = 0, time.time()
                             elif resampler is not None:
                                 for rf in resampler.resample(frame):
                                     self._push_audio(rf.to_ndarray().reshape(-1, CHANNELS).T)

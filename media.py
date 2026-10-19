@@ -11,6 +11,7 @@ from ndi_io import CHANNELS, SAMPLE_RATE
 
 HWACCEL = "auto"   # "auto", "off", or an FFmpeg device type such as d3d11va / cuda / qsv
 _hw_cache = {}
+DECODE = {"gpu": None, "codec": ""}   # how the last clip is being decoded (health page)
 
 
 def _hwaccel():
@@ -28,6 +29,7 @@ def _hwaccel():
         for dev in order:
             if dev in have:
                 accel = HWAccel(device_type=dev, allow_software_fallback=True)
+                DECODE["device"] = dev
                 break
     except Exception:
         accel = None
@@ -131,6 +133,9 @@ class ClipPlayer:
                 if vs is None:
                     raise RuntimeError("no video stream")
                 vs.thread_type = "AUTO"
+                hw = bool(getattr(vs.codec_context, "is_hwaccel", False))
+                DECODE["codec"] = vs.codec_context.name
+                checked = False
                 self._has_audio = aus is not None
                 resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE) if aus else None
                 t0 = None
@@ -147,6 +152,9 @@ class ClipPlayer:
                         return
                     for frame in packet.decode():
                         if packet.stream is vs:
+                            if not checked:            # GPU frames come back as nv12 / p010
+                                checked = True
+                                DECODE["gpu"] = hw and frame.format.name in ("nv12", "p010le", "p016le")
                             t = frame.time if frame.time is not None else 0.0
                             if t0 is None:
                                 t0 = t
@@ -157,7 +165,8 @@ class ClipPlayer:
                             if self.process is not None:
                                 item = (t - t0, self.process(frame))
                             else:
-                                img = frame.reformat(width=self.width, height=self.height, format="bgra").to_ndarray()
+                                img = frame.reformat(width=self.width, height=self.height, format="bgra",
+                                                     interpolation="FAST_BILINEAR").to_ndarray()
                                 item = (t - t0, np.ascontiguousarray(img).reshape(-1))
                             while not self._stop.is_set():
                                 try:

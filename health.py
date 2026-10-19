@@ -181,6 +181,12 @@ class Health:
         if s.get("cpu") is not None:
             cpu, gpu = s["cpu"], s.get("gpu")
             lvl = "bad" if cpu > 92 or (gpu or 0) > 95 else "warn" if cpu > 80 or (gpu or 0) > 85 else "ok"
+            import media as _media
+            dec = _media.DECODE
+            if dec.get("gpu") is not None:
+                add("Video decoding", "ok" if dec["gpu"] else "warn",
+                    f"Clips play on the GPU ({dec.get('device', 'graphics card')}, {dec.get('codec')})" if dec["gpu"]
+                    else f"Clips play on the CPU ({dec.get('codec')}: this graphics card cannot decode it, or GPU decoding is off)")
             add("Computer", lvl, f"CPU {cpu:.0f}%" + (f", GPU {gpu:.0f}%" if gpu is not None else "") +
                 (f", RAM {s['ram']:.0f}%" if s.get("ram") is not None else "") +
                 (f", upload {s['net_up_mbps']:.1f} Mbps" if s.get("net_up_mbps") is not None else ""))
