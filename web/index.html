@@ -219,6 +219,14 @@
   .booktbl input { padding:3px 5px; width:100%; min-width:0; }
   .booktbl td { padding:3px 3px; }
   .bk-ok { color:var(--green); } .bk-low { color:var(--orange); } .bk-over { color:#ff6b5f; }
+  .atrow { display:flex; align-items:center; gap:6px; padding:4px 10px; flex-wrap:wrap; }
+  .atrow .atl { width:34px; font-size:11px; color:var(--dim); font-weight:700; }
+  .atrow button.inp { min-width:58px; padding:6px 8px; }
+  .atrow button.pgm { background:linear-gradient(#f0362a, #b5170e); }
+  .atrow button.pvw { background:linear-gradient(#36c843, #1f8f29); color:#04140a; }
+  .atrow button.pend { outline:2px dashed var(--yellow); outline-offset:-2px; }
+  .ndit td { font-size:12px; vertical-align:middle; }
+  .ndit .use { color:var(--green); font-weight:600; }
   .tcg-prev { width:100%; aspect-ratio:16/9; background:#000; display:block; border:1px solid #333; }
 </style>
 </head>
@@ -330,6 +338,18 @@
       <div class="hint" style="padding:0 10px 8px" id="liveInfo"></div>
     </div>
 
+    <div class="box" id="atemBox" style="display:none">
+      <div class="section-t" style="border-top:0; display:flex; align-items:center; gap:6px">ATEM
+        <span class="hint" id="atSt" style="text-transform:none; letter-spacing:0"></span><span style="flex:1"></span>
+        <button class="sm" onclick="openAtem()" title="ATEM switcher + Sony camera control window">ATEM &amp; Cameras</button></div>
+      <div class="atrow lockable"><span class="atl">PGM</span><span id="atPgm" style="display:contents"></span></div>
+      <div class="atrow lockable"><span class="atl">PVW</span><span id="atPvw" style="display:contents"></span></div>
+      <div class="atrow lockable" style="padding-bottom:8px"><span class="atl"></span>
+        <button class="red" style="min-width:90px" onclick="atemCmd('cut')">CUT</button>
+        <button class="blue" style="min-width:90px" onclick="atemCmd('auto')">AUTO</button>
+        <span class="hint" id="atMsg"></span></div>
+    </div>
+
     <div class="box" id="fnBox">
       <div class="section-t fold" style="border-top:0" onclick="foldFn()" title="Show / hide the Functions buttons">Functions</div>
       <div class="fn">
@@ -342,6 +362,8 @@
         <button id="bFull" onclick="toggleFull()" title="Program output full screen on a display you pick (Esc on that screen closes it)">Full Screen</button>
         <button id="bLock" onclick="toggleLock()">Lock</button>
         <button onclick="openComposerHelp()" title="Open CG Composer to make CGs">CG Composer</button>
+        <button onclick="openAtem()" title="Blackmagic ATEM switcher and Sony camera control (CCU) in their own window">ATEM &amp; Cameras</button>
+        <button class="lockable" onclick="openNdi()" title="NDI sources on the network, Playout's NDI outputs, key an NDI source over the program">NDI</button>
         <button onclick="openReport()" title="Commercials aired per client, as PDF / Excel">Ad Report</button>
         <button class="lockable adminonly" onclick="openSchedule()" title="Playlist for each day, scheduled recordings">Day Schedule</button>
         <button onclick="openHealth()" title="Stream, output, live input, recording, CPU and disk: what is OK and what needs a look">Health</button>
@@ -514,6 +536,8 @@
       <span class="lvDev"></span><span class="lvDev hint">ATEM Mini: video "Blackmagic Design" and its sound device (picked by itself). Set the ATEM to the same frame rate as Playout (ATEM Software Control &gt; Settings &gt; Video standard 1080p25) or the picture judders. Phone Remote &gt; Stream health shows what the device sends.</span>
       <span class="lvUrl">Feed address</span><input class="lvUrl" id="lvUrl" placeholder="srt://0.0.0.0:9000  or  rtmp://0.0.0.0:1935/live/key  or  https://youtube.com/watch?v=...">
       <span class="lvUrl"></span><span class="lvUrl hint">SRT / RTMP with 0.0.0.0 = Playout waits for the sender (vMix, OBS, a phone app) to connect to this PC. Also: srt://other-pc:9000, rtsp://camera, .m3u8 (HLS) links, YouTube / Facebook live links.</span>
+      <span>ATEM camera</span>
+      <span style="display:flex; gap:6px; align-items:center"><select id="lvAtem" style="flex:1"></select><span class="hint">goes on air on the ATEM with this card (ATEM &amp; Cameras &gt; Playout link)</span></span>
       <span></span><span class="hint" id="lvHint">Main vMix input = the NDI source picked on the main screen. Plug in a USB / HDMI capture device (AverMedia, Elgato, Magewell...), press &#10227; and pick it here.</span>
     </div>
     <div class="section-t" style="margin:12px -14px 6px; display:flex; align-items:center">CGs on this live card
@@ -735,6 +759,33 @@
     <div class="hint" style="margin-top:6px">Records the program output with the quality chosen under Recording. No days ticked = every day. A date = that day only.</div>
   </div>
   <div class="foot"><button class="blue" onclick="saveSchedule()">Save</button></div>
+</dialog>
+
+<!-- NDI -->
+<dialog id="dNdi" style="width:min(1000px, 97vw)">
+  <header>NDI <button class="sm" onclick="closeNdi()">Close</button></header>
+  <div class="body">
+    <div class="setsec">Playout's NDI outputs</div>
+    <div class="form">
+      <span>Program output</span>
+      <span style="display:flex; gap:6px; align-items:center; flex-wrap:wrap"><label><input type="checkbox" id="noOn" onchange="ndiOut()"> On</label>
+        <input id="noName" style="flex:1; min-width:180px" maxlength="80" title="The name vMix / OBS / monitors see"><button class="sm" onclick="ndiOut()">Rename</button></span>
+      <span>Clean feed</span><label><input type="checkbox" id="noClean" onchange="ndiOut()"> "<span class="noN"></span> - Clean": the program without CGs, squeeze and stingers, with sound (archive, second channel)</label>
+      <span>Preview</span><label><input type="checkbox" id="noPrev" onchange="ndiOut()"> "<span class="noN"></span> - Preview": what goes on air next (the next live card's source, or the next clip's first picture) for a studio monitor</label>
+      <span>Status</span><span class="hint" id="noSt"></span>
+    </div>
+    <div class="setsec" style="display:flex; align-items:center; gap:8px">NDI sources on the network <span style="flex:1"></span><button class="sm" onclick="ndiLoad()">Refresh</button></div>
+    <table class="ndit" id="nsT"></table>
+    <div class="hint" style="margin-top:6px">Received = frames per second really coming in. Red / green dots: Playout tells the source it is on air / next (cameras and vMix show NDI tally).
+      Sound: pick the channel pair for sources with more than 2 channels. Live cards pick their NDI source under Edit.</div>
+    <div class="setsec">Key over the program (NDI with alpha)</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+      <select id="nkSrc" style="min-width:260px" onchange="ndiKey({source:this.value})"></select>
+      <button id="nkOn" class="red" onclick="ndiKey({on: !NDI.key?.on})">KEY ON AIR</button>
+      <span class="hint" id="nkSt"></span>
+    </div>
+    <div class="hint" style="margin-top:6px">Graphics from another PC (vMix, CasparCG, a titler) sent as NDI with alpha go over the program, above the CGs. A source without alpha covers the whole picture.</div>
+  </div>
 </dialog>
 
 <!-- Settings -->
@@ -974,7 +1025,7 @@ async function poll() {
   const now = new Date(S.now * 1000);
   $('clock').textContent = now.toTimeString().slice(0, 8);
   $('date').textContent = now.toLocaleDateString(undefined, {weekday:'short', day:'numeric', month:'short', year:'numeric'});
-  $('fmt').innerHTML = `${esc(S.format)}<br>NDI out: ${esc(S.output)}`;
+  $('fmt').innerHTML = `${esc(S.format)}<br>NDI out: ${S.ndi_out ? esc(S.output) : 'off'}`;
   const it = S.on_air;
   const isClip = it && it.type === 'clip';
   $('oaTitle').textContent = it ? it.name : S.idle === 'bars' ? 'COLOUR BARS' : 'LIVE';
@@ -1002,7 +1053,7 @@ async function poll() {
   if (S.live_source !== shownSource) fillSources();
   showMaster();
   meters(S.meters);
-  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for}) => ({id, type, name, file, duration, fixed, source: source || '', cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for, atem_input}) => ({id, type, name, file, duration, fixed, source: source || '', atem_input: atem_input || 0, cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
   $('foWarn').classList.toggle('show', !!S.failover?.active);
   if (S.failover?.active) { tally.textContent = 'FILLER'; tally.className = 'tally pause'; }
@@ -1223,12 +1274,12 @@ function openLive(it) {
   $('lvSrc').dataset.want = it ? it.source || '' : '';
   lvCGs = it ? JSON.parse(JSON.stringify(it.cgs || [])) : [];
   $('lvFootAdd').style.display = it ? 'none' : ''; $('lvFootEdit').style.display = it ? '' : 'none';
-  renderCardCG(); loadInputs(false); loadCGFiles(); fillSqSel('lv', it);
+  renderCardCG(); loadInputs(false); loadCGFiles(); fillSqSel('lv', it); fillAtemSel($('lvAtem'), it ? it.atem_input || 0 : 0);
   dLive.showModal();
 }
 function liveFields() {
   let f = $('lvFixed').value; if (f && f.length === 5) f += ':00';
-  return {name:$('lvName').value.trim() || 'LIVE', duration:parseDur($('lvDur').value), fixed:f, source:lvSource(), cgs:lvCGs, ...sqFields('lv')};
+  return {name:$('lvName').value.trim() || 'LIVE', duration:parseDur($('lvDur').value), fixed:f, source:lvSource(), cgs:lvCGs, atem_input:+$('lvAtem').value || 0, ...sqFields('lv')};
 }
 function addLive(where) { const f = liveFields(); dLive.close(); insertAt([{type:'live', ...f}], where); }
 function saveLive() { const it = PL.find(x => x.id === editId); if (it) Object.assign(it, liveFields()); dLive.close(); savePlaylist(); }
@@ -2254,6 +2305,81 @@ async function openComposerHelp() {
   say((r.error ? r.error + '.\n\n' : '') + 'CG Composer is its own app: Start menu > CG Composer (or desktop shortcut).\n\nOpen a CG, key the green screen, set position, then press "Save to Playout". It appears in the CG Library tab here as a .cgp; press + Manual or add it to a live card.');
 }
 
+// ---------------------------------------------------------------- ATEM (the ATEM Switcher app)
+let ATEM = {};
+async function openAtem() {
+  let r = {}; try { r = await api('/api/atem/open', {}); } catch (e) {}
+  if (r.ok && r.window) { $('msg').textContent = 'Opening ATEM & Cameras...'; return; }
+  if (r.ok) { window.open('/atem', 'atem'); return; }
+  say(r.error || 'The ATEM Switcher could not be started');
+}
+async function pollAtem() {
+  try { ATEM = await api('/api/atem'); } catch (e) { return; }
+  const a = ATEM.atem || {}, show = ATEM.linked && a.connected;
+  $('atemBox').style.display = show ? '' : 'none';
+  if (!show) return;
+  $('atSt').textContent = `${a.model || ''} ${a.ip || ''}` + (a.inTransition ? '  (transition)' : '');
+  const row = (kind, cur) => (a.sources || []).map(x => `<button class="inp ${x.id === cur ? kind : ''} ${kind === 'pgm' && x.id === ATEM.pending ? 'pend' : ''}"
+    title="${esc(x.longName || '')}" onclick="atemCmd('${kind === 'pgm' ? 'program' : 'preview'}', ${x.id})">${esc(x.label)}</button>`).join('');
+  const key = JSON.stringify([a.sources, a.program, a.preview, ATEM.pending]);
+  if ($('atemBox').dataset.k !== key) { $('atPgm').innerHTML = row('pgm', a.program); $('atPvw').innerHTML = row('pvw', a.preview); $('atemBox').dataset.k = key; }
+  $('atMsg').textContent = ATEM.error || (ATEM.last_switch ? 'Last: ' + ATEM.last_switch : '');
+}
+async function atemCmd(cmd, input) {
+  const r = await fetch('/api/atem/cmd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd, input})}).then(x => x.json()).catch(() => ({}));
+  if (!r.ok) $('atMsg').textContent = r.error || 'ATEM did not answer';
+  pollAtem();
+}
+function fillAtemSel(sel, v) {
+  const src = ATEM.atem?.sources || [];
+  sel.innerHTML = '<option value="0">(none: do not switch the ATEM)</option>' + src.map(x => `<option value="${x.id}">${x.id}: ${esc(x.label)}</option>`).join('')
+    + (v && !src.some(x => x.id === v) ? `<option value="${v}">ATEM input ${v}</option>` : '');
+  sel.value = String(v || 0);
+}
+
+// ---------------------------------------------------------------- NDI panel
+let NDI = {}, ndiTimer = null;
+async function openNdi() { await ndiLoad(true); dNdi.showModal(); clearInterval(ndiTimer); ndiTimer = setInterval(() => ndiLoad(false), 2000); }
+function closeNdi() { clearInterval(ndiTimer); dNdi.close(); }
+async function ndiLoad(fill) {
+  try { NDI = await api('/api/ndi'); } catch (e) { return; }
+  const o = NDI.outputs;
+  if (fill || document.activeElement !== $('noName')) $('noName').value = o.name;
+  $('noOn').checked = o.enabled; $('noClean').checked = !!o.clean; $('noPrev').checked = !!o.preview;
+  document.querySelectorAll('.noN').forEach(e => e.textContent = o.name);
+  const st = [];
+  if (o.program) st.push(`Program: ${o.program.connections ?? '?'} receiver(s)` + (o.program.tally?.[0] ? ', ON AIR on a mixer' : o.program.tally?.[1] ? ', on preview on a mixer' : ''));
+  else st.push('Program output is OFF: vMix / OBS / monitors do not get Playout');
+  for (const k of ['clean', 'preview']) if (o[k]) st.push(`${k[0].toUpperCase() + k.slice(1)}: ${o[k].connections ?? '?'} receiver(s)` + (o[k].error ? ' - ' + o[k].error : ''));
+  $('noSt').textContent = st.join('   |   ');
+  const used = {}; (NDI.inputs || []).forEach(i => { (used[i.source] = used[i.source] || []).push(i); });
+  const names = [...new Set([...(NDI.sources || []).map(x => x.name), ...Object.keys(used)])];
+  const host = n => (NDI.sources || []).find(x => x.name === n);
+  $('nsT').innerHTML = '<tr><th>Source</th><th>PC</th><th>Used for</th><th>Format</th><th>Received</th><th>Sound</th><th></th></tr>' + (names.map(n => {
+    const u = used[n] || [], i = u[0], f = i?.format || {}, h = host(n);
+    const fmt = f.width ? `${f.width}x${f.height} ${f.fps ? f.fps + ' fps' : ''} ${f.fourcc || ''}${f.alpha ? ' + alpha' : ''}` : (i ? (i.connected ? 'waiting for pictures' : 'connecting...') : '');
+    const rec = i ? (i.connected ? `${i.in_fps ?? '-'} fps` + (i.dropped ? `, ${i.dropped} dropped` : '') : (h ? 'not connected' : 'source gone')) : '';
+    const tally = i ? `<span class="dot ${i.tally?.[0] ? 'bad' : i.tally?.[1] ? 'ok' : ''}" style="display:inline-block; vertical-align:-1px" title="tally"></span> ` : '';
+    const ch = f.channels || 2, pair = NDI.audio_pairs?.[n] || 0;
+    const pairs = Array.from({length: Math.max(1, Math.ceil(Math.max(ch, 2 * (pair + 1)) / 2))}, (_, k) => `<option value="${k}" ${k === pair ? 'selected' : ''}>Ch ${2 * k + 1}-${2 * k + 2}</option>`).join('');
+    const main = S.live_source === n;
+    return `<tr><td>${tally}${esc(n)}${h ? '' : ' <span class="hint">(offline)</span>'}</td><td class="hint">${esc(h?.host || '')}</td>
+      <td class="use">${esc(u.map(x => x.use).join(', '))}</td><td class="mono">${esc(fmt)}</td><td class="mono">${esc(rec)}</td>
+      <td>${i ? `<select onchange="ndiPair('${esc(n)}', this.value)" title="${f.channels ? f.channels + ' channels' : ''}">${pairs}</select>` : ''}</td>
+      <td style="text-align:right">${main ? `<button class="sm" onclick="ndiMain('')">Disconnect</button>` : `<button class="sm" onclick="ndiMain('${esc(n)}')" title="Make it the main live input">Use as main input</button>`}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="hint">No NDI source found. Turn on NDI in vMix / OBS / the camera, check it is on the same network, press Refresh.</td></tr>');
+  const k = NDI.key || {};
+  const opts = ['<option value="">(no key source)</option>', ...names.filter(n => n !== S.live_source).map(n => `<option ${n === k.source ? 'selected' : ''}>${esc(n)}</option>`)];
+  if (document.activeElement !== $('nkSrc')) { $('nkSrc').innerHTML = opts.join(''); $('nkSrc').value = k.source || ''; }
+  $('nkOn').textContent = k.on ? 'KEY OFF' : 'KEY ON AIR'; $('nkOn').classList.toggle('on', !!k.on); $('nkOn').disabled = !k.source;
+  const kf = k.input?.format || {};
+  $('nkSt').textContent = !k.source ? '' : (k.on ? 'ON AIR. ' : 'Off air. ') + (k.input?.connected ? (kf.width ? `${kf.width}x${kf.height}` + (kf.alpha ? ' with alpha' : ' - NO alpha: covers the whole picture') : 'connected') : 'not connected');
+}
+const ndiOut = () => api('/api/ndi/output', {enabled:$('noOn').checked, name:$('noName').value.trim(), clean:$('noClean').checked, preview:$('noPrev').checked}).then(r => { if (r.error) say(r.error); ndiLoad(true); });
+const ndiKey = b => api('/api/ndi/key', b).then(() => ndiLoad(false));
+const ndiPair = (source, pair) => api('/api/ndi/audio', {source, pair:+pair}).then(() => ndiLoad(false));
+const ndiMain = name => api('/api/live_source', {name}).then(() => { poll(); setTimeout(() => ndiLoad(false), 500); });
+
 // Facebook ends a live video after 8 hours: count down and warn 30, 10 and 5 minutes before
 const FB_LIMIT = 8 * 3600;
 let fbWarned = {};
@@ -2354,6 +2480,7 @@ pollAO(); setInterval(() => pollAO(), 5000);
 pollCG(); setInterval(pollCG, 500);
 pollUpdate(); setInterval(() => pollUpdate(), 3000);
 pollExtra(); setInterval(pollExtra, 2000);
+pollAtem(); setInterval(pollAtem, 700);
 api('/api/settings').then(r => { NORM = r.audio; }).catch(() => {});
 </script>
 </body>

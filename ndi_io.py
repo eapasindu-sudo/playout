@@ -25,6 +25,17 @@ class SourceFinder:
         self.finder.update_sources()
         return sorted(self.finder.get_source_names())
 
+    def details(self):
+        """[{name, host, stream}] of every source found on the network (NDI Sources panel)."""
+        self.finder.update_sources()
+        out = []
+        for src in list(self.finder.iter_sources()):
+            try:
+                out.append({"name": src.name, "host": src.host_name, "stream": src.stream_name})
+            except Exception:
+                out.append({"name": src.name, "host": "", "stream": ""})
+        return sorted(out, key=lambda d: d["name"].lower())
+
     def get(self, name):
         self.finder.update_sources()
         if name in self.finder.get_source_names():
@@ -52,6 +63,16 @@ class LiveInput:
         self.audio = None
         self._lock = threading.Lock()
         self._last_try = 0.0
+        self.tally = (False, False)      # (program, preview) we want the source to show
+        self._sent_tally = None
+        self.audio_pair = 0              # which channel pair to take: 0 = 1-2, 1 = 3-4, ...
+        self.keep_alpha = False          # True: hand the alpha channel on (NDI key overlay)
+        # what the source sends (NDI Sources panel / health): filled while frames come in
+        self.fmt = {}
+        self.in_fps = None
+        self.dropped = 0
+        self._stat_t = 0.0
+        self._stat_total = None
 
     def set_source(self, name):
         with self._lock:
@@ -66,6 +87,8 @@ class LiveInput:
             except Exception:
                 pass
         self.receiver = None
+        self._sent_tally = None
+        self.fmt, self.in_fps, self._stat_total = {}, None, None
 
     def _ensure(self):
         if self.receiver is not None or not self.source_name:
@@ -110,6 +133,7 @@ class LiveInput:
                 fs = r.frame_sync
                 fs.capture_video()
                 fs.capture_audio(n_samples)
+                self._stats(r)
                 video = None
                 w, h = self.video.get_resolution()
                 if want_video and w > 0 and h > 0:
@@ -117,10 +141,62 @@ class LiveInput:
                     if (w, h) != (self.width, self.height):
                         arr = resize_bgra(arr.reshape(h, w, 4), self.width, self.height)
                     video = arr.reshape(-1)
-                audio = fit_audio(self.audio.get_array(), n_samples)
+                    if not self.keep_alpha and self.fmt.get("alpha"):
+                        video = video.copy()
+                        video[3::4] = 255           # a source with alpha goes on air full screen, opaque
+                audio = fit_audio(pick_pair(self.audio.get_array(), self.audio_pair), n_samples)
                 return video, audio
             except Exception:
                 return None, None
+
+    def set_tally(self, program, preview):
+        """Red / green tally light on the source (cameras and vMix inputs that show NDI tally).
+        Sent at once, also to a source that is not being pulled (a live card that is only next)."""
+        self.tally = (bool(program), bool(preview))
+        if self.tally == self._sent_tally:
+            return
+        with self._lock:
+            r = self.receiver
+            if r is not None:
+                self._send_tally(r)
+
+    def _send_tally(self, r):
+        try:
+            r.set_source_tally_program(self.tally[0])
+            r.set_source_tally_preview(self.tally[1])
+            self._sent_tally = self.tally
+        except Exception:
+            pass
+
+    def _stats(self, r):
+        """Format, frames per second really received and dropped frames, about once a second."""
+        if self.tally != self._sent_tally:
+            self._send_tally(r)
+        now = time.monotonic()
+        if now - self._stat_t < 1.0:
+            return
+        try:
+            w, h = self.video.get_resolution()
+            fourcc = self.video.get_fourcc()
+            name = getattr(fourcc, "name", str(fourcc))
+            rate = self.video.get_frame_rate()
+            self.fmt = {"width": w, "height": h, "fps": round(float(rate), 3) if rate else None,
+                        "fourcc": name, "alpha": name in ("BGRA", "RGBA", "UYVA", "PA16"),
+                        "channels": self.audio.num_channels, "sample_rate": self.audio.sample_rate}
+            perf = r.get_performance_data()["video"]
+            total = perf["frames_total"]
+            if self._stat_total is not None and now > self._stat_t:
+                self.in_fps = round((total - self._stat_total) / (now - self._stat_t), 1)
+            self._stat_total = total
+            self.dropped = perf["frames_dropped"]
+        except Exception:
+            pass
+        self._stat_t = now
+
+    def info(self):
+        return {"source": self.source_name, "connected": self.connected, "format": dict(self.fmt),
+                "in_fps": self.in_fps, "dropped": self.dropped, "tally": list(self.tally),
+                "audio_pair": self.audio_pair}
 
     def close(self):
         with self._lock:
@@ -132,6 +208,13 @@ def resize_bgra(img, width, height):
     import av
     frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(img), format="bgra")
     return frame.reformat(width=width, height=height).to_ndarray()
+
+
+def pick_pair(a, pair):
+    """Channels 2*pair+1 and 2*pair+2 of a multi-channel source (e.g. 3-4 of an 8 channel feed)."""
+    if not pair or a is None or a.ndim != 2 or a.shape[0] <= 2 * pair:
+        return a
+    return a[2 * pair:2 * pair + 2]
 
 
 def fit_audio(a, n_samples):
@@ -152,7 +235,8 @@ def fit_audio(a, n_samples):
 class NDIOutput:
     """The playout's program output as an NDI source. The engine's loop keeps the frame rate itself."""
 
-    def __init__(self, name, width, height, fps: Fraction):
+    def __init__(self, name, width, height, fps: Fraction, max_samples=None):
+        self.name = name
         self.sender = Sender(name, clock_video=False, clock_audio=False)
         vf = VideoSendFrame()
         vf.set_resolution(width, height)
@@ -162,12 +246,27 @@ class NDIOutput:
         af = AudioSendFrame()
         af.sample_rate = SAMPLE_RATE
         af.num_channels = CHANNELS
-        af.set_max_num_samples(int(SAMPLE_RATE / float(fps)) + 8)
+        af.set_max_num_samples(max_samples or int(SAMPLE_RATE / float(fps)) + 8)
         self.sender.set_audio_frame(af)
         self.sender.open()
 
     def send(self, video, audio):
         self.sender.write_video_and_audio(video, audio)
+
+    def connections(self):
+        """How many receivers (vMix, OBS, a monitor) are watching this output."""
+        try:
+            return int(self.sender.get_num_connections(0))
+        except Exception:
+            return None
+
+    def tally(self):
+        """(program, preview): a receiver has this output on air / on preview."""
+        try:
+            self.sender.update_tally(0)
+            return bool(self.sender.program_tally), bool(self.sender.preview_tally)
+        except Exception:
+            return False, False
 
     def close(self):
         self.sender.close()
