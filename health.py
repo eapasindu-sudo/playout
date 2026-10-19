@@ -190,6 +190,11 @@ class Health:
                     f"Clips play on the GPU ({dec.get('device', 'graphics card')}, {dec.get('codec')})" if dec["gpu"]
                     else f"Clips play on the CPU ({dec.get('codec')}: this graphics card cannot decode it, or GPU decoding is off)")
             import gpudriver as _d
+            import gpu as _gpu
+            if any(c.get("vendor") == "NVIDIA" and c.get("ok") for c in _d.STATE.get("cards") or []) and "h264_nvenc" in _gpu._tested \
+                    and not _gpu._tested["h264_nvenc"]:
+                add("NVIDIA encoder", "bad", "Not working, so streaming / recording use the CPU: " +
+                    (_gpu.ERRORS.get("h264_nvenc") or "did not open") + ". Update the NVIDIA driver (Settings > Output > Maker's driver page)")
             if _d.STATE.get("missing"):
                 add("Graphics driver", "warn", "No graphics card driver: " + ", ".join(c["name"] for c in _d.STATE["cards"]) +
                     ". Settings > Output > Install graphics driver")
