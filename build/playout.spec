@@ -16,7 +16,7 @@ hidden += ["app", "engine", "streamer", "scheduler", "store", "media", "ndi_io",
            "capture", "cg", "system", "audio_out", "psutil", "cgfx", "cgedit", "composer", "recorder",
            "loudness", "gpu", "textlooks", "audiofx", "framequeue", "report", "importer", "updater", "version",
            "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon", "certs",
-           "ndi_extra", "atem_link", "atemwin"]
+           "ndi_extra", "atem_link", "atemwin", "webcg"]
 
 import glob, os
 datas += [(os.path.join(SPECPATH, n), ".") for n in ("endora-cgcomposer.ico", "endora-playout.ico")]   # window icons

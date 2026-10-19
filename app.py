@@ -21,6 +21,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import certs  # noqa: F401  (HTTPS certificates from the Windows store)
 import gpu
+import webcg
 from audio_out import AudioOut
 from recorder import Recorder
 from capture import DeviceWatch, default_shown
@@ -58,7 +59,7 @@ ROOT = paths.user_home()      # config, media, playlists, logs
 BUNDLE = paths.bundle_dir()   # the control screen page
 
 DEFAULT_CONFIG = {
-    "output_name": "PLAYOUT PGM", "live_source": "", "width": 1920, "height": 1080, "fps": "25",
+    "output_name": "ENDORA PLAYOUT FINAL", "live_source": "", "width": 1920, "height": 1080, "fps": "25",
     "web_port": 8080, "media_dir": "media", "data_dir": "data", "log_dir": "logs", "cg_dir": "cg",
     "stream": {"width": 1920, "height": 1080, "video_kbps": 4500, "audio_kbps": 128,
                "encoder": "auto", "preset": "veryfast", "ffmpeg_path": ""},
@@ -97,10 +98,13 @@ def save_output_format(res, fps):
         json.dump(raw, f, indent=2)
     os.replace(tmp, path)
     return raw
+webcg.BROWSER = cfg.get("web_browser") or None    # Edge / Chrome for web overlays (found by itself when unset)
 media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
 store = Store(cfg["data_dir"])
 if (store.data.get("ndi") or {}).get("name"):
     cfg["output_name"] = store.data["ndi"]["name"]     # renamed in the NDI Sources panel
+elif cfg.get("output_name") in (None, "", "PLAYOUT PGM"):
+    cfg["output_name"] = "ENDORA PLAYOUT FINAL"        # the final program (with CGs and overlays) on NDI
 engine = Engine(cfg, cfg["media_dir"], cfg["log_dir"])
 atem = AtemLink(engine.asrun, cfg.get("atem_switcher") or None)
 engine.listeners.append(atem.on_air)
@@ -255,7 +259,7 @@ def guard():
     return redirect("/login?next=" + path)
 
 
-AUDIT_SKIP = ("/api/login", "/api/cgfx/render", "/api/admin_check", "/api/textcg/render", "/api/update/check",
+AUDIT_SKIP = ("/api/login", "/api/cgfx/render", "/api/webcg/snapshot", "/api/admin_check", "/api/textcg/render", "/api/update/check",
               "/api/alerts/find_chat", "/api/sdi/devices")
 
 
@@ -1660,9 +1664,34 @@ def cg_manual_action(cid, action):
         err = r if isinstance(r, str) else None
     elif action == "out":
         cgm.take_out(cid)
+    elif action == "reload":
+        cgm.reload(cid)
     else:
         abort(404)
     return jsonify(error=err, **cgm.status())
+
+
+@app.post("/api/webcg/snapshot")
+def webcg_snapshot():
+    """Picture of a web overlay link over the program (PNG), for the web overlay dialog."""
+    b = request.get_json(silent=True) or {}
+    url = str(b.get("url") or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return jsonify(error="Paste the overlay link (it starts with http:// or https://)"), 400
+    W, H = engine.width, engine.height
+    pw, ph = int(b.get("page_w") or 0) or W, int(b.get("page_h") or 0) or H
+    page, err = webcg.snapshot(url, pw, ph)
+    zoom = max(1, float(b.get("zoom") or 100)) / 100.0
+    if abs(zoom - 1) > 0.001:
+        page = page.resize((max(1, round(pw * zoom)), max(1, round(ph * zoom))), Image.BILINEAR)
+    canvas = Image.fromarray(np.asarray(engine.last_frame).reshape(H, W, 4)[..., [2, 1, 0, 3]].copy(), "RGBA")
+    canvas.putalpha(255)
+    canvas.alpha_composite(page, (max(0, int(b.get("x") or 0)), max(0, int(b.get("y") or 0))))
+    out_w = max(160, min(W, int(b.get("w") or 960)))
+    im = canvas.convert("RGB").resize((out_w, round(H * out_w / W)), Image.BILINEAR)
+    buf = io.BytesIO()
+    im.save(buf, "PNG", compress_level=1)
+    return Response(buf.getvalue(), mimetype="image/png", headers={"X-Error": err.encode("ascii", "replace").decode()})
 
 
 @app.post("/api/cg/all_out")
@@ -1817,6 +1846,7 @@ def _watchdog():
 
 def shutdown():
     planner.stop()
+    webcg.close_all()
     sdi.stop()
     try:
         os.remove(RUN_FLAG)

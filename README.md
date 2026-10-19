@@ -2,11 +2,11 @@
 
 A playout server in the style of AxelTech XPlayout. It runs a **playlist** of
 **commercials** and **live cards**. A live card puts the vMix NDI output on air. The
-finished program goes out over NDI (**PLAYOUT PGM**) and to **3 live stream
+finished program goes out over NDI (**ENDORA PLAYOUT FINAL**) and to **3 live stream
 destinations** (Facebook, YouTube or any RTMP/RTMPS server) at the same time.
 
 ```
-vMix --NDI--> Playout --NDI "PLAYOUT PGM"--> anything that takes NDI
+vMix --NDI--> Playout --NDI "ENDORA PLAYOUT FINAL"--> anything that takes NDI
                  |  \--RTMPS--> Facebook Page
  commercials ----+   \--RTMPS--> Facebook Group / 2nd page
  (media folder)       \--RTMP--> YouTube / custom
@@ -398,7 +398,7 @@ settings shows which encoder is in use. Choose **CPU (x264)** there to force the
 **Functions > NDI** shows everything NDI in one place:
 
 - **Playout's NDI outputs.** The program output can be turned on or off and renamed (the name vMix / OBS /
-  monitors see; default `PLAYOUT PGM`). Two extra outputs can be turned on:
+  monitors see; default `ENDORA PLAYOUT FINAL`). Two extra outputs can be turned on:
   - **`<name> - Clean`**: the program without CGs, squeeze, comments and stingers, with sound (for an
     archive recorder or a second channel).
   - **`<name> - Preview`**: what goes on air next: the next live card's source as it is now, or the first
@@ -416,6 +416,19 @@ settings shows which encoder is in use. Choose **CPU (x264)** there to force the
 
 Health (and the phone health page) shows each NDI input: not connected, no pictures coming in, a source at a
 different frame rate from the output, dropped frames, and a warning while the program NDI output is off.
+
+## Scoreboard / overlay link (web overlay CG)
+
+**Manual CG > + Scoreboard link**: paste the overlay link of a cricket scoreboard (or any browser-source
+overlay made for OBS / vMix) and Save. It is a manual CG like the others: **IN** / **OUT** puts it on and off
+air, **Reload** loads the page again, **Edit** changes the link, position and size. The page keeps updating
+the score by itself. It goes out on everything Playout sends: the NDI **ENDORA PLAYOUT FINAL**, SDI / HDMI
+(for example into an ATEM input, where it shows on the ATEM's preview / multiview and goes on air with that
+input), streams and recordings.
+
+The page is drawn by the Microsoft Edge that comes with Windows (or Google Chrome), started hidden by Playout;
+set `"web_browser"` in config.json to use another one. The page's background must be see-through, which
+overlay links are. The page is kept loaded while the CG is off air, so IN shows the current score at once.
 
 ## ATEM & Cameras (Blackmagic ATEM + Sony camera control)
 
