@@ -49,6 +49,10 @@ Clips and video CGs are decoded on the graphics card when the PC has one (D3D11 
 which keeps CPU use down. Set `"hwaccel": "off"` in `config.json` to decode on the CPU. Use a GPU
 encoder under **Quality** for streaming as well (NVENC / Quick Sync / AMF).
 
+CGs (PNG, video CGs, text, scoreboard links) are blended over the program on the graphics card too
+(OpenGL 3.3). The health page shows "CG blending" on the GPU or the CPU. Set `"cg_gpu": "off"` in
+`config.json` to blend on the CPU.
+
 ### How items play
 - A **commercial** plays its file, then the next item starts. The next clip is loaded
   ahead of time, so cuts are frame-accurate with no black or live flash in between.
