@@ -162,12 +162,14 @@ def measure(ffmpeg, path):
         info = _probe(path)
     except Exception:
         info = {"w": 0, "h": 0, "fps": 0.0, "interlaced": False, "audio": 0, "duration": 0.0}
-    cmd = [ffmpeg, "-hide_banner", "-nostats", "-threads", "2", "-i", path, "-sn", "-dn"]
+    cmd = [ffmpeg, "-hide_banner", "-nostats", "-filter_threads", "1"]
     if info["w"] and not info.get("still"):
-        # small picture: the black check does not need full size, and this keeps it fast
-        cmd += ["-vf", "scale=320:-2,blackdetect=d=1:pix_th=0.10"]
+        # the picture is decoded on the graphics card when there is one (one CPU thread otherwise), and only
+        # 5 small pictures a second are checked for black: the check stays light while something plays
+        cmd += ["-hwaccel", "auto", "-threads", "1", "-i", path, "-sn", "-dn",
+                "-vf", "fps=5,scale=320:-2,blackdetect=d=1:pix_th=0.10"]
     else:
-        cmd += ["-vn"]
+        cmd += ["-threads", "1", "-i", path, "-sn", "-dn", "-vn"]
     cmd += ["-af", "ebur128=peak=true:framelog=quiet,silencedetect=n=-50dB:d=3", "-f", "null", "-"]
     p = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=1800, creationflags=flags)
     out = p.stderr
