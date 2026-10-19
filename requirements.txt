@@ -14,3 +14,4 @@ yt-dlp>=2024.1
 truststore>=0.9
 certifi>=2024.2
 websocket-client>=1.7
+moderngl>=5.8

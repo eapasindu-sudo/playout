@@ -21,6 +21,8 @@ import av
 import numpy as np
 from PIL import Image
 
+import gpucg
+
 from cgfx import FxGraph, render_still
 from textcg import TextLayer
 from media import ClipPlayer, open_video, probe
@@ -704,7 +706,15 @@ class CGManager:
             self._warm_all()
         if not jobs:
             return frame_flat if base is None else base.reshape(-1)
-        out = np.array(frame_flat, copy=True).reshape(self.height, self.width, 4) if base is None else base
+        src = np.asarray(frame_flat).reshape(self.height, self.width, 4) if base is None else base
+        gl = gpucg.compositor()
+        if gl is not None:
+            try:
+                return gl.render(src, [(img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
+                                       for layer, (img, opacity, (dx, dy)) in jobs]).reshape(-1)
+            except Exception as e:
+                gpucg.failed(e)
+        out = np.array(src, copy=True) if base is None else base
         for layer, (img, opacity, (dx, dy)) in jobs:
             composite(out, img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
         return out.reshape(-1)

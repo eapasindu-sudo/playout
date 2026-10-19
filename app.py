@@ -99,6 +99,8 @@ def save_output_format(res, fps):
     os.replace(tmp, path)
     return raw
 webcg.BROWSER = cfg.get("web_browser") or None    # Edge / Chrome for web overlays (found by itself when unset)
+import gpucg
+gpucg.MODE = cfg.get("cg_gpu", "auto")   # CG blending on the graphics card: auto / off
 media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
 store = Store(cfg["data_dir"])
 if (store.data.get("ndi") or {}).get("name"):
@@ -121,6 +123,8 @@ def _usb_added(names):
 
 
 usb.on_added = _usb_added
+import capture as capture_mod
+capture_mod.FORMATS.update(store.data.get("usb_format") or {})   # picture formats picked per USB device
 cgm = CGManager(cfg["cg_dir"], engine.width, engine.height, engine.fps)
 engine.cg = cgm
 sysmon = SystemMonitor()
@@ -1469,6 +1473,95 @@ def inputs():
     return jsonify(ndi=ndi, devices=devs, main=engine.live.source_name, changed=usb.changed)
 
 
+def _match_info(f):
+    """Can Playout's own output be set to this picture format? (size name, frame rate) or None."""
+    res = next((k for k, v in OUTPUT_SIZES.items() if v == (int(f["w"]), int(f["h"]))), None)
+    fps = next((r for r in OUTPUT_RATES if abs(float(r) - float(f["fps"])) < 0.01), None)
+    return (res, fps) if res and fps else None
+
+
+def _fmt_label(f):
+    return f"{f['w']}x{f['h']} {float(f['fps']):g} fps" + (" MJPEG" if f.get("codec") == "mjpeg" else "")
+
+
+@app.get("/api/gpu_driver")
+def gpu_driver_info():
+    import gpudriver
+    if request.args.get("check") or not gpudriver.STATE["checked"]:
+        gpudriver.check()
+    return jsonify(gpudriver.STATE)
+
+
+@app.post("/api/gpu_driver/install")
+def gpu_driver_install():
+    """Install the graphics card driver from Windows Update (Windows asks to allow it)."""
+    import gpudriver
+    return jsonify(gpudriver.install())
+
+
+@app.post("/api/gpu_driver/page")
+def gpu_driver_page():
+    """Open the card maker's driver download page in the web browser."""
+    import gpudriver, webbrowser
+    url = next((c["url"] for c in gpudriver.STATE["cards"] if c["url"]), "")
+    if not url:
+        return jsonify(error="Graphics card maker not known: open Windows Update > Advanced options > Optional updates"), 400
+    webbrowser.open(url)
+    return jsonify(ok=True, url=url)
+
+
+@app.get("/api/usb/formats")
+def usb_formats():
+    """The picture formats of a USB device, what it sends by itself, and what is picked in Playout."""
+    name = request.args.get("name", "")
+    fmts = capture_mod.device_formats(name, streamer.ffmpeg, fresh=bool(request.args.get("fresh")))
+    native = capture_mod.native_format(fmts)
+    chosen = capture_mod.FORMATS.get(name)
+    used = chosen or native
+    mode = ""
+    for inp in [engine.live.dev, *engine.inputs.values()]:
+        if inp is not None and getattr(inp, "key", "").startswith("dev:") and inp.key[4:].partition("|")[0] == name:
+            mode = getattr(inp, "mode", "")
+    m = _match_info(used) if used else None
+    out = _output_info()
+    return jsonify(formats=[dict(f, label=_fmt_label(f)) for f in fmts], native=dict(native, label=_fmt_label(native)) if native else None,
+                   chosen=chosen, mode=mode, output=out,
+                   output_same=bool(m and (m[0], m[1]) == (out["resolution"], out["fps"])),
+                   can_match=bool(m))
+
+
+@app.post("/api/usb/format")
+def usb_format():
+    """Pick a USB device's picture format (format null = what the device sends by itself), and with
+    match_output also make Playout's output the same size / frame rate (from the next start)."""
+    b = request.get_json(silent=True) or {}
+    name = str(b.get("name") or "")[:200]
+    if not name:
+        return jsonify(error="no device"), 400
+    f = b.get("format")
+    if "format" in b:
+        if f:
+            try:
+                f = {"w": int(f["w"]), "h": int(f["h"]), "fps": float(f["fps"]), "codec": str(f.get("codec") or ""), "pix": str(f.get("pix") or "")}
+            except (KeyError, TypeError, ValueError):
+                return jsonify(error="bad format"), 400
+            capture_mod.FORMATS[name] = f
+        else:
+            capture_mod.FORMATS.pop(name, None)
+        store.set(usb_format=dict(capture_mod.FORMATS))
+        engine.reopen_device(name)
+    if b.get("match_output"):
+        used = capture_mod.FORMATS.get(name) or capture_mod.native_format(capture_mod.device_formats(name, streamer.ffmpeg))
+        m = _match_info(used) if used else None
+        if not m:
+            return jsonify(error="Playout output cannot be set to this format (sizes: 720p, 1080p, 4K)"), 400
+        try:
+            save_output_format(*m)
+        except OSError as e:
+            return jsonify(error=f"Could not save config.json: {e}"), 400
+    return jsonify(ok=True, output=_output_info())
+
+
 # ---- CG ----------------------------------------------------------------
 @app.get("/api/cg/files")
 def cg_files():
@@ -1802,6 +1895,8 @@ def start_backend():
     health.start()
     usb.start()
     threading.Thread(target=gpu.best, daemon=True, name="gpu check").start()   # find the GPU encoder now
+    import gpudriver
+    threading.Thread(target=gpudriver.check, daemon=True, name="gpu driver check").start()   # graphics card driver installed?
     sd = store.data.get("sdi") or {}
     sdi.configure(sd.get("enabled"), sd.get("device"), sd.get("ffmpeg"))
     if crashed:

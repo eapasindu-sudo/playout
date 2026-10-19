@@ -187,6 +187,15 @@ class Health:
                 add("Video decoding", "ok" if dec["gpu"] else "warn",
                     f"Clips play on the GPU ({dec.get('device', 'graphics card')}, {dec.get('codec')})" if dec["gpu"]
                     else f"Clips play on the CPU ({dec.get('codec')}: this graphics card cannot decode it, or GPU decoding is off)")
+            import gpudriver as _d
+            if _d.STATE.get("missing"):
+                add("Graphics driver", "warn", "No graphics card driver: " + ", ".join(c["name"] for c in _d.STATE["cards"]) +
+                    ". Settings > Output > Install graphics driver")
+            import gpucg as _g
+            if _g.STATE.get("gpu") is not None:
+                add("CG blending", "ok" if _g.STATE["gpu"] else "warn",
+                    f"CGs are drawn on the GPU ({_g.STATE['renderer']})" if _g.STATE["gpu"]
+                    else f"CGs are drawn on the CPU ({_g.STATE['error'] or 'turned off'})")
             add("Computer", lvl, f"CPU {cpu:.0f}%" + (f", GPU {gpu:.0f}%" if gpu is not None else "") +
                 (f", RAM {s['ram']:.0f}%" if s.get("ram") is not None else "") +
                 (f", upload {s['net_up_mbps']:.1f} Mbps" if s.get("net_up_mbps") is not None else ""))

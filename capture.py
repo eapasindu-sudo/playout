@@ -114,6 +114,66 @@ class DeviceWatch:
             return list(self.devices)
 
 
+STD_RATES = (23.976, 24, 25, 29.97, 30, 50, 59.94, 60)
+FORMATS = {}          # video device name -> picture format picked in Playout ({w, h, fps, codec}); none = the device's own
+_formats_cache = {}
+
+
+def _std_rate(f):
+    """30.0003 -> 30, 29.97 -> 29.97 (dshow reports frame rates a little off)."""
+    return min(STD_RATES, key=lambda r: abs(r - f)) if any(abs(r - f) < 0.05 for r in STD_RATES) else round(f, 3)
+
+
+def parse_dshow_options(text):
+    """The formats in `ffmpeg -list_options true -f dshow` output: [{w, h, fps, codec}], biggest / fastest first."""
+    out = []
+    for line in text.splitlines():
+        m = re.search(r"(vcodec|pixel_format)=(\S+)\s+min s=(\d+)x(\d+) fps=([\d.]+)\s+max s=(\d+)x(\d+) fps=([\d.]+)", line)
+        if not m:
+            continue
+        kind, codec = m.group(1), m.group(2)
+        w, h, fps = int(m.group(6)), int(m.group(7)), _std_rate(float(m.group(8)))
+        f = {"w": w, "h": h, "fps": fps, "codec": codec if kind == "vcodec" else "raw", "pix": codec if kind == "pixel_format" else ""}
+        if f not in out:
+            out.append(f)
+    out.sort(key=lambda f: (-f["w"] * f["h"], -f["fps"], f["codec"] == "mjpeg"))
+    return out
+
+
+def device_formats(name, ffmpeg=None, fresh=False):
+    """Picture formats a USB capture device can send (Windows), [] when they cannot be read."""
+    if sys.platform != "win32" or not name:
+        return []
+    if not fresh and name in _formats_cache:
+        return _formats_cache[name]
+    try:
+        r = subprocess.run([ffmpeg or _ffmpeg(), "-hide_banner", "-list_options", "true", "-f", "dshow", "-i", f"video={name}"],
+                           capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+        found = parse_dshow_options(r.stderr)
+    except Exception:
+        found = []
+    if found:
+        _formats_cache[name] = found
+    return found
+
+
+def native_format(formats):
+    """What the device sends by itself: the biggest picture at its fastest rate (an ATEM in USB mode offers
+    only its own video standard, e.g. 1920x1080 at 25 fps)."""
+    good = [f for f in formats if f["fps"] <= 60.5] or formats
+    return good[0] if good else None
+
+
+def format_options(f):
+    o = {"video_size": f"{f['w']}x{f['h']}", "framerate": f"{float(f['fps']):g}"}
+    if f.get("codec") == "raw":
+        if f.get("pix"):
+            o["pixel_format"] = f["pix"]
+    elif f.get("codec"):
+        o["vcodec"] = f["codec"]
+    return o
+
+
 def device_modes(width, height, fps, name=""):
     """Capture formats to ask a USB device for, best first. Many cheap USB HDMI grabbers give 1080p only at
     5 fps uncompressed but 25 / 30 / 60 fps as MJPEG, so MJPEG is asked for first; the ATEM Mini (and other
@@ -210,8 +270,12 @@ class CaptureInput:
         video, _, audio = self.key[4:].partition("|")
         urls = [url] + ([f"video={video}"] if audio else [])
         last = None
+        modes = device_modes(self.width, self.height, self.fps, video)
+        pick = FORMATS.get(video) or native_format(device_formats(video))
+        if pick:     # the format picked in Playout, else what the device sends by itself
+            modes = [("picked" if FORMATS.get(video) else "device", format_options(pick))] + modes
         for u in urls:
-            for name, extra in device_modes(self.width, self.height, self.fps, video):
+            for name, extra in modes:
                 try:
                     c = av.open(u, format=fmt, options={**opts, **extra}, timeout=5)
                     note = "" if u == url or not audio else f"sound device {audio} did not open"

@@ -44,10 +44,24 @@ screen (empty = half way).
 - **Auto Stinger** uses it for every change: Next, playing a playlist item, and clip to clip in
   Automatic mode (it starts early so the cut lands exactly on the end of the clip).
 
+### USB capture picture format
+A USB device (Blackmagic ATEM in USB mode, HDMI capture card) comes in as the device sends it: Playout reads
+the formats the device offers and uses its own one (live card > Picture: Auto). Pick another size / frame
+rate there if needed. "Same for Playout output" sets Playout's output to the device's format (after a restart).
+
+### Graphics card driver
+Settings > Output shows the graphics card and whether its driver is installed. Without one ("Microsoft Basic
+Display Adapter") nothing runs on the GPU; "Install graphics driver" gets it from Windows Update (Windows asks
+to allow it), or "Maker's driver page" opens the NVIDIA / AMD / Intel download page.
+
 ### GPU video decoding
 Clips and video CGs are decoded on the graphics card when the PC has one (D3D11 / NVIDIA / Intel),
 which keeps CPU use down. Set `"hwaccel": "off"` in `config.json` to decode on the CPU. Use a GPU
 encoder under **Quality** for streaming as well (NVENC / Quick Sync / AMF).
+
+CGs (PNG, video CGs, text, scoreboard links) are blended over the program on the graphics card too
+(OpenGL 3.3). The health page shows "CG blending" on the GPU or the CPU. Set `"cg_gpu": "off"` in
+`config.json` to blend on the CPU.
 
 ### How items play
 - A **commercial** plays its file, then the next item starts. The next clip is loaded

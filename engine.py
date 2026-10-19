@@ -588,6 +588,18 @@ class Engine:
     def set_live_source(self, name):
         self.live.set_source(name)
 
+    def reopen_device(self, video):
+        """A USB device's picture format changed: open it again wherever it is in use."""
+        dev = lambda k: (k or "").startswith("dev:") and k[4:].partition("|")[0] == video
+        with self._lock:
+            m = self.live
+            if m.dev is not None and dev(m.dev.key):
+                m.dev.close()
+                m.dev = CaptureInput(m.dev.key, self.width, self.height, self.fps)
+            for key in [k for k in self.inputs if dev(k)]:
+                self.inputs.pop(key).close()
+                self.inputs[key] = CaptureInput(key, self.width, self.height, self.fps)
+
     def _sync_inputs(self):
         """Open the extra inputs live cards use (other NDI sources, USB capture, bars); close the rest."""
         wanted = {it.get("source") for it in self.playlist if it.get("type") == "live" and it.get("source")}
