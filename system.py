@@ -73,7 +73,7 @@ def _nvidia_smi():
 class SystemMonitor:
     def __init__(self):
         self.stats = {"cpu": None, "ram": None, "ram_used_gb": None, "ram_total_gb": None,
-                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "app_cpu": None, "app_ram_mb": None,
+                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "app_cpu": None, "app_ram_mb": None, "app_children_cpu": None, "top_other": [],
                       "net_up_mbps": None, "net_down_mbps": None}
         self._proc = psutil.Process()
         self._pdh = None
@@ -102,6 +102,36 @@ class SystemMonitor:
             except Exception:
                 pass
 
+    def _top(self, s):
+        """What else uses the CPU: Playout's own helper processes (its screen, web CG browsers, ffmpeg) and the
+        busiest other programs, so the health page can say where the CPU goes."""
+        n = psutil.cpu_count() or 1
+        mine = {c.pid for c in self._proc.children(recursive=True)}
+        seen, kids, other = getattr(self, "_seen", {}), 0.0, {}
+        fresh = {}
+        for p in psutil.process_iter(["name"]):
+            if p.pid in (0, self._proc.pid):
+                continue
+            q = seen.get(p.pid)
+            if q is None or q.name() != p.info["name"]:
+                q = p
+                q.cpu_percent(None)            # first look: starts counting
+                fresh[p.pid] = q
+                continue
+            fresh[p.pid] = q
+            try:
+                c = q.cpu_percent(None) / n
+            except psutil.Error:
+                continue
+            if p.pid in mine:
+                kids += c
+            elif c >= 1 and (p.info["name"] or "").lower() not in ("system idle process", "idle"):
+                nm = (p.info["name"] or "?").removesuffix(".exe")
+                other[nm] = other.get(nm, 0.0) + c
+        self._seen = fresh
+        s["app_children_cpu"] = round(kids)
+        s["top_other"] = [[k, round(v)] for k, v in sorted(other.items(), key=lambda x: -x[1])[:4]]
+
     def _sample(self):
         vm = psutil.virtual_memory()
         s = self.stats
@@ -110,6 +140,10 @@ class SystemMonitor:
         s["ram_used_gb"] = round(vm.used / 1e9, 1)
         s["ram_total_gb"] = round(vm.total / 1e9, 1)
         s["app_cpu"] = round(self._proc.cpu_percent(None) / psutil.cpu_count())
+        try:
+            self._top(s)
+        except Exception:
+            pass
         s["app_ram_mb"] = round(self._proc.memory_info().rss / 1048576)
         n, now = psutil.net_io_counters(), time.time()
         if self._net:

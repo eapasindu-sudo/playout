@@ -87,11 +87,13 @@ class Health:
             old = [x for x in self._dropped if x[0] >= time.time() - 30]
             new_drops = (old[-1][1] - old[0][1]) if len(old) > 1 else 0
             if new_drops > 25:
-                add("Stream encoder", "bad", f"Can't keep up: {new_drops} frames dropped in 30 s (use NVIDIA encoder or a lower bitrate)")
+                enc = st.get("active_encoder") or "?"
+                add("Stream encoder", "bad", f"Can't keep up: {new_drops} frames dropped in 30 s, encoder {enc}" +
+                    (" (pick the NVIDIA / GPU encoder in Stream settings, or a lower bitrate)" if "CPU" in enc else " (the CPU is too busy: see CPU use)"))
             elif new_drops > 0:
                 add("Stream encoder", "warn", f"{new_drops} frames dropped in 30 s")
             else:
-                add("Stream encoder", "ok", f"{st['format']}, no dropped frames")
+                add("Stream encoder", "ok", f"{st['format']}, {st.get('active_encoder') or ''} encoder, no dropped frames")
         fps = float(self.engine.fps)
         if self.out_fps is not None:
             lvl = "ok" if self.out_fps >= fps * 0.95 else "warn" if self.out_fps >= fps * 0.8 else "bad"
@@ -196,6 +198,10 @@ class Health:
                 add("CG blending", "ok" if _g.STATE["gpu"] else "warn",
                     f"CGs are drawn on the GPU ({_g.STATE['renderer']})" if _g.STATE["gpu"]
                     else f"CGs are drawn on the CPU ({_g.STATE['error'] or 'turned off'})")
+            if s.get("app_cpu") is not None and cpu > 80:
+                parts = [f"Playout {s['app_cpu'] + (s.get('app_children_cpu') or 0)}%"] + [f"{n} {c}%" for n, c in s.get("top_other") or [] if c >= 3]
+                add("CPU use", "warn", "Where the CPU goes: " + ", ".join(parts) +
+                    (" - close the other programs or move them to another PC" if any(c >= 10 for _, c in s.get("top_other") or []) else ""))
             add("Computer", lvl, f"CPU {cpu:.0f}%" + (f", GPU {gpu:.0f}%" if gpu is not None else "") +
                 (f", RAM {s['ram']:.0f}%" if s.get("ram") is not None else "") +
                 (f", upload {s['net_up_mbps']:.1f} Mbps" if s.get("net_up_mbps") is not None else ""))
