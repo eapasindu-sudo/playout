@@ -28,11 +28,13 @@ import tempfile
 import threading
 import time
 import urllib.request
+import weakref
 
 import numpy as np
 from PIL import Image
 
 _procs = set()
+LIVE = weakref.WeakSet()       # pages open now (diagnostics file)
 BROWSER = None          # config "web_browser" (app.py sets it)
 
 
@@ -104,6 +106,7 @@ class WebRenderer:
         self._running = True
         self._proc = None
         self._dir = None
+        LIVE.add(self)
         self._thread = threading.Thread(target=self._run, daemon=True, name="web cg")
         self._thread.start()
 
@@ -120,10 +123,6 @@ class WebRenderer:
                 "--disable-breakpad", "--disable-crash-reporter", "--disable-component-update", "--no-pings",
                 "--renderer-process-limit=1", "--disable-features=Translate,MediaRouter,OptimizationHints,BackForwardCache,CalculateNativeWinOcclusion",
                 "--force-device-scale-factor=1", f"--window-size={self.width},{self.height}", "about:blank"]
-        if sys.platform == "win32":
-            # draw the page on the graphics card (Direct3D 11), not in software on the CPU
-            args[1:1] = ["--use-angle=d3d11", "--enable-gpu-rasterization", "--ignore-gpu-blocklist",
-                         "--enable-zero-copy", "--enable-features=CanvasOopRasterization"]
         if sys.platform != "win32" and hasattr(os, "geteuid") and os.geteuid() == 0:
             args[1:1] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]   # Linux as root (test machines / containers)
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
