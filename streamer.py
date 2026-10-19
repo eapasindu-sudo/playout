@@ -388,6 +388,7 @@ class Streamer:
 
     def info(self):
         return {"encoding": self._encoding, "dropped": self.dropped,
+                "active_encoder": gpu.NAMES.get(self.active_encoder, self.active_encoder) if self._encoding else None,
                 "format": f"{self.height}p {self.video_kbps} kbps",
                 "settings": self.settings(),
                 "destinations": [d.info() for d in self.dests]}

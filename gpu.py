@@ -34,6 +34,9 @@ def _try(enc, pix):
     ctx.encode(None)
 
 
+ERRORS = {}     # GPU encoder -> why it did not open on this PC (health page)
+
+
 def input_format(enc):
     """The pixel format to hand this encoder (bgra = no CPU colour conversion), or None if it
     does not work on this PC."""
@@ -46,8 +49,10 @@ def input_format(enc):
                 try:
                     _try(enc, pix)
                     _tested[enc] = pix
+                    ERRORS.pop(enc, None)
                     break
-                except Exception:
+                except Exception as e:
+                    ERRORS[enc] = str(e)[:200] or type(e).__name__
                     continue
         return _tested[enc]
 
