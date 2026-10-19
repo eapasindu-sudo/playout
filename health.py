@@ -203,6 +203,10 @@ class Health:
                 add("CG blending", "ok" if _g.STATE["gpu"] else "warn",
                     f"CGs are drawn on the GPU ({_g.STATE['renderer']})" if _g.STATE["gpu"]
                     else f"CGs are drawn on the CPU ({_g.STATE['error'] or 'turned off'})")
+            if _g.CONVERT.get("used") is not None:
+                add("Picture scaling", "ok" if _g.CONVERT["used"] else "warn",
+                    "Clip and USB pictures are scaled and colour-converted on the GPU" if _g.CONVERT["used"]
+                    else f"Clip and USB pictures are scaled on the CPU ({_g.CONVERT['error']})")
             if s.get("app_cpu") is not None and cpu > 80:
                 parts = [f"Playout {s['app_cpu'] + (s.get('app_children_cpu') or 0)}%"] + [f"{n} {c}%" for n, c in s.get("top_other") or [] if c >= 3]
                 add("CPU use", "warn", "Where the CPU goes: " + ", ".join(parts) +

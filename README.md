@@ -63,6 +63,11 @@ CGs (PNG, video CGs, text, scoreboard links) are blended over the program on the
 (OpenGL 3.3). The health page shows "CG blending" on the GPU or the CPU. Set `"cg_gpu": "off"` in
 `config.json` to blend on the CPU.
 
+Each clip and USB picture is also scaled to the output size and turned from YUV into the program
+picture on the graphics card (a shader), the heaviest CPU job before. So the whole chain runs on the
+GPU: decode, scale and colour, CG blending, and the stream / recording encoder. The health page shows
+"Picture scaling" on the GPU or the CPU; `"cg_gpu": "off"` puts this on the CPU as well.
+
 ### How items play
 - A **commercial** plays its file, then the next item starts. The next clip is loaded
   ahead of time, so cuts are frame-accurate with no black or live flash in between.

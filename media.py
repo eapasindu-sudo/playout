@@ -7,6 +7,8 @@ import queue
 import av
 import numpy as np
 
+import gpucg
+
 from ndi_io import CHANNELS, SAMPLE_RATE
 
 HWACCEL = "auto"   # "auto", "off", or an FFmpeg device type such as d3d11va / cuda / qsv
@@ -165,9 +167,7 @@ class ClipPlayer:
                             if self.process is not None:
                                 item = (t - t0, self.process(frame))
                             else:
-                                img = frame.reformat(width=self.width, height=self.height, format="bgra",
-                                                     interpolation="FAST_BILINEAR").to_ndarray()
-                                item = (t - t0, np.ascontiguousarray(img).reshape(-1))
+                                item = (t - t0, gpucg.to_bgra(frame, self.width, self.height))
                             while not self._stop.is_set():
                                 try:
                                     self._vq.put(item, timeout=0.1)
