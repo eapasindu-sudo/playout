@@ -73,7 +73,7 @@ def _nvidia_smi():
 class SystemMonitor:
     def __init__(self):
         self.stats = {"cpu": None, "ram": None, "ram_used_gb": None, "ram_total_gb": None,
-                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "app_cpu": None, "app_ram_mb": None, "app_children_cpu": None, "top_other": [],
+                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "app_cpu": None, "app_ram_mb": None, "app_children_cpu": None, "top_other": [], "app_parts": [],
                       "net_up_mbps": None, "net_down_mbps": None}
         self._proc = psutil.Process()
         self._pdh = None
@@ -108,6 +108,7 @@ class SystemMonitor:
         n = psutil.cpu_count() or 1
         mine = {c.pid for c in self._proc.children(recursive=True)}
         seen, kids, other = getattr(self, "_seen", {}), 0.0, {}
+        parts = self._threads(n)
         fresh = {}
         for p in psutil.process_iter(["name"]):
             if p.pid in (0, self._proc.pid):
@@ -125,12 +126,37 @@ class SystemMonitor:
                 continue
             if p.pid in mine:
                 kids += c
+                nm = (p.info["name"] or "?").removesuffix(".exe").lower()
+                nm = "scoreboard / web CG browser" if nm in ("msedge", "chrome", "chromium") else nm
+                parts[nm] = parts.get(nm, 0.0) + c
             elif c >= 1 and (p.info["name"] or "").lower() not in ("system idle process", "idle"):
                 nm = (p.info["name"] or "?").removesuffix(".exe")
                 other[nm] = other.get(nm, 0.0) + c
         self._seen = fresh
         s["app_children_cpu"] = round(kids)
+        s["app_parts"] = [[k, round(v)] for k, v in sorted(parts.items(), key=lambda x: -x[1]) if v >= 2][:6]
         s["top_other"] = [[k, round(v)] for k, v in sorted(other.items(), key=lambda x: -x[1])[:4]]
+
+    def _threads(self, n):
+        """CPU of each of Playout's own threads (by name: program output, decode <clip>, stream encoder...),
+        as % of the whole CPU. Threads Python did not start (codec and graphics driver workers) are grouped."""
+        now = time.time()
+        names = {t.native_id: t.name for t in threading.enumerate() if t.native_id}
+        cur = {t.id: t.user_time + t.system_time for t in self._proc.threads()}
+        last, t0 = getattr(self, "_tlast", ({}, now))
+        self._tlast = (cur, now)
+        dt = now - t0
+        out = {}
+        if dt <= 0:
+            return out
+        for tid, used in cur.items():
+            if tid not in last:
+                continue
+            c = (used - last[tid]) / dt * 100 / n
+            nm = names.get(tid, "codec / driver workers")
+            nm = "decode clips" if nm.startswith("decode ") else nm
+            out[nm] = out.get(nm, 0.0) + c
+        return out
 
     def _sample(self):
         vm = psutil.virtual_memory()

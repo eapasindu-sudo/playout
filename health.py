@@ -208,7 +208,8 @@ class Health:
                     "Clip and USB pictures are scaled and colour-converted on the GPU" if _g.CONVERT["used"]
                     else f"Clip and USB pictures are scaled on the CPU ({_g.CONVERT['error']})")
             if s.get("app_cpu") is not None and cpu > 80:
-                parts = [f"Playout {s['app_cpu'] + (s.get('app_children_cpu') or 0)}%"] + [f"{n} {c}%" for n, c in s.get("top_other") or [] if c >= 3]
+                inside = ", ".join(f"{k} {v}%" for k, v in s.get("app_parts") or [])
+                parts = [f"Playout {s['app_cpu'] + (s.get('app_children_cpu') or 0)}%" + (f" ({inside})" if inside else "")] + [f"{n} {c}%" for n, c in s.get("top_other") or [] if c >= 3]
                 add("CPU use", "warn", "Where the CPU goes: " + ", ".join(parts) +
                     (" - close the other programs or move them to another PC" if any(c >= 10 for _, c in s.get("top_other") or []) else ""))
             add("Computer", lvl, f"CPU {cpu:.0f}%" + (f", GPU {gpu:.0f}%" if gpu is not None else "") +
