@@ -13,6 +13,10 @@ import threading
 import numpy as np
 
 MODE = "auto"
+# Clip pictures colour-converted on the graphics card: off by default. On a PC short of memory the
+# OpenGL context switch between decoding threads failed in the NVIDIA driver (DrvSetContext) and gave
+# black pictures or a crash; the CPU (swscale) does it reliably and only for the pictures shown.
+CONVERT_MODE = "off"
 STATE = {"gpu": None, "renderer": "", "error": ""}   # health page
 
 _VS = """
@@ -259,7 +263,7 @@ def to_bgra(frame, W, H):
     """A decoded VideoFrame as a flat BGRA array of W x H, made on the graphics card.
     The CPU (swscale) does it when the GPU cannot: this never fails. After one failure the CPU
     does every picture: trying the graphics card again after an error can crash its driver."""
-    if CONVERT["used"] is not False and (MODE or "auto").lower() not in ("off", "cpu", "none") \
+    if CONVERT["used"] is not False and (CONVERT_MODE or "off").lower() not in ("off", "cpu", "none") \
             and frame.format.name in _KINDS:
         try:
             with _conv_lock:        # one OpenGL context, used by each decoding thread in turn

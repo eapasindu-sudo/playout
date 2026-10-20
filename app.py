@@ -104,6 +104,7 @@ def save_output_format(res, fps):
 webcg.BROWSER = cfg.get("web_browser") or None    # Edge / Chrome for web overlays (found by itself when unset)
 import gpucg
 gpucg.MODE = cfg.get("cg_gpu", "auto")   # CG blending on the graphics card: auto / off
+gpucg.CONVERT_MODE = cfg.get("picture_gpu", "off")   # clip pictures converted on the graphics card: off / auto
 media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
 store = Store(cfg["data_dir"])
 if (store.data.get("ndi") or {}).get("name"):
