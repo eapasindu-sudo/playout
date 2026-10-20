@@ -1,5 +1,6 @@
 """Commercial clip decoding with PyAV (FFmpeg)."""
 import collections
+import math
 import os
 import threading
 import queue
@@ -146,6 +147,7 @@ class ClipPlayer:
                     t0 = base + self.start
                     c.seek(int(t0 / vs.time_base), stream=vs, backward=True, any_frame=False)
                 end_t = (base + self.end) if self.end else None
+                last_slot = None
                 a_skip = None                       # audio samples before the in point still to drop
                 a_left = int(self.duration * SAMPLE_RATE) if self.end else None
                 streams = [s for s in (vs, aus) if s is not None]
@@ -164,6 +166,12 @@ class ClipPlayer:
                                 continue            # before the in point (after a seek)
                             if end_t is not None and t >= end_t - self.frame_dur * 0.5:
                                 raise _OutPoint()
+                            # one picture per output frame: a 50p / 60p clip at 25p would otherwise convert
+                            # every picture and the output would throw half of them away
+                            slot = math.ceil((t - t0) / self.frame_dur - 0.5 - 1e-6)
+                            if slot == last_slot:
+                                continue
+                            last_slot = slot
                             if self.process is not None:
                                 item = (t - t0, self.process(frame))
                             else:

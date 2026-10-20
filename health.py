@@ -207,6 +207,12 @@ class Health:
                 add("Picture scaling", "ok" if _g.CONVERT["used"] else "warn",
                     "Clip and USB pictures are scaled and colour-converted on the GPU" if _g.CONVERT["used"]
                     else f"Clip and USB pictures are scaled on the CPU ({_g.CONVERT['error']})")
+            import conform as _c
+            busy = {n: v for n, v in dict(_c.STATUS).items() if v != "ready"}
+            if busy:
+                add("60p / 4K clips", "warn" if any(v.startswith("failed") for v in busy.values()) else "ok",
+                    "Converting to the program's frame rate and size (the original plays until then): " +
+                    ", ".join(f"{n} {v}" for n, v in list(busy.items())[:4]))
             if s.get("app_cpu") is not None and cpu > 80:
                 inside = ", ".join(f"{k} {v}%" for k, v in s.get("app_parts") or [])
                 parts = [f"Playout {s['app_cpu'] + (s.get('app_children_cpu') or 0)}%" + (f" ({inside})" if inside else "")] + [f"{n} {c}%" for n, c in s.get("top_other") or [] if c >= 3]

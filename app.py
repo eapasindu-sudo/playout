@@ -2,6 +2,7 @@
 
 Run:  python app.py      then open http://localhost:8080
 """
+import conform
 import datetime as dt
 import io
 import json
@@ -1002,6 +1003,8 @@ def media():
             loudness.request(path)
         m["lufs"] = (info or {}).get("lufs")
         m["check"] = clip_warnings(info) if loudness.checked(path) else None   # None = still checking
+        conform.path_for(path, engine.fps, engine.width, engine.height, streamer.ffmpeg)
+        m["converted"] = conform.STATUS.get(m["name"])   # 60p / 4K clip: its copy at the program's rate
     return jsonify(out)
 
 
