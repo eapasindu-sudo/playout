@@ -49,6 +49,9 @@ class _Fanout:
         pass
 
 
+MAX_BACKLOG = 120       # stream pieces (32 KB each, several seconds) a destination may fall behind before it reconnects
+
+
 LAYOUTS = ("", "crop", "blur")      # 16:9 as is / 9:16 centre crop / 9:16 whole picture on a blurred background
 
 
@@ -82,6 +85,8 @@ class Destination:
         self._restart_at = 0.0
         self.reconnects = 0
         self._rate = []           # (time, bytes) for the bitrate of the last seconds
+        self._out = None          # bytes waiting for this destination's FFmpeg (its own thread writes them)
+        self.late = 0             # times this destination could not keep up and was restarted
 
     def target(self):
         url = self.url.strip()
@@ -124,7 +129,10 @@ class Destination:
         self.started = time.time()
         self.bytes = 0
         self.status = "connecting"
+        self._out = queue.Queue(maxsize=MAX_BACKLOG)
         threading.Thread(target=self._read_errors, args=(self.proc,), daemon=True).start()
+        threading.Thread(target=self._writer, args=(self.proc, self._out), daemon=True,
+                         name=f"stream out {self.slot + 1}").start()
 
     def _read_errors(self, proc):
         for line in proc.stderr:
@@ -133,28 +141,60 @@ class Destination:
                 self.error = text[-300:]
 
     def write(self, data):
-        p = self.proc
-        if p is None:
+        """From the encoder thread: never waits. A slow network or a stuck FFmpeg only holds up
+        this destination; the encoder and the other destinations go on."""
+        q = self._out
+        if self.proc is None or q is None:
             return
         try:
-            p.stdin.write(data)
+            q.put_nowait(data)
+        except queue.Full:
+            self.late += 1
+            self.kill(wait=False)
+            self.status = "reconnecting"
+            self.error = "The connection could not keep up; reconnecting"
+            self.reconnects += 1
+            self._restart_at = time.time() + 2
+
+    def _writer(self, proc, q):
+        while True:
+            data = q.get()
+            if data is None:
+                return
+            try:
+                proc.stdin.write(data)
+            except (BrokenPipeError, OSError, ValueError):
+                if self.proc is proc:
+                    self.kill(wait=False)
+                    self.status = "reconnecting"
+                    self.reconnects += 1
+                    self._restart_at = time.time() + 5
+                return
             self.bytes += len(data)
             now = time.time()
             if not self._rate or now - self._rate[-1][0] >= 1:
                 self._rate.append((now, self.bytes))
                 del self._rate[:-6]
-            if self.status == "connecting" and time.time() - self.started > 3:
+            if self.status == "connecting" and now - self.started > 3:
                 self.status = "live"
                 self.error = ""
-        except (BrokenPipeError, OSError, ValueError):
-            self.kill()
-            self.status = "reconnecting"
-            self.reconnects += 1
-            self._restart_at = time.time() + 5
 
-    def kill(self):
+    def kill(self, wait=True):
         p, self.proc = self.proc, None
-        if p:
+        q, self._out = self._out, None
+        if q is not None:
+            while True:         # whatever is still waiting is dropped; the writer thread then ends
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+            q.put(None)
+        if p and not wait:          # from the encoder or writer thread: never block it
+            try:
+                p.kill()
+            except Exception:
+                pass
+        elif p:
             try:
                 p.stdin.close()
             except Exception:
