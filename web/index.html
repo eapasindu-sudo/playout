@@ -490,6 +490,8 @@
         <span class="hint">empty = the output size (what the link is made for, usually 1920 x 1080)</span></span>
       <span>Position</span><span style="display:flex; gap:6px; align-items:center">X <input class="num" id="wbX" type="number" style="width:80px"> Y <input class="num" id="wbY" type="number" style="width:80px">
         Size <input class="num" id="wbZ" type="number" style="width:70px" min="10" max="400"> %</span>
+      <span>CSS</span><span style="display:flex; flex-direction:column; gap:4px"><textarea id="wbCss" rows="3" spellcheck="false" style="font-family:monospace" placeholder="#moment .mband { display: none; }"></textarea>
+        <span class="hint">optional, like vMix's Web Browser input: extra CSS for the page, e.g. hide a part you do not want</span></span>
       <span>PC load</span><span style="display:flex; gap:6px; align-items:center"><select id="wbRate"><option value="10">Smooth (10 pictures a second)</option><option value="5">Light (5 a second)</option><option value="2">Lightest (2 a second)</option></select>
         <span class="hint">fewer pictures = less CPU; the score still changes on time, animations look less smooth</span></span>
       <span>Fade</span><span style="display:flex; gap:6px; align-items:center"><input class="num" id="wbFade" type="number" style="width:70px" min="0" max="100"> frames</span>
@@ -2318,7 +2320,7 @@ function openWebCG(c) {
   $('wbPW').value = c.page_w || ''; $('wbPH').value = c.page_h || '';
   $('wbX').value = c.x || 0; $('wbY').value = c.y || 0; $('wbZ').value = c.zoom || 100;
   $('wbFade').value = c.fade ?? 8; $('wbLive').checked = !!c.live_only;
-  $('wbRate').value = String(c.rate || 10);
+  $('wbRate').value = String(c.rate || 10); $('wbCss').value = c.css || '';
   if (!$('wbRate').value) $('wbRate').value = '10';
   $('wbDel').style.display = c.id ? '' : 'none'; $('wbMsg').textContent = ''; $('wbPrev').removeAttribute('src');
   dWeb.showModal();
@@ -2326,7 +2328,7 @@ function openWebCG(c) {
 }
 const wbCfg = () => ({...(wbEdit || {}), kind:'web', name:$('wbName').value.trim() || webHost($('wbUrl').value.trim()), url:$('wbUrl').value.trim(),
   page_w:+$('wbPW').value || 0, page_h:+$('wbPH').value || 0, x:+$('wbX').value || 0, y:+$('wbY').value || 0, zoom:+$('wbZ').value || 100,
-  fade:Math.max(0, +$('wbFade').value || 0), live_only:$('wbLive').checked, rate:+$('wbRate').value || 10});
+  fade:Math.max(0, +$('wbFade').value || 0), live_only:$('wbLive').checked, rate:+$('wbRate').value || 10, css:$('wbCss').value});
 async function wbPrev() {
   const c = wbCfg();
   if (!/^https?:\/\//i.test(c.url)) { $('wbMsg').textContent = 'Paste the overlay link (it starts with http:// or https://)'; return; }

@@ -312,7 +312,7 @@ class WebLayer(CGLayer):
             return
         self._error = ""
         self.r = WebRenderer(url, int(cfg.get("page_w") or 0) or width, int(cfg.get("page_h") or 0) or height,
-                             cfg.get("zoom") or 100, cfg.get("rate") or 10)
+                             cfg.get("zoom") or 100, cfg.get("rate") or 10, cfg.get("css") or "")
 
     @property
     def error(self):
@@ -731,5 +731,5 @@ def _changed(a, b):
     return any(a.get(k) != b.get(k) for k in FX_KEYS)
 
 
-FX_KEYS = ("file", "url", "page_w", "page_h", "rate", "x", "y", "zoom", "zoom_x", "zoom_y", "rotate", "crop", "loop", "key", "key_color",
+FX_KEYS = ("file", "url", "page_w", "page_h", "rate", "css", "x", "y", "zoom", "zoom_x", "zoom_y", "rotate", "crop", "loop", "key", "key_color",
            "key_similarity", "key_blend", "key_spill", "luma_threshold", "luma_softness")
