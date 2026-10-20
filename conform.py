@@ -1,4 +1,5 @@
-"""Converter: makes a copy of a 60p / 50p / 4K clip at the program's frame rate and size, next to the
+"""Converter: makes a copy of a clip that is not in the program's own format (another frame rate, size
+or a heavy codec such as HEVC / ProRes) at the program's frame rate and size, next to the
 original in the media folder ("<name> 25p.mp4"). The operator starts it from the clip library and adds
 the copy to the playlist when it is done: a 25p 1080 file plays at a fraction of the CPU / GPU cost.
 Nothing is converted on its own and the original is never changed.
@@ -34,14 +35,15 @@ def _info(path):
             with av.open(path) as c:
                 v = c.streams.video[0]
                 rate = v.average_rate or v.guessed_rate
-                r = (float(rate) if rate else 0.0, v.codec_context.width, v.codec_context.height)
+                r = (float(rate) if rate else 0.0, v.codec_context.width, v.codec_context.height,
+                     v.codec_context.name)
         except Exception:
             r = None
         _probe[key] = r
     return _probe[key]
 
 
-def _target(path, fps):
+def target(path, fps):
     stem = os.path.splitext(path)[0]
     return f"{stem} {int(round(float(fps)))}p.mp4"
 
@@ -50,8 +52,10 @@ def needs(path, fps, width, height):
     i = _info(path)
     if not i:
         return False
-    rate, w, h = i
-    return rate > float(fps) + 1 or h > height or w > width
+    rate, w, h, codec = i
+    # anything that is not already the program's own format plays lighter converted: another frame rate
+    # (24 / 30 / 50 / 60p), another size (4K, square, letterbox) or a heavy codec (HEVC, ProRes, AV1...)
+    return abs(rate - float(fps)) > 0.5 or (w, h) != (width, height) or codec != "h264"
 
 
 def convert(path, fps, width, height, ffmpeg):
@@ -60,14 +64,14 @@ def convert(path, fps, width, height, ffmpeg):
     name = os.path.basename(path)
     with _lock:
         if path in _queued:
-            return _target(path, fps)
+            return target(path, fps)
         _queued.add(path)
         STATUS[name] = "waiting"
         _q.put((path, fps, width, height, ffmpeg))
         if _thread is None or not _thread.is_alive():
             _thread = threading.Thread(target=_worker, daemon=True, name="clip converter")
             _thread.start()
-    return _target(path, fps)
+    return target(path, fps)
 
 
 def _command(ffmpeg, src, tmp, fps, width, height):
@@ -103,7 +107,7 @@ def _worker():
 
 
 def _convert(path, fps, width, height, ffmpeg, name):
-    dst = _target(path, fps)
+    dst = target(path, fps)
     tmp = dst[:-4] + ".part"
     total = 0.0
     try:

@@ -1016,7 +1016,8 @@ def media():
             loudness.request(path)
         m["lufs"] = (info or {}).get("lufs")
         m["check"] = clip_warnings(info) if loudness.checked(path) else None   # None = still checking
-        m["convert"] = conform.needs(path, engine.fps, engine.width, engine.height)   # 60p / 4K: Converter offers a copy
+        m["convert"] = conform.needs(path, engine.fps, engine.width, engine.height) \
+            and not os.path.isfile(conform.target(path, engine.fps))   # not the program's format: Converter offers a copy
         m["converting"] = conform.STATUS.get(m["name"])
     return jsonify(out)
 

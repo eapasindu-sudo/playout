@@ -1372,7 +1372,7 @@ async function loadMedia() {
 const checkHtml = m => m.check == null ? '<span class="hint">checking...</span>' : m.check.length
   ? `<a href="#" style="color:#ff8a1c; font-weight:700" title="${esc(m.check.join('\n'))}" onclick="say(${esc(JSON.stringify(m.name + ':\n\n' + m.check.join('\n')))}); return false">&#9888; ${m.check.length}</a>`
   : '<span style="color:#2fbf3a">&#10003; OK</span>';
-// Converter: a 60p / 4K clip gets a "Convert to 25p" button; the copy appears in the library when done
+// Converter: a clip not in the program's format (frame rate, size, codec) gets a Convert button; the copy appears in the library when done
 const convHtml = m => m.converting && m.converting !== 'ready'
   ? ` <span class="hint">${esc(m.converting)}</span>`
   : m.convert ? ` <button class="sm" title="Make a copy at the program's frame rate and size (plays much lighter)" onclick="convertClip(${esc(JSON.stringify(m.name))})">Convert</button>` : '';
