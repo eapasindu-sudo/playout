@@ -8,6 +8,7 @@ A destination can also be vertical (9:16, for Facebook Reels / YouTube Shorts / 
 its FFmpeg turns the program into a 1080x1920 picture (centre crop, or the whole picture with
 blurred top and bottom) and encodes that, so the other destinations are not touched.
 """
+import logging
 import queue
 import shutil
 import subprocess
@@ -49,7 +50,7 @@ class _Fanout:
         pass
 
 
-MAX_BACKLOG = 120       # stream pieces (32 KB each, several seconds) a destination may fall behind before it reconnects
+BACKLOG_SECONDS = 30    # how far a destination may fall behind (connecting, a slow moment) before it reconnects
 
 
 LAYOUTS = ("", "crop", "blur")      # 16:9 as is / 9:16 centre crop / 9:16 whole picture on a blurred background
@@ -86,6 +87,8 @@ class Destination:
         self.reconnects = 0
         self._rate = []           # (time, bytes) for the bitrate of the last seconds
         self._out = None          # bytes waiting for this destination's FFmpeg (its own thread writes them)
+        self._waiting = 0
+        self.last_error = ""      # kept after a reconnect (self.error is cleared once live again)
         self.late = 0             # times this destination could not keep up and was restarted
 
     def target(self):
@@ -128,8 +131,10 @@ class Destination:
                                      stderr=subprocess.PIPE, creationflags=flags)
         self.started = time.time()
         self.bytes = 0
+        self._rate = []
         self.status = "connecting"
-        self._out = queue.Queue(maxsize=MAX_BACKLOG)
+        self._out = queue.Queue()
+        self._waiting = 0         # bytes in self._out
         threading.Thread(target=self._read_errors, args=(self.proc,), daemon=True).start()
         threading.Thread(target=self._writer, args=(self.proc, self._out), daemon=True,
                          name=f"stream out {self.slot + 1}").start()
@@ -138,7 +143,13 @@ class Destination:
         for line in proc.stderr:
             text = line.decode("utf-8", "replace").strip()
             if text and not ("AVHWDeviceContext" in text or "Device creation failed" in text):   # GPU decode not there: fine
-                self.error = text[-300:]
+                self.error = self.last_error = text[-300:]
+                logging.info("stream %s: %s", self.name, text[-300:])
+        code = proc.wait()
+        up = time.time() - (self.started or time.time())
+        if self.enabled and code != 0:
+            logging.info("stream %s: FFmpeg stopped (exit code %s) after %.0fs; last error: %s",
+                         self.name, code, up, self.last_error or "none")
 
     def write(self, data):
         """From the encoder thread: never waits. A slow network or a stuck FFmpeg only holds up
@@ -146,9 +157,11 @@ class Destination:
         q = self._out
         if self.proc is None or q is None:
             return
-        try:
+        limit = max(8_000_000, (self.streamer.video_kbps + 320) * 125 * BACKLOG_SECONDS) if self.streamer else 16_000_000
+        if self._waiting + len(data) <= limit:
+            self._waiting += len(data)
             q.put_nowait(data)
-        except queue.Full:
+        else:
             self.late += 1
             self.kill(wait=False)
             self.status = "reconnecting"
@@ -161,6 +174,8 @@ class Destination:
             data = q.get()
             if data is None:
                 return
+            if q is self._out:
+                self._waiting -= len(data)
             try:
                 proc.stdin.write(data)
             except (BrokenPipeError, OSError, ValueError):
@@ -217,7 +232,7 @@ class Destination:
         return {"slot": self.slot, "name": self.name, "url": self.url, "key_set": bool(self.key.strip()),
                 "enabled": self.enabled, "status": self.status if self.enabled else "off",
                 "error": self.error, "uptime": round(up), "kbps": round(self.bytes * 8 / up / 1000) if up > 1 else 0,
-                "now_kbps": self.now_kbps(), "reconnects": self.reconnects,
+                "now_kbps": self.now_kbps(), "reconnects": self.reconnects, "last_error": self.last_error,
                 "layout": self.layout, "crop_pos": self.crop_pos}
 
 
