@@ -29,6 +29,7 @@ from fractions import Fraction
 import numpy as np
 
 from audiofx import MasterAudio
+import conform
 from media import ClipPlayer, probe
 from capture import CaptureInput, UrlInput, make_bars
 from ndi_extra import ExtraOutput, still_frame
@@ -628,6 +629,8 @@ class Engine:
         db = _num(item.get("gain_db"))
         if self.loudness is not None:
             db += self.loudness.gain_db(path)
+        if self.ffmpeg:          # 60p / 4K clips: the copy made at the program's rate and size, once ready
+            path = conform.path_for(path, self.fps, self.width, self.height, self.ffmpeg)
         return ClipPlayer(path, self.width, self.height, self.fps,
                           start=_num(item.get("in")) + max(0.0, offset), end=_num(item.get("out")) or None,
                           gain=10 ** (db / 20))
