@@ -87,6 +87,35 @@ atexit.register(_kill_all)
 close_all = _kill_all          # Playout closing: no browser is left running
 
 
+_cleaned = []
+
+
+def _clean_leftovers():
+    """Once per run: stop browsers and remove temp folders left by an earlier Playout run that
+    crashed (they kept using memory). Runs before this run starts its first browser."""
+    if _cleaned:
+        return
+    _cleaned.append(True)
+    try:
+        import psutil
+        for p in psutil.process_iter(["name", "cmdline"]):
+            cmd = " ".join(p.info.get("cmdline") or [])
+            if "playout-web-" in cmd:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    tmp = tempfile.gettempdir()
+    try:
+        for n in os.listdir(tmp):
+            if n.startswith("playout-web-"):
+                shutil.rmtree(os.path.join(tmp, n), ignore_errors=True)
+    except OSError:
+        pass
+
+
 def _quiet_crashes():
     """Windows: a browser that crashes must not leave an "Application Error" box on the playout screen.
     The error mode is inherited by the browser processes Playout starts; Playout then starts it again."""
@@ -157,6 +186,7 @@ class WebRenderer:
         raise RuntimeError("The browser stopped at once (" + "; ".join(why)[:300] + ")")
 
     def _launch(self, exe, mode):
+        _clean_leftovers()
         self._dir = tempfile.mkdtemp(prefix="playout-web-")
         args = [exe, mode, "--remote-debugging-port=0", f"--user-data-dir={self._dir}",
                 "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--mute-audio",

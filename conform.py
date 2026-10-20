@@ -1,9 +1,7 @@
-"""Clips whose frame rate or size is above the program's (60p, 50p, 4K...) are converted once, in the
-background, to the program's frame rate and size. Playout then plays the converted copy: decoding a
-25p 1080 file costs a fraction of a 60p or 4K one, and no pictures are decoded only to be thrown away.
-
-Converted copies live in <media folder>/.playout-converted/ and are made again when the clip changes.
-Until a copy is ready (or if converting fails) the original file plays as before.
+"""Converter: makes a copy of a 60p / 50p / 4K clip at the program's frame rate and size, next to the
+original in the media folder ("<name> 25p.mp4"). The operator starts it from the clip library and adds
+the copy to the playlist when it is done: a 25p 1080 file plays at a fraction of the CPU / GPU cost.
+Nothing is converted on its own and the original is never changed.
 """
 import logging
 import os
@@ -16,8 +14,6 @@ import av
 
 import gpu
 
-FOLDER = ".playout-converted"
-ENABLED = True
 STATUS = {}             # clip name -> "waiting" / "converting 42%" / "ready" / "failed: ..." (health page)
 _q = queue.Queue()
 _queued = set()
@@ -45,9 +41,9 @@ def _info(path):
     return _probe[key]
 
 
-def _target(path):
-    folder, name = os.path.split(path)
-    return os.path.join(folder, FOLDER, os.path.splitext(name)[0] + ".mp4")
+def _target(path, fps):
+    stem = os.path.splitext(path)[0]
+    return f"{stem} {int(round(float(fps)))}p.mp4"
 
 
 def needs(path, fps, width, height):
@@ -58,52 +54,20 @@ def needs(path, fps, width, height):
     return rate > float(fps) + 1 or h > height or w > width
 
 
-def _fresh(src, dst):
-    try:
-        return os.path.getmtime(dst) >= os.path.getmtime(src)
-    except OSError:
-        return False
-
-
-def path_for(path, fps, width, height, ffmpeg):
-    """The file to play for this clip: the converted copy when it is ready, else the original
-    (and the copy is queued). Never waits."""
-    if not ENABLED or not os.path.isfile(path) or not needs(path, fps, width, height):
-        return path
-    dst = _target(path)
-    if _fresh(path, dst):
-        return dst
-    queue_clip(path, fps, width, height, ffmpeg)
-    return path
-
-
-def queue_clip(path, fps, width, height, ffmpeg):
+def convert(path, fps, width, height, ffmpeg):
+    """Queue a clip for converting; returns the copy's path (made in the background)."""
     global _thread
     name = os.path.basename(path)
     with _lock:
-        if path in _queued or STATUS.get(name, "").startswith("failed"):
-            return
+        if path in _queued:
+            return _target(path, fps)
         _queued.add(path)
         STATUS[name] = "waiting"
         _q.put((path, fps, width, height, ffmpeg))
         if _thread is None or not _thread.is_alive():
             _thread = threading.Thread(target=_worker, daemon=True, name="clip converter")
             _thread.start()
-
-
-def check_folder(folder, fps, width, height, ffmpeg):
-    """Queue every clip in the media folder that would play better converted."""
-    if not ENABLED:
-        return
-    try:
-        names = os.listdir(folder)
-    except OSError:
-        return
-    import media
-    for n in names:
-        p = os.path.join(folder, n)
-        if os.path.isfile(p) and os.path.splitext(n)[1].lower() in media.MEDIA_EXT:
-            path_for(p, fps, width, height, ffmpeg)
+    return _target(path, fps)
 
 
 def _command(ffmpeg, src, tmp, fps, width, height):
@@ -139,12 +103,8 @@ def _worker():
 
 
 def _convert(path, fps, width, height, ffmpeg, name):
-    dst = _target(path)
-    if _fresh(path, dst):
-        STATUS[name] = "ready"
-        return
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    tmp = dst[:-4] + ".part.mp4"
+    dst = _target(path, fps)
+    tmp = dst[:-4] + ".part"
     total = 0.0
     try:
         with av.open(path) as c:
