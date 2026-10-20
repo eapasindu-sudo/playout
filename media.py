@@ -1,9 +1,11 @@
 """Commercial clip decoding with PyAV (FFmpeg)."""
 import collections
+import logging
 import math
 import os
 import threading
 import queue
+import time
 
 import av
 import numpy as np
@@ -141,7 +143,6 @@ class ClipPlayer:
                 DECODE["codec"] = vs.codec_context.name
                 checked = False
                 self._has_audio = aus is not None
-                resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE) if aus else None
                 t0 = None
                 base = float(vs.start_time * vs.time_base) if vs.start_time is not None and vs.time_base else 0.0
                 if self.start > 0:
@@ -149,10 +150,12 @@ class ClipPlayer:
                     c.seek(int(t0 / vs.time_base), stream=vs, backward=True, any_frame=False)
                 end_t = (base + self.end) if self.end else None
                 last_slot = None
-                a_skip = None                       # audio samples before the in point still to drop
-                a_left = int(self.duration * SAMPLE_RATE) if self.end else None
-                streams = [s for s in (vs, aus) if s is not None]
-                for packet in c.demux(*streams):
+                if aus is not None:
+                    # sound has its own reader, seconds ahead of the picture: when the PC is busy for a
+                    # moment (a web overlay redrawing, a GPU stall) the pictures fall a few frames behind
+                    # but the sound never runs dry (it used to wait behind the full picture queue)
+                    threading.Thread(target=self._decode_audio, daemon=True, name=f"audio {self.name}").start()
+                for packet in c.demux(vs):
                     if self._stop.is_set():
                         return
                     for frame in packet.decode():
@@ -183,29 +186,52 @@ class ClipPlayer:
                                     break
                                 except queue.Full:
                                     continue
-                        else:
-                            if a_skip is None:
-                                at = frame.time
-                                a_skip = int(round((t0 - at) * SAMPLE_RATE)) if (self.start > 0 and at is not None) else 0
-                            for rf in resampler.resample(frame):
-                                pcm = rf.to_ndarray().reshape(-1, CHANNELS).T
-                                if a_skip > 0:
-                                    cut = min(a_skip, pcm.shape[1])
-                                    pcm, a_skip = pcm[:, cut:], a_skip - cut
-                                if a_left is not None:
-                                    pcm = pcm[:, :max(0, a_left)]
-                                    a_left -= pcm.shape[1]
-                                if pcm.shape[1]:
-                                    self._push_audio(pcm)
-                if resampler:
-                    for rf in resampler.resample(None):
-                        self._push_audio(rf.to_ndarray().reshape(-1, CHANNELS).T)
         except _OutPoint:
             pass
         except Exception as e:  # bad file: report and let the break move on
             self.error = str(e)
         finally:
             self._done.set()
+
+    AUDIO_AHEAD = 4 * SAMPLE_RATE   # sound decoded ahead of the output (~1.5 MB)
+
+    def _decode_audio(self):
+        try:
+            with av.open(self.path) as c:
+                aus = c.streams.audio[0]
+                vs = c.streams.video[0] if c.streams.video else None
+                # the in point is measured from the video's start, as the picture side does
+                ref = vs if vs is not None and vs.start_time is not None and vs.time_base else aus
+                base = float(ref.start_time * ref.time_base) if ref.start_time is not None and ref.time_base else 0.0
+                t0 = base + self.start if self.start > 0 else None
+                if t0 is not None:
+                    c.seek(int(t0 / aus.time_base), stream=aus, backward=True, any_frame=False)
+                resampler = av.AudioResampler(format="flt", layout="stereo", rate=SAMPLE_RATE)
+                a_skip = None                       # samples before the in point still to drop
+                a_left = int(self.duration * SAMPLE_RATE) if self.end else None
+                for packet in c.demux(aus):
+                    for frame in packet.decode():
+                        if a_skip is None:
+                            at = frame.time
+                            a_skip = int(round((t0 - at) * SAMPLE_RATE)) if (t0 is not None and at is not None) else 0
+                        for rf in resampler.resample(frame):
+                            pcm = rf.to_ndarray().reshape(-1, CHANNELS).T
+                            if a_skip > 0:
+                                cut = min(a_skip, pcm.shape[1])
+                                pcm, a_skip = pcm[:, cut:], a_skip - cut
+                            if a_left is not None:
+                                pcm = pcm[:, :max(0, a_left)]
+                                a_left -= pcm.shape[1]
+                            if pcm.shape[1]:
+                                self._push_audio(pcm)
+                    while self._audio_len > self.AUDIO_AHEAD and not self._stop.is_set():
+                        time.sleep(0.02)
+                    if self._stop.is_set() or (a_left is not None and a_left <= 0):
+                        return
+                for rf in resampler.resample(None):
+                    self._push_audio(rf.to_ndarray().reshape(-1, CHANNELS).T)
+        except Exception as e:
+            logging.info("clip sound %s: %s", self.name, e)
 
     def _push_audio(self, pcm):
         if self.gain != 1.0:
