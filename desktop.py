@@ -111,8 +111,16 @@ def main():
     winicon.own_taskbar_button("Endora.Playout")
     # the loading screen shows at once; the engine starts behind it, then the control screen opens
     w, h = splash.SIZE
+    x = y = None
+    try:                      # in the middle of the main monitor
+        sc = webview.screens[0]
+        x = getattr(sc, "x", 0) + max(0, (sc.width - w) // 2)
+        y = getattr(sc, "y", 0) + max(0, (sc.height - h) // 2)
+    except Exception:
+        pass
     loading = webview.create_window("Endora Playout loading", html=splash.html("playout"), width=w, height=h,
-                                    frameless=True, resizable=False, on_top=True, background_color="#0c0c0e")
+                                    x=x, y=y, frameless=True, resizable=False, on_top=True,
+                                    background_color="#0c0c0e")
     result = {"code": 0, "server": None}
 
     def boot():
@@ -186,7 +194,7 @@ def start_server(say=print):
 def open_control_screen(webview, server, port):
     main_win = webview.create_window(
         "Endora Playout", f"http://127.0.0.1:{port}/",
-        width=1600, height=950, min_size=(1100, 700),
+        width=1600, height=950, min_size=(1100, 700), maximized=True,
         background_color="#0c0d0f", confirm_close=True,
     )
     out = {"win": None}

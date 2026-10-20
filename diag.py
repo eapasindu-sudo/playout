@@ -32,6 +32,7 @@ def install():
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(threadName)s: %(message)s"))
     root = logging.getLogger()
     root.addHandler(h)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)     # not every page request
     if root.level > logging.INFO or root.level == logging.NOTSET:
         root.setLevel(logging.INFO)
         for other in root.handlers:          # the console / log file keeps showing warnings only

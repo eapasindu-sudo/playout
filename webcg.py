@@ -38,24 +38,41 @@ LIVE = weakref.WeakSet()       # pages open now (diagnostics file)
 BROWSER = None          # config "web_browser" (app.py sets it)
 
 
-def find_browser():
-    """Path of Edge / Chrome / Chromium, or None."""
+def find_browsers():
+    """Edge / Chrome / Chromium on this PC, best first (the configured one before the others). The
+    WebView2 runtime that the control screen itself uses comes last: it is on every PC that runs Playout."""
+    out = []
     if BROWSER and os.path.isfile(BROWSER):
-        return BROWSER
+        out.append(BROWSER)
     if sys.platform == "win32":
+        import glob
         bases = [os.environ.get(k) for k in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
         rels = [r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe",
                 r"Chromium\Application\chrome.exe"]
         for rel in rels:
             for b in bases:
                 if b and os.path.isfile(os.path.join(b, rel)):
-                    return os.path.join(b, rel)
-        return None
-    for name in ("microsoft-edge", "google-chrome", "chromium", "chromium-browser"):
-        p = shutil.which(name)
-        if p:
-            return p
-    return None
+                    out.append(os.path.join(b, rel))
+        for b in bases:
+            if b:
+                out += sorted(glob.glob(os.path.join(b, r"Microsoft\EdgeWebView\Application\*\msedgewebview2.exe")),
+                              reverse=True)[:1]
+    else:
+        for name in ("microsoft-edge", "google-chrome", "chromium", "chromium-browser"):
+            p = shutil.which(name)
+            if p:
+                out.append(p)
+    return list(dict.fromkeys(out))
+
+
+def find_browser():
+    """Path of Edge / Chrome / Chromium, or None."""
+    b = find_browsers()
+    return b[0] if b else None
+
+
+# which browser and headless mode start on this PC: the first that works is kept for every page after it
+_ways = {"good": None}
 
 
 def _kill_all():
@@ -82,6 +99,10 @@ def _quiet_crashes():
         k.SetErrorMode(k.GetErrorMode() | 0x0001 | 0x0002 | 0x8000)
     except Exception:
         pass
+
+
+class _StoppedAtOnce(Exception):
+    pass
 
 
 class WebRenderer:
@@ -112,11 +133,31 @@ class WebRenderer:
 
     # ---- browser ------------------------------------------------------------------------------
     def _start_browser(self):
-        exe = find_browser()
-        if not exe:
+        exes = find_browsers()
+        if not exes:
             raise RuntimeError("Microsoft Edge or Google Chrome is needed for web overlays (not found on this PC)")
+        # some PCs stop one way at once (an Edge policy, an Edge update in progress...): then try the next
+        ways = [(e, m) for e in exes for m in ("--headless=new", "--headless")]
+        if _ways["good"] in ways:
+            ways.remove(_ways["good"])
+            ways.insert(0, _ways["good"])
+        why = []
+        for exe, mode in ways:
+            try:
+                url = self._launch(exe, mode)
+                if _ways["good"] != (exe, mode):
+                    _ways["good"] = (exe, mode)
+                    logging.info("web CG browser: %s %s", exe, mode)
+                return url
+            except _StoppedAtOnce as e:
+                why.append(f"{os.path.basename(exe)} {mode}: {e}")
+                logging.info("web CG browser did not start: %s %s: %s", exe, mode, e)
+                self._stop_browser()
+        raise RuntimeError("The browser stopped at once (" + "; ".join(why)[:300] + ")")
+
+    def _launch(self, exe, mode):
         self._dir = tempfile.mkdtemp(prefix="playout-web-")
-        args = [exe, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={self._dir}",
+        args = [exe, mode, "--remote-debugging-port=0", f"--user-data-dir={self._dir}",
                 "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--mute-audio",
                 "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
                 "--disable-backgrounding-occluded-windows", "--disable-extensions", "--disable-sync",
@@ -127,13 +168,16 @@ class WebRenderer:
             args[1:1] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]   # Linux as root (test machines / containers)
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         _quiet_crashes()
-        self._proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                      creationflags=flags)
+        err = open(os.path.join(self._dir, "browser-errors.txt"), "wb")
+        try:
+            self._proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=err, creationflags=flags)
+        finally:
+            err.close()
         _procs.add(self._proc)
         port_file = os.path.join(self._dir, "DevToolsActivePort")
         for _ in range(150):
             if self._proc.poll() is not None:
-                raise RuntimeError(f"The browser stopped at once (exit code {self._proc.returncode})")
+                raise _StoppedAtOnce(f"exit code {self._proc.returncode}" + self._errors())
             if os.path.isfile(port_file):
                 with open(port_file, encoding="utf-8") as f:
                     port = f.readline().strip()
@@ -153,6 +197,15 @@ class WebRenderer:
                 pass
             time.sleep(0.1)
         raise RuntimeError("The browser page did not open")
+
+    def _errors(self):
+        """The last lines the browser wrote about why it stopped."""
+        try:
+            with open(os.path.join(self._dir, "browser-errors.txt"), encoding="utf-8", errors="replace") as f:
+                lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+            return (", " + " | ".join(lines[-3:])[:240]) if lines else ""
+        except OSError:
+            return ""
 
     def _stop_browser(self):
         p, self._proc = self._proc, None
