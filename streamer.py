@@ -237,6 +237,10 @@ class Destination:
 
 
 class Streamer:
+    # pictures waiting for the encoder: after a busy moment the output loop catches up with a burst of
+    # frames, which 8 (0.3 s) could not hold; 16 rides it out (the RAM is only used while it is behind)
+    QUEUE = 16
+
     def __init__(self, engine, cfg):
         s = cfg.get("stream", {})
         self.engine = engine
@@ -250,7 +254,7 @@ class Streamer:
         self.preset = s.get("preset", "veryfast")
         self.ffmpeg = find_ffmpeg(s.get("ffmpeg_path", ""))
         self.dests = [Destination(i, self.ffmpeg, self) for i in range(3)]
-        self._q = FrameQueue(8)
+        self._q = FrameQueue(self.QUEUE)
         self._lock = threading.Lock()
         self._thread = None
         self._encoding = False
@@ -321,7 +325,7 @@ class Streamer:
     # -- encoder thread --------------------------------------------------
     def _start_encoder(self):
         self._encoding = True
-        self._q = FrameQueue(8)
+        self._q = FrameQueue(self.QUEUE)
         self._thread = threading.Thread(target=self._encode, daemon=True, name="stream encoder")
         self._thread.start()
 
