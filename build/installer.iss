@@ -102,6 +102,15 @@ begin
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     '-NoProfile -Command "Get-Process ATEM-Switcher,sony-bridge -EA 0 | ? { $_.Path -like ''' + ExpandConstant('{app}') + '\atem\*'' } | Stop-Process -Force"',
     '', SW_HIDE, ewWaitUntilTerminated, code);
+  { an update started from inside Playout: Playout closes itself a moment after starting setup.
+    Wait for it (up to 20 s), then stop whatever still runs from the Playout folder (its browser
+    overlays, ffmpeg), so the files-in-use check finds nothing and setup does not cancel itself }
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -Command "$d = ''' + ExpandConstant('{app}') + '\''; ' +
+    '$m = { Get-Process | ? { $_.Path -and $_.Path.StartsWith($d, [StringComparison]::OrdinalIgnoreCase) } }; ' +
+    'for ($i = 0; $i -lt 40 -and (Get-Process Playout -EA 0 | ? { $_.Path -like ($d + ''*'') }); $i++) { Start-Sleep -Milliseconds 500 }; ' +
+    '& $m | Stop-Process -Force; Start-Sleep -Seconds 1"',
+    '', SW_HIDE, ewWaitUntilTerminated, code);
   Result := '';
 end;
 
