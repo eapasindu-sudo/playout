@@ -993,6 +993,18 @@ def live_source():
 
 
 # ---- media library -----------------------------------------------------
+@app.post("/api/media/convert")
+def media_convert():
+    """Converter: make a copy of a 60p / 4K clip at the program's frame rate and size, next to it in
+    the media folder (it then shows in the library like any clip). Runs in the background."""
+    name = os.path.basename(str((request.get_json(silent=True) or {}).get("name") or ""))
+    path = os.path.join(cfg["media_dir"], name)
+    if not name or not os.path.isfile(path):
+        return jsonify(error="No such clip"), 404
+    out = conform.convert(path, engine.fps, engine.width, engine.height, streamer.ffmpeg)
+    return jsonify(ok=True, file=os.path.basename(out))
+
+
 @app.get("/api/media")
 def media():
     out = list_media(cfg["media_dir"])
@@ -1003,8 +1015,8 @@ def media():
             loudness.request(path)
         m["lufs"] = (info or {}).get("lufs")
         m["check"] = clip_warnings(info) if loudness.checked(path) else None   # None = still checking
-        conform.path_for(path, engine.fps, engine.width, engine.height, streamer.ffmpeg)
-        m["converted"] = conform.STATUS.get(m["name"])   # 60p / 4K clip: its copy at the program's rate
+        m["convert"] = conform.needs(path, engine.fps, engine.width, engine.height)   # 60p / 4K: Converter offers a copy
+        m["converting"] = conform.STATUS.get(m["name"])
     return jsonify(out)
 
 

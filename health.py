@@ -210,8 +210,8 @@ class Health:
             import conform as _c
             busy = {n: v for n, v in dict(_c.STATUS).items() if v != "ready"}
             if busy:
-                add("60p / 4K clips", "warn" if any(v.startswith("failed") for v in busy.values()) else "ok",
-                    "Converting to the program's frame rate and size (the original plays until then): " +
+                add("Converter", "warn" if any(v.startswith("failed") for v in busy.values()) else "ok",
+                    "Converting to the program's frame rate and size: " +
                     ", ".join(f"{n} {v}" for n, v in list(busy.items())[:4]))
             if s.get("app_cpu") is not None and cpu > 80:
                 inside = ", ".join(f"{k} {v}%" for k, v in s.get("app_parts") or [])
