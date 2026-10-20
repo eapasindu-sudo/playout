@@ -51,7 +51,8 @@ def open_video(path):
     return av.open(path)
 
 
-MEDIA_EXT = {".mp4", ".mov", ".mxf", ".mkv", ".avi", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".wmv"}
+MEDIA_EXT = {".mp4", ".mov", ".mxf", ".mkv", ".avi", ".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".m2v", ".vob",
+             ".webm", ".wmv", ".m4v", ".flv", ".3gp", ".dv", ".ogv", ".mjpeg", ".y4m"}
 _probe_cache = {}
 
 
