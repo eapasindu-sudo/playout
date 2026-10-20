@@ -167,7 +167,8 @@ class WebRenderer:
                 "--force-device-scale-factor=1", f"--window-size={self.width},{self.height}", "about:blank"]
         if sys.platform != "win32" and hasattr(os, "geteuid") and os.geteuid() == 0:
             args[1:1] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]   # Linux as root (test machines / containers)
-        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        # below normal: the scoreboard waits a moment rather than the program output, stream or recording
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 0
         _quiet_crashes()
         err = open(os.path.join(self._dir, "browser-errors.txt"), "wb")
         try:

@@ -80,6 +80,18 @@ def supervise():
         time.sleep(2)
 
 
+def _above_normal():
+    """Playout runs a little above other programs, so a busy PC slows them, not the program
+    output, the stream or the recording. (The scoreboard browser is started below normal.)"""
+    if sys.platform != "win32":
+        return
+    try:
+        import psutil
+        psutil.Process().nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+    except Exception:
+        pass
+
+
 def main():
     if "--composer" in sys.argv:
         import composer
@@ -91,6 +103,7 @@ def main():
     if paths.FROZEN and not ({"--app", "--headless", "--no-launcher"} & set(sys.argv)):
         return supervise()
 
+    _above_normal()
     if "--headless" in sys.argv:
         r = start_server()
         if isinstance(r, int):
