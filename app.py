@@ -1794,7 +1794,7 @@ def webcg_snapshot():
         return jsonify(error="Paste the overlay link (it starts with http:// or https://)"), 400
     W, H = engine.width, engine.height
     pw, ph = int(b.get("page_w") or 0) or W, int(b.get("page_h") or 0) or H
-    page, err = webcg.snapshot(url, pw, ph)
+    page, err = webcg.snapshot(url, pw, ph, css=str(b.get("css") or ""))
     zoom = max(1, float(b.get("zoom") or 100)) / 100.0
     if abs(zoom - 1) > 0.001:
         page = page.resize((max(1, round(pw * zoom)), max(1, round(ph * zoom))), Image.BILINEAR)

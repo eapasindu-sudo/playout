@@ -108,8 +108,9 @@ class _StoppedAtOnce(Exception):
 class WebRenderer:
     """One headless browser page; .frame is the latest (bgra image, (dx, dy)) cropped to what is drawn."""
 
-    def __init__(self, url, width, height, zoom=100, rate=10):
+    def __init__(self, url, width, height, zoom=100, rate=10, css=""):
         self.url = url
+        self.css = str(css or "")      # extra CSS for the page (like vMix's Web Browser input)
         self.width, self.height = max(16, int(width)), max(16, int(height))
         self.zoom = max(1, float(zoom or 100)) / 100.0
         self.interval = 1.0 / max(1.0, min(30.0, float(rate or 10)))
@@ -244,6 +245,14 @@ class WebRenderer:
         self._call(ws, "Emulation.setDeviceMetricsOverride",
                    {"width": self.width, "height": self.height, "deviceScaleFactor": 1, "mobile": False})
         self._call(ws, "Emulation.setDefaultBackgroundColorOverride", {"color": {"r": 0, "g": 0, "b": 0, "a": 0}})
+        if self.css.strip():
+            # the operator's CSS goes in every time the page loads (also after a reload), after the page's own
+            js = ("(() => { const css = %s; const add = () => { const s = document.createElement('style');"
+                  " s.textContent = css; document.documentElement.appendChild(s); };"
+                  " if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', add); else add(); })();"
+                  % json.dumps(self.css))
+            self._call(ws, "Page.enable")
+            self._call(ws, "Page.addScriptToEvaluateOnNewDocument", {"source": js})
         r = self._call(ws, "Page.navigate", {"url": self.url}, timeout=30)
         if r.get("errorText"):
             raise RuntimeError(f"Could not open the page: {r['errorText']}")
@@ -364,9 +373,9 @@ class WebRenderer:
         self._stop_browser()
 
 
-def snapshot(url, width, height, wait=3.0, timeout=20.0):
+def snapshot(url, width, height, wait=3.0, timeout=20.0, css=""):
     """One picture of the page (RGBA PIL image on a see-through background) and an error text."""
-    r = WebRenderer(url, width, height, rate=4)
+    r = WebRenderer(url, width, height, rate=4, css=css)
     try:
         end = time.monotonic() + timeout
         seen = None
