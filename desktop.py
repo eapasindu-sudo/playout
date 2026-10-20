@@ -64,7 +64,9 @@ def supervise():
     recent = []
     while True:
         started = time.time()
-        code = subprocess.call(args)
+        # crashed twice within a minute: start without putting the on-air item back (it may be the cause)
+        quick = [t for t in recent if started - t < 60]
+        code = subprocess.call(args + (["--no-resume"] if len(quick) >= 2 else []))
         if code == EXIT_RESTART:
             time.sleep(1)
             continue
@@ -250,4 +252,4 @@ def open_control_screen(webview, server, port):
 
 if __name__ == "__main__":
     code = main()
-    os._exit(code or 0)   # stop any stuck background threads
+    os._exit((code or 0) & 0x7FFFFFFF)   # stop any stuck background threads (a Windows crash code is too big for exit)

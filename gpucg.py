@@ -180,7 +180,6 @@ _KINDS = {"yuv420p": 0, "yuvj420p": 0, "yuv422p": 0, "yuvj422p": 0, "yuv444p": 0
 _BT709 = ((1.5748, 0.1873, 0.4681), 1.8556)
 _BT601 = ((1.402, 0.344136, 0.714136), 1.772)
 CONVERT = {"used": None, "error": ""}      # health page
-MAX_FAILS = 3               # failures in a row before the CPU takes over for good
 
 
 class YUVConverter:
@@ -245,7 +244,6 @@ class YUVConverter:
 
 _conv = None
 _conv_lock = threading.Lock()
-_fails = 0
 
 
 def _converter():
@@ -259,9 +257,8 @@ def _converter():
 
 def to_bgra(frame, W, H):
     """A decoded VideoFrame as a flat BGRA array of W x H, made on the graphics card.
-    The CPU (swscale) does it when the GPU cannot: this never fails. One failed picture
-    only sends that picture to the CPU; the GPU is given up after MAX_FAILS in a row."""
-    global _fails
+    The CPU (swscale) does it when the GPU cannot: this never fails. After one failure the CPU
+    does every picture: trying the graphics card again after an error can crash its driver."""
     if CONVERT["used"] is not False and (MODE or "auto").lower() not in ("off", "cpu", "none") \
             and frame.format.name in _KINDS:
         try:
@@ -270,25 +267,10 @@ def to_bgra(frame, W, H):
                 with ctx:
                     img = conv.convert(frame, W, H)
             CONVERT["used"] = True
-            _fails = 0
             return img
         except Exception as e:
-            _fails += 1
             err = f"{str(e)[:150] or type(e).__name__} ({frame.format.name} {frame.width}x{frame.height} to {W}x{H})"
-            if _conv is not None:
-                with _conv_lock:
-                    ctx, conv, _ = _conv
-                    try:
-                        with ctx:
-                            for t in list(conv.tex.values()) + ([conv.out] if conv.out is not None else []):
-                                t.release()
-                    except Exception:
-                        pass
-                    conv.tex, conv.out = {}, None     # made fresh on the next picture
-            if _fails >= MAX_FAILS:
-                CONVERT.update(used=False, error=err)
-                logging.info("Video pictures converted on the CPU: %s", err)
-            else:
-                logging.info("One video picture converted on the CPU: %s", err)
+            CONVERT.update(used=False, error=err)
+            logging.info("Video pictures converted on the CPU: %s", err)
     img = frame.reformat(width=W, height=H, format="bgra", interpolation="FAST_BILINEAR").to_ndarray()
     return np.ascontiguousarray(img).reshape(-1)

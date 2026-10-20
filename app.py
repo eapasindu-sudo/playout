@@ -1923,13 +1923,14 @@ def start_backend():
     if crashed:
         alerts.send("restart", "Playout restarted after an unexpected stop", every=30)
     air = store.data.get("air") or {}
-    if crashed and air.get("id"):
+    if crashed and air.get("id") and "--no-resume" not in sys.argv:
         # Playout closed unexpectedly (crash / power): put the item that was on air back, where it was
         offset = max(0.0, time.time() - float(air.get("since") or time.time()))
         if engine.resume(air["id"], offset):
             print(f"resumed {air['id']} at {offset:.1f}s after an unexpected stop")
     elif crashed:
-        engine.message = "Playout restarted after an unexpected stop"
+        engine.message = "Playout restarted after an unexpected stop" + \
+            (" (the item on air was not put back: it stopped Playout more than once)" if "--no-resume" in sys.argv else "")
     threading.Thread(target=_air_saver, daemon=True, name="air state").start()
     threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
 
