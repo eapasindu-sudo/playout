@@ -12,3 +12,6 @@ media/*
 cg/*
 !cg/.keep
 build/atem/
+build/cef/
+cefcg/cef/
+cefcg/out/

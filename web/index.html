@@ -497,7 +497,7 @@
         Size <input class="num" id="wbZ" type="number" style="width:70px" min="10" max="400"> %</span>
       <span>CSS</span><span style="display:flex; flex-direction:column; gap:4px"><textarea id="wbCss" rows="3" spellcheck="false" style="font-family:monospace" placeholder="#moment .mband { display: none; }"></textarea>
         <span class="hint">optional, like vMix's Web Browser input: extra CSS for the page, e.g. hide a part you do not want</span></span>
-      <span>PC load</span><span style="display:flex; gap:6px; align-items:center"><select id="wbRate"><option value="10">Smooth (10 pictures a second)</option><option value="5">Light (5 a second)</option><option value="2">Lightest (2 a second)</option></select>
+      <span>PC load</span><span style="display:flex; gap:6px; align-items:center"><select id="wbRate"><option value="25">Full (25 pictures a second, built-in browser)</option><option value="10">Smooth (10 pictures a second)</option><option value="5">Light (5 a second)</option><option value="2">Lightest (2 a second)</option></select>
         <span class="hint">fewer pictures = less CPU; the score still changes on time, animations look less smooth</span></span>
       <span>Fade</span><span style="display:flex; gap:6px; align-items:center"><input class="num" id="wbFade" type="number" style="width:70px" min="0" max="100"> frames</span>
       <span>Show</span><label><input type="checkbox" id="wbLive"> Only on live (hide during commercials)</label>
@@ -1377,7 +1377,8 @@ async function loadMedia() {
 const checkHtml = m => m.check == null ? '<span class="hint">checking...</span>' : m.check.length
   ? `<a href="#" style="color:#ff8a1c; font-weight:700" title="${esc(m.check.join('\n'))}" onclick="say(${esc(JSON.stringify(m.name + ':\n\n' + m.check.join('\n')))}); return false">&#9888; ${m.check.length}</a>`
   : '<span style="color:#2fbf3a">&#10003; OK</span>';
-// Converter: a clip not in the program's format (frame rate, size, codec) gets a Convert button; the copy appears in the library when done
+// Converter: a clip not in the program's format (frame rate, size, codec) gets a Convert button; when the copy is done
+// the library shows only the copy (the original stays in the media folder)
 const convHtml = m => m.converting && m.converting !== 'ready'
   ? ` <span class="hint">${esc(m.converting)}</span>`
   : m.convert ? ` <button class="sm" title="Make a copy at the program's frame rate and size (plays much lighter)" onclick="convertClip(${esc(JSON.stringify(m.name))})">Convert</button>` : '';
@@ -1392,7 +1393,7 @@ setInterval(() => { if (!document.hidden) loadMedia().catch(() => {}); }, 60000)
 setTimeout(() => loadMedia().catch(() => {}), 3000);
 async function openLib() {
   await loadMedia();
-  $('libT').innerHTML = '<tr><th></th><th></th><th>Clip</th><th>Length</th><th>Loudness</th><th>Check</th><th></th></tr>' + (media.map((m, i) => `
+  $('libT').innerHTML = '<tr><th></th><th></th><th>Clip</th><th>Length</th><th>Loudness</th><th>Check</th><th></th></tr>' + (media.map((m, i) => m.replaced ? '' : `
     <tr><td><input type="checkbox" data-i="${i}"></td>
       <td><img class="lib-thumb" loading="lazy" src="/api/thumb/${encodeURIComponent(m.name)}"></td>
       <td>${esc(m.name)}</td><td class="mono">${m.duration ? tc(m.duration).slice(0, 8) : '?'}</td><td class="mono hint">${m.lufs != null ? m.lufs.toFixed(1) + ' LUFS' : ''}</td><td>${checkHtml(m)}${convHtml(m)}</td>

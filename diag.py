@@ -92,7 +92,7 @@ def build(home, cfg, store_data, health, sysmon, engine=None, streamer=None):
         "video_decoding": dict(media.DECODE),
         "computer": _try(lambda: dict(sysmon.stats)),
         "stream": redact(_try(lambda: streamer.info())) if streamer else None,
-        "web_cg_pages": [{"url": redact(r.url), "loaded": r.loaded, "on_air": r.active, "pictures": r.frames,
+        "web_cg_pages": [{"url": redact(r.url), "engine": getattr(r, "engine", ""), "loaded": r.loaded, "on_air": r.active, "pictures": r.frames,
                           "error": r.error, "size": [r.width, r.height]} for r in list(webcg.LIVE)],
         "threads": sorted(t.name for t in threading.enumerate()),
     }
