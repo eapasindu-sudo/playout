@@ -206,11 +206,63 @@ def start_server(say=print):
     return server, port
 
 
+class ClipboardApi:
+    """The Windows clipboard for the control screen's right-click menu (Cut / Copy / Paste in text
+    boxes such as the stream key or a scoreboard link). The page calls window.pywebview.api.*."""
+
+    def get_text(self):
+        import ctypes
+        from ctypes import wintypes
+        u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+        u32.GetClipboardData.restype = wintypes.HANDLE
+        k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        k32.GlobalLock.restype = ctypes.c_void_p
+        k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        if not u32.OpenClipboard(None):
+            return ""
+        try:
+            h = u32.GetClipboardData(13)            # CF_UNICODETEXT
+            if not h:
+                return ""
+            ptr = k32.GlobalLock(h)
+            try:
+                return ctypes.wstring_at(ptr) if ptr else ""
+            finally:
+                k32.GlobalUnlock(h)
+        finally:
+            u32.CloseClipboard()
+
+    def set_text(self, text):
+        import ctypes
+        from ctypes import wintypes
+        u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+        k32.GlobalAlloc.restype = wintypes.HGLOBAL
+        k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        k32.GlobalLock.restype = ctypes.c_void_p
+        k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        u32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        data = str(text or "")
+        size = (len(data) + 1) * 2
+        h = k32.GlobalAlloc(0x0002, size)          # GMEM_MOVEABLE
+        if not h:
+            return False
+        ptr = k32.GlobalLock(h)
+        ctypes.memmove(ptr, ctypes.create_unicode_buffer(data), size)
+        k32.GlobalUnlock(h)
+        if not u32.OpenClipboard(None):
+            return False
+        try:
+            u32.EmptyClipboard()
+            return bool(u32.SetClipboardData(13, h))   # the clipboard owns h from here
+        finally:
+            u32.CloseClipboard()
+
+
 def open_control_screen(webview, server, port):
     main_win = webview.create_window(
         "Endora Playout", f"http://127.0.0.1:{port}/",
         width=1600, height=950, min_size=(1100, 700), maximized=True,
-        background_color="#0c0d0f", confirm_close=True,
+        background_color="#0c0d0f", confirm_close=True, js_api=ClipboardApi(),
     )
     out = {"win": None}
 
