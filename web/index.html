@@ -246,6 +246,7 @@
         <div class="sys" id="sys" title="Usage of this PC">
           <div class="m"><div class="t">CPU <b id="sCpu">--</b></div><div class="bar"><div id="bCpu"></div></div></div>
           <div class="m"><div class="t">GPU <b id="sGpu">--</b></div><div class="bar"><div id="bGpu"></div></div></div>
+          <div class="m" title="Temperatures: CPU (Windows thermal zone) / GPU (NVIDIA). Over 80 °C turns yellow, over 90 °C red."><div class="t">TEMP <b id="sTemp">--</b></div><div class="t" style="margin-top:2px">CPU <b id="sTc">--</b> GPU <b id="sTg">--</b></div></div>
           <div class="m"><div class="t">RAM <b id="sRam">--</b></div><div class="bar"><div id="bRam"></div></div></div>
           <div class="m" style="width:118px" title="Network: upload / download of this PC"><div class="t">NET &#8593; <b id="sUp">--</b></div><div class="t">&#8595; <b id="sDown">--</b></div></div>
           <div class="fmt" id="sApp"></div>
@@ -2078,6 +2079,11 @@ async function pollSys() {
   set('sGpu', 'bGpu', m.gpu, m.gpu + '%');
   set('sRam', 'bRam', m.ram, m.ram + '%');
   const mb = v => v == null ? '--' : (v >= 10 ? Math.round(v) : v.toFixed(1)) + ' Mbps';
+  const tc = (id, v) => { const e = $(id); e.textContent = v == null ? 'n/a' : v + '°'; e.style.color = v > 90 ? 'var(--red)' : v > 80 ? 'var(--yellow)' : ''; };
+  tc('sTc', m.cpu_temp); tc('sTg', m.gpu_temp);
+  const hi = Math.max(m.cpu_temp ?? -1, m.gpu_temp ?? -1);
+  $('sTemp').textContent = hi < 0 ? 'n/a' : hi > 90 ? 'HOT' : hi > 80 ? 'WARM' : 'OK';
+  $('sTemp').style.color = hi > 90 ? 'var(--red)' : hi > 80 ? 'var(--yellow)' : '';
   $('sUp').textContent = mb(m.net_up_mbps); $('sDown').textContent = mb(m.net_down_mbps);
   $('sys').title = `CPU ${m.cpu ?? '?'}%  |  GPU ${m.gpu ?? 'n/a'}%${m.gpu_name ? ' ' + m.gpu_name : ''}${m.gpu_mem_mb ? ', ' + m.gpu_mem_mb + ' MB' : ''}  |  RAM ${m.ram_used_gb ?? '?'} / ${m.ram_total_gb ?? '?'} GB`;
   $('sApp').innerHTML = m.app_cpu != null ? `Playout<br>${m.app_cpu}% CPU, ${m.app_ram_mb} MB` : '';

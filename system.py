@@ -25,6 +25,10 @@ class _PdhGpu:
                                        ctypes.byref(self.c_util))
         self.pdh.PdhAddEnglishCounterW(self.query, r"\GPU Adapter Memory(*)\Dedicated Usage", 0,
                                        ctypes.byref(self.c_mem))
+        self.c_temp = wintypes.HANDLE()
+        if self.pdh.PdhAddEnglishCounterW(self.query, r"\Thermal Zone Information(*)\Temperature", 0,
+                                          ctypes.byref(self.c_temp)) != 0:
+            self.c_temp = None
         self.pdh.PdhCollectQueryData(self.query)
 
         class Value(ctypes.Structure):
@@ -34,6 +38,27 @@ class _PdhGpu:
             _fields_ = [("szName", ctypes.c_wchar_p), ("FmtValue", Value)]
 
         self.Item = Item
+
+    def _values(self, counter):
+        ct = self.ct
+        size, count = ct.c_ulong(0), ct.c_ulong(0)
+        fmt = 0x00000200 | 0x00008000   # PDH_FMT_DOUBLE | PDH_FMT_NOCAP100
+        self.pdh.PdhGetFormattedCounterArrayW(counter, fmt, ct.byref(size), ct.byref(count), None)
+        if size.value == 0:
+            return []
+        buf = (ct.c_byte * size.value)()
+        if self.pdh.PdhGetFormattedCounterArrayW(counter, fmt, ct.byref(size), ct.byref(count), buf) != 0:
+            return []
+        items = ct.cast(buf, ct.POINTER(self.Item))
+        return [items[i].FmtValue.doubleValue for i in range(count.value) if items[i].FmtValue.CStatus == 0]
+
+    def cpu_temp(self):
+        """Hottest ACPI thermal zone in deg C (Windows reports Kelvin); None when the PC has no thermal zone."""
+        if not self.c_temp:
+            return None
+        c = [k - 273.15 for k in self._values(self.c_temp) if k > 0]
+        c = [x for x in c if 5 < x < 125]
+        return max(c) if c else None
 
     def _sum(self, counter):
         ct = self.ct
@@ -61,24 +86,26 @@ def _nvidia_smi():
     if not exe:
         return None
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    out = subprocess.run([exe, "--query-gpu=utilization.gpu,memory.used,memory.total,name",
+    out = subprocess.run([exe, "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name",
                           "--format=csv,noheader,nounits"], capture_output=True, text=True,
                          timeout=3, creationflags=flags).stdout.strip().splitlines()
     if not out:
         return None
-    util, used, total, name = [x.strip() for x in out[0].split(",", 3)]
-    return float(util), float(used), float(total), name
+    util, used, total, temp, name = [x.strip() for x in out[0].split(",", 4)]
+    num = lambda x: float(x) if x.replace(".", "", 1).isdigit() else None
+    return num(util), num(used), num(total), name, num(temp)
 
 
 class SystemMonitor:
     def __init__(self):
         self.stats = {"cpu": None, "ram": None, "ram_used_gb": None, "ram_total_gb": None,
-                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "app_cpu": None, "app_ram_mb": None, "app_children_cpu": None, "top_other": [], "app_parts": [],
+                      "gpu": None, "gpu_mem_mb": None, "gpu_name": None, "cpu_temp": None, "gpu_temp": None, "app_cpu": None, "app_ram_mb": None, "app_children_cpu": None, "top_other": [], "app_parts": [],
                       "net_up_mbps": None, "net_down_mbps": None}
         self._proc = psutil.Process()
         self._pdh = None
         self._running = False
         self._net = None
+        self._tick = 0
 
     def start(self):
         self._running = True
@@ -178,7 +205,20 @@ class SystemMonitor:
             s["net_up_mbps"] = round((n.bytes_sent - sent) * 8 / dt_ / 1e6, 2)
             s["net_down_mbps"] = round((n.bytes_recv - recv) * 8 / dt_ / 1e6, 2)
         self._net = (n.bytes_sent, n.bytes_recv, now)
+        self._tick += 1
+        nv = None
+        if self._tick % 3 == 1:            # temperatures change slowly: every 6 s is enough
+            try:
+                nv = _nvidia_smi()
+                s["gpu_temp"] = round(nv[4]) if nv and nv[4] is not None else None
+            except Exception:
+                pass
         if self._pdh:
+            try:
+                t = self._pdh.cpu_temp()
+                s["cpu_temp"] = round(t) if t is not None else None
+            except Exception:
+                pass
             try:
                 util, mem = self._pdh.read()
                 if util is not None:
@@ -188,8 +228,8 @@ class SystemMonitor:
             except Exception:
                 pass
         try:
-            nv = _nvidia_smi()
-            if nv:
-                s["gpu"], s["gpu_mem_mb"], s["gpu_name"] = round(nv[0]), round(nv[1]), nv[3]
+            nv = nv or _nvidia_smi()
+            if nv and nv[0] is not None:
+                s["gpu"], s["gpu_mem_mb"], s["gpu_name"] = round(nv[0]), round(nv[1] or 0), nv[3]
         except Exception:
             pass
