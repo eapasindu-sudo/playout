@@ -9,6 +9,7 @@ find_package(CEF REQUIRED)
 add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 
 set(CEF_TARGET cefcg)
+set(CEF_TARGET_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIGURATION>")   # next to cefcg.exe
 ADD_LOGICAL_TARGET("libcef_lib" "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
 add_executable(${CEF_TARGET} WIN32 cefcg.cc)
 SET_EXECUTABLE_TARGET_PROPERTIES(${CEF_TARGET})
