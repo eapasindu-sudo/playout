@@ -13,16 +13,24 @@ A web CG config (manual CG list):
     fade, live_only     like other manual CGs
     rate                pictures per second taken from the page (default 10)
 
+Two ways to draw the page:
+  - Playout's built-in browser (cefcg.exe, Chromium Embedded, like vMix's Web Browser input): the page is drawn
+    off screen straight into shared memory, so there is no picture to compress and decode. Used when it came
+    with Playout ({app}\\cef); set "web_engine": "edge" in config.json to use Edge / Chrome instead.
+  - Microsoft Edge / Google Chrome headless, pictures taken over its DevTools protocol (PNG): the fallback.
+
 The browser is looked for in the usual install folders, or set "web_browser" in config.json.
 """
 import atexit
 import base64
 import io
+import itertools
 import json
 import logging
 import os
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
@@ -36,6 +44,8 @@ from PIL import Image
 _procs = set()
 LIVE = weakref.WeakSet()       # pages open now (diagnostics file)
 BROWSER = None          # config "web_browser" (app.py sets it)
+ENGINE = None           # config "web_engine": "edge" = always Edge / Chrome, not the built-in browser
+CEF_EXE = "cefcg.exe"
 
 
 def find_browsers():
@@ -134,8 +144,222 @@ class _StoppedAtOnce(Exception):
     pass
 
 
-class WebRenderer:
+def cef_exe():
+    """The built-in browser that came with Playout ({app}\\cef\\cefcg.exe), or one CI put in build\\cef."""
+    if sys.platform != "win32":
+        return None
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build")
+    p = os.path.join(base, "cef", CEF_EXE)
+    return p if os.path.isfile(p) else None
+
+
+def WebRenderer(url, width, height, zoom=100, rate=10, css=""):
+    """A web page drawn for a CG: the built-in browser when Playout has it, else Edge / Chrome."""
+    if str(ENGINE or "").lower() != "edge" and cef_exe():
+        return CefRenderer(url, width, height, zoom, rate, css)
+    return EdgeRenderer(url, width, height, zoom, rate, css)
+
+
+def _css_js(css):
+    """JavaScript that adds the operator's CSS to the page, after the page's own (on every load)."""
+    return ("(() => { const css = %s; const add = () => { const s = document.createElement('style');"
+            " s.textContent = css; document.documentElement.appendChild(s); };"
+            " if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', add); else add(); })();"
+            % json.dumps(css))
+
+
+def _finish(out, dx, dy, zoom, premultiplied):
+    """A BGRA picture cropped to what is drawn: sized by zoom, and with straight alpha for the CG blend."""
+    if abs(zoom - 1.0) > 0.001:
+        h, w = out.shape[:2]
+        im = Image.fromarray(out, "RGBA").resize((max(1, round(w * zoom)), max(1, round(h * zoom))), Image.BILINEAR)
+        out = np.asarray(im).copy()
+        dx, dy = round(dx * zoom), round(dy * zoom)
+    al = out[..., 3:4].astype(np.uint16)
+    part = (al > 0) & (al < 255)
+    if premultiplied and part.any():
+        rgb = out[..., :3].astype(np.uint16) * 255 // np.maximum(al, 1)
+        out[..., :3] = np.where(part, np.minimum(rgb, 255), out[..., :3]).astype(np.uint8)
+    return out, (dx, dy)
+
+
+_shm_ids = itertools.count(1)
+
+
+class CefRenderer:
+    """One page in Playout's built-in browser (cefcg.exe); .frame is the latest (bgra image, (dx, dy)) cropped
+    to what is drawn. The browser draws only when the page changes, straight into shared memory; a picture is
+    copied out at most `rate` times a second, and only while the CG is on air. If the built-in browser cannot
+    run on this PC, the page goes to Edge / Chrome instead."""
+    engine = "built-in"
+
+    def __init__(self, url, width, height, zoom=100, rate=10, css=""):
+        self.url = url
+        self.css = str(css or "")
+        self.width, self.height = max(16, int(width)), max(16, int(height))
+        self.zoom = max(1, float(zoom or 100)) / 100.0
+        self.rate = max(1.0, min(30.0, float(rate or 10)))
+        self.interval = 1.0 / self.rate
+        self.frame = None
+        self.error = ""
+        self.loaded = False
+        self.frames = 0
+        self.active = True
+        self._reload = False
+        self._running = True
+        self._proc = None
+        self._dir = None
+        self._fallback = None
+        self._wait = 1.5
+        LIVE.add(self)
+        self._thread = threading.Thread(target=self._run, daemon=True, name="web cg")
+        self._thread.start()
+
+    def _start(self, name):
+        _clean_leftovers()
+        self._dir = tempfile.mkdtemp(prefix="playout-web-")
+        args = [cef_exe(), f"--cg-url={self.url}", f"--cg-width={self.width}", f"--cg-height={self.height}",
+                f"--cg-fps={max(1, round(self.rate))}", f"--cg-shm={name}",
+                f"--cg-cache={os.path.join(self._dir, 'cache')}"]
+        if self.css.strip():
+            js = os.path.join(self._dir, "page.js")
+            with open(js, "w", encoding="utf-8") as f:
+                f.write(_css_js(self.css))
+            args.append(f"--cg-js={js}")
+        _quiet_crashes()
+        self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                      creationflags=subprocess.CREATE_NO_WINDOW)
+        _procs.add(self._proc)
+        threading.Thread(target=self._read, args=(self._proc,), daemon=True, name="web cg messages").start()
+
+    def _read(self, proc):
+        for raw in proc.stdout:
+            line = raw.decode("utf-8", "replace").strip()
+            if line == "loaded":
+                self.loaded, self.error = True, ""
+            elif line.startswith("error "):
+                self.error = line[6:][:200]
+
+    def _tell(self, cmd):
+        try:
+            self._proc.stdin.write((cmd + "\n").encode())
+            self._proc.stdin.flush()
+        except (OSError, AttributeError, ValueError):
+            pass
+
+    def _stop(self):
+        p, self._proc = self._proc, None
+        if p is not None:
+            try:
+                p.stdin.write(b"quit\n")
+                p.stdin.close()
+                p.wait(timeout=3)
+            except Exception:
+                try:
+                    p.kill()
+                    p.wait(timeout=3)
+                except Exception:
+                    pass
+            _procs.discard(p)
+        d, self._dir = self._dir, None
+        if d:
+            shutil.rmtree(d, ignore_errors=True)
+
+    @staticmethod
+    def _grab(arr, zoom):
+        alpha = arr[..., 3]
+        rows = np.flatnonzero(alpha.any(axis=1))
+        if not len(rows):
+            return None, (0, 0)
+        r0, r1 = rows[0], rows[-1] + 1
+        cols = np.flatnonzero(alpha[r0:r1].any(axis=0))
+        c0, c1 = cols[0], cols[-1] + 1
+        return _finish(arr[r0:r1, c0:c1].copy(), int(c0), int(r0), zoom, premultiplied=True)
+
+    def _run(self):
+        import mmap
+        quick_fails = 0
+        while self._running:
+            name = f"Local\\playout-cefcg-{os.getpid()}-{next(_shm_ids)}"
+            mm = arr = None
+            started, frames_before = time.monotonic(), self.frames
+            try:
+                mm = mmap.mmap(-1, 64 + self.width * self.height * 4, tagname=name)
+                arr = np.frombuffer(mm, dtype=np.uint8, count=self.width * self.height * 4, offset=64)
+                arr = arr.reshape(self.height, self.width, 4)
+                self._start(name)
+                shown, last = True, -1
+                while self._running:
+                    if self._reload:
+                        self._reload = False
+                        self._tell("reload")
+                    if self.active != shown:
+                        shown = self.active
+                        self._tell("show" if shown else "hide")
+                    if self._proc.poll() is not None:
+                        raise RuntimeError(f"The built-in browser stopped (exit code {self._proc.returncode})")
+                    seq = struct.unpack_from("<q", mm, 16)[0]
+                    if shown and seq != last and seq > 0 and seq % 2 == 0:
+                        img, off = self._grab(arr, self.zoom)
+                        if struct.unpack_from("<q", mm, 16)[0] == seq:    # not drawn over while copied
+                            last = seq
+                            self.frame = (img, off) if img is not None else None
+                            self.frames += 1
+                    time.sleep(self.interval)
+            except Exception as e:
+                if self._running:
+                    self.error = self.error or (str(e)[:200] or type(e).__name__)
+                    logging.info("web CG (built-in browser) %s: %s", self.url, self.error)
+            finally:
+                self._stop()
+                self.loaded = False
+                arr = None
+                if mm is not None:
+                    try:
+                        mm.close()
+                    except Exception:
+                        pass
+            if not self._running:
+                break
+            # stopped at once without drawing anything: twice in a row = this PC cannot run it, use Edge / Chrome
+            quick = self.frames == frames_before and time.monotonic() - started < 15
+            quick_fails = quick_fails + 1 if quick else 0
+            if quick_fails >= 2:
+                logging.info("web CG: built-in browser does not run on this PC, using Edge / Chrome (%s)", self.error)
+                self._use_edge()
+                return
+            self._wait = 3 if not quick else min(60, self._wait * 2)
+            end = time.monotonic() + self._wait
+            while self._running and time.monotonic() < end:
+                time.sleep(0.2)
+
+    def _use_edge(self):
+        fb = self._fallback = EdgeRenderer(self.url, self.width, self.height, self.zoom * 100, self.rate, self.css)
+        LIVE.discard(self)
+        while self._running:
+            fb.active = self.active
+            self.frame, self.error, self.loaded, self.frames = fb.frame, fb.error, fb.loaded, fb.frames
+            time.sleep(min(0.05, self.interval))
+
+    def reload(self):
+        if self._fallback:
+            self._fallback.reload()
+        else:
+            self._reload = True
+
+    def close(self):
+        self._running = False
+        if self._fallback:
+            self._fallback.close()
+        self._stop()
+
+
+class EdgeRenderer:
     """One headless browser page; .frame is the latest (bgra image, (dx, dy)) cropped to what is drawn."""
+    engine = "edge"
 
     def __init__(self, url, width, height, zoom=100, rate=10, css=""):
         self.url = url
@@ -277,10 +501,7 @@ class WebRenderer:
         self._call(ws, "Emulation.setDefaultBackgroundColorOverride", {"color": {"r": 0, "g": 0, "b": 0, "a": 0}})
         if self.css.strip():
             # the operator's CSS goes in every time the page loads (also after a reload), after the page's own
-            js = ("(() => { const css = %s; const add = () => { const s = document.createElement('style');"
-                  " s.textContent = css; document.documentElement.appendChild(s); };"
-                  " if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', add); else add(); })();"
-                  % json.dumps(self.css))
+            js = _css_js(self.css)
             self._call(ws, "Page.enable")
             self._call(ws, "Page.addScriptToEvaluateOnNewDocument", {"source": js})
         r = self._call(ws, "Page.navigate", {"url": self.url}, timeout=30)
@@ -311,19 +532,9 @@ class WebRenderer:
         if box is None:
             return None, (0, 0)                     # nothing drawn (yet)
         im = im.crop(box)
-        dx, dy = box[0], box[1]
-        if abs(self.zoom - 1.0) > 0.001:
-            im = im.resize((max(1, round(im.width * self.zoom)), max(1, round(im.height * self.zoom))), Image.BILINEAR)
-            dx, dy = round(dx * self.zoom), round(dy * self.zoom)
-        a = np.asarray(im)
-        out = np.ascontiguousarray(a[..., [2, 1, 0, 3]])
+        out = np.ascontiguousarray(np.asarray(im)[..., [2, 1, 0, 3]])
         # screencast pictures come premultiplied: back to straight alpha for the CG blend
-        al = out[..., 3:4].astype(np.uint16)
-        part = (al > 0) & (al < 255)
-        if premultiplied and part.any():
-            rgb = out[..., :3].astype(np.uint16) * 255 // np.maximum(al, 1)
-            out[..., :3] = np.where(part, np.minimum(rgb, 255), out[..., :3]).astype(np.uint8)
-        return out, (dx, dy)
+        return _finish(out, box[0], box[1], self.zoom, premultiplied)
 
     def _run(self):
         import websocket

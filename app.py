@@ -102,6 +102,7 @@ def save_output_format(res, fps):
     os.replace(tmp, path)
     return raw
 webcg.BROWSER = cfg.get("web_browser") or None    # Edge / Chrome for web overlays (found by itself when unset)
+webcg.ENGINE = cfg.get("web_engine") or None      # "edge": web overlays in Edge / Chrome, not the built-in browser
 import gpucg
 gpucg.MODE = cfg.get("cg_gpu", "auto")   # CG blending on the graphics card: auto / off
 gpucg.CONVERT_MODE = cfg.get("picture_gpu", "off")   # clip pictures converted on the graphics card: off / auto
@@ -1019,6 +1020,9 @@ def media():
         m["convert"] = conform.needs(path, engine.fps, engine.width, engine.height) \
             and not os.path.isfile(conform.target(path, engine.fps))   # not the program's format: Converter offers a copy
         m["converting"] = conform.STATUS.get(m["name"])
+        copy = conform.target(path, engine.fps)
+        m["replaced"] = os.path.normcase(copy) != os.path.normcase(path) and os.path.isfile(copy) \
+            and conform.STATUS.get(m["name"]) in (None, "ready")   # converted: the library shows only the copy
     return jsonify(out)
 
 

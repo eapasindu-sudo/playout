@@ -34,6 +34,8 @@ Source: "dist\Playout\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdi
 Source: "endora-playout.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "endora-cgcomposer.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "update.ps1"; DestDir: "{app}"; Flags: ignoreversion
+; Built-in browser for web overlays (cefcg.exe + Chromium Embedded; CI builds it into build\cef)
+Source: "cef\*"; DestDir: "{app}\cef"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 ; ATEM Switcher + Sony camera control (CI puts it in build\atem from the atem-web-switcher release)
 Source: "atem\*"; DestDir: "{app}\atem"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 

@@ -42,6 +42,28 @@ jobs:
           if ($errs.Count) { $errs | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
           Write-Host "update script OK"
 
+      - name: Built-in browser for web overlays (cefcg.exe + Chromium Embedded)
+        shell: pwsh
+        run: |
+          # the newest stable CEF "minimal" build for 64-bit Windows
+          $idx = Invoke-RestMethod https://cef-builds.spotifycdn.com/index.json
+          $v = $idx.windows64.versions | Where-Object channel -eq 'stable' | Select-Object -First 1
+          $f = $v.files | Where-Object type -eq 'minimal' | Select-Object -First 1
+          "CEF $($v.cef_version) ($($f.name))"
+          Invoke-WebRequest "https://cef-builds.spotifycdn.com/$($f.name)" -OutFile "$env:RUNNER_TEMP\cef.tar.bz2"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\cef" | Out-Null
+          tar -xjf "$env:RUNNER_TEMP\cef.tar.bz2" -C "$env:RUNNER_TEMP\cef"
+          $root = (Get-ChildItem "$env:RUNNER_TEMP\cef" -Directory | Select-Object -First 1).FullName -replace '\\', '/'
+          cmake -S cefcg -B cefcg\out -A x64 "-DCEF_ROOT=$root"
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+          cmake --build cefcg\out --config Release --target cefcg
+          if ($LASTEXITCODE -ne 0) { throw "cefcg build failed" }
+          New-Item -ItemType Directory -Force build\cef | Out-Null
+          Copy-Item cefcg\out\Release\* build\cef -Recurse -Force -Exclude *.lib,*.pdb,*.exp,*.ilk
+          Get-ChildItem build\cef | Select-Object Name, Length
+          if (-not (Test-Path build\cef\cefcg.exe)) { throw "cefcg.exe not built" }
+      - name: Test the built-in browser (draws a page into a web CG)
+        run: python build/test_cefcg.py
       - name: Build Playout.exe
         working-directory: build
         run: pyinstaller --noconfirm playout.spec
