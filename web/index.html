@@ -228,6 +228,10 @@
   .ndit td { font-size:12px; vertical-align:middle; }
   .ndit .use { color:var(--green); font-weight:600; }
   .tcg-prev { width:100%; aspect-ratio:16/9; background:#000; display:block; border:1px solid #333; }
+  #ctxMenu { position:fixed; z-index:9999; display:none; min-width:150px; padding:4px 0; background:#1b1d22; border:1px solid #3a3d45; border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.5); }
+  #ctxMenu button { display:block; width:100%; text-align:left; padding:6px 14px; background:none; border:0; border-radius:0; color:#e6e6e6; font-size:13px; }
+  #ctxMenu button:hover:not(:disabled) { background:#2c5fd4; }
+  #ctxMenu button:disabled { color:#666; }
 </style>
 </head>
 <body>
@@ -2581,6 +2585,56 @@ async function saveStreamSet() {
   await api('/api/stream/settings', {resolution:$('ssRes').value, video_kbps:+$('ssV').value, audio_kbps:+$('ssA').value, encoder:$('ssE').value});
   dStream.close(); pollStream();
 }
+
+// right-click in a text box (stream key, scoreboard link...): Cut / Copy / Paste / Select all. The desktop
+// window has no menu of its own, so the clipboard goes through Playout (window.pywebview.api) there.
+(function textMenu() {
+  const m = document.createElement('div');
+  m.id = 'ctxMenu';
+  m.innerHTML = '<button data-a="cut">Cut</button><button data-a="copy">Copy</button><button data-a="paste">Paste</button><button data-a="all">Select all</button>';
+  document.body.appendChild(m);
+  let field = null;
+  const clip = {
+    get: () => window.pywebview?.api ? window.pywebview.api.get_text() : navigator.clipboard.readText(),
+    set: (t) => window.pywebview?.api ? window.pywebview.api.set_text(t) : navigator.clipboard.writeText(t),
+  };
+  const isText = (el) => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && /^(text|url|password|search|email|number|tel|)$/.test(el.type)));
+  const hide = () => { m.style.display = 'none'; field = null; };
+  document.addEventListener('contextmenu', e => {
+    if (!isText(e.target)) return hide();
+    e.preventDefault();
+    field = e.target;
+    field.focus();
+    const sel = field.selectionStart !== field.selectionEnd;
+    const ro = field.readOnly || field.disabled;
+    m.querySelector('[data-a=cut]').disabled = !sel || ro;
+    m.querySelector('[data-a=copy]').disabled = !sel;
+    m.querySelector('[data-a=paste]').disabled = ro;
+    (field.closest('dialog') || document.body).appendChild(m);   // a modal dialog sits above everything else
+    m.style.display = 'block';
+    m.style.left = Math.min(e.clientX, innerWidth - m.offsetWidth - 4) + 'px';
+    m.style.top = Math.min(e.clientY, innerHeight - m.offsetHeight - 4) + 'px';
+  });
+  m.addEventListener('mousedown', e => e.preventDefault());     // keep the text box's selection
+  m.addEventListener('click', async e => {
+    const a = e.target.dataset.a, f = field;
+    hide();
+    if (!a || !f) return;
+    const whole = f.selectionStart == null;                 // number boxes have no selection: the whole value
+    const s0 = whole ? 0 : f.selectionStart, s1 = whole ? f.value.length : f.selectionEnd;
+    const put = (t) => { if (whole) f.value = t; else f.setRangeText(t, s0, s1, 'end'); };
+    try {
+      if (a === 'all') { f.select(); return; }
+      if (a === 'copy' || a === 'cut') await clip.set(f.value.slice(s0, s1));
+      if (a === 'cut') put('');
+      if (a === 'paste') { const t = await clip.get(); f.focus(); put(f.tagName === 'INPUT' ? String(t || '').trim() : String(t || '')); }
+      if (a !== 'copy') { f.dispatchEvent(new Event('input', {bubbles: true})); f.dispatchEvent(new Event('change', {bubbles: true})); }
+    } catch (err) { console.warn('clipboard:', err); }
+  });
+  document.addEventListener('mousedown', e => { if (!m.contains(e.target)) hide(); });
+  window.addEventListener('blur', hide);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+})();
 
 // keyboard: Space = Next, F1 = Play, F2 = Pause, Esc-hold avoided; F12 = Take live
 document.addEventListener('keydown', e => {
