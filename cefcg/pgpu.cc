@@ -1888,6 +1888,9 @@ void PreviewApply() {
 }
 
 void PreviewThread() {
+  // window places in real pixels, as Playout sends them: without this Windows scales them on a display
+  // that is not at 100% (the preview came out smaller than the box and shifted)
+  ::SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   MSG m;
   ::PeekMessageW(&m, nullptr, 0, 0, PM_NOREMOVE);   // makes this thread's message queue
   g_pv_thread_id = ::GetCurrentThreadId();
