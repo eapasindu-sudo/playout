@@ -286,28 +286,43 @@ class CefRenderer:
             name = f"Local\\playout-cefcg-{os.getpid()}-{next(_shm_ids)}"
             mm = arr = None
             started, frames_before = time.monotonic(), self.frames
+            restart = False
             try:
                 mm = mmap.mmap(-1, 64 + self.width * self.height * 4, tagname=name)
                 arr = np.frombuffer(mm, dtype=np.uint8, count=self.width * self.height * 4, offset=64)
                 arr = arr.reshape(self.height, self.width, 4)
                 self._start(name)
-                shown, last = True, -1
+                shown, last, seen, poked = True, -1, time.monotonic(), 0.0
                 while self._running:
                     if self._reload:
+                        # Reload = start the page in a fresh browser (the picture on air stays until the new one)
                         self._reload = False
-                        self._tell("reload")
+                        restart = True
+                        break
                     if self.active != shown:
                         shown = self.active
                         self._tell("show" if shown else "hide")
+                        seen, poked = time.monotonic(), 0.0
                     if self._proc.poll() is not None:
                         raise RuntimeError(f"The built-in browser stopped (exit code {self._proc.returncode})")
                     seq = struct.unpack_from("<q", mm, 16)[0]
+                    now = time.monotonic()
+                    if seq != last:
+                        seen, poked = now, 0.0
                     if shown and seq != last and seq > 0 and seq % 2 == 0:
                         img, off = self._grab(arr, self.zoom)
                         if struct.unpack_from("<q", mm, 16)[0] == seq:    # not drawn over while copied
                             last = seq
                             self.frame = (img, off) if img is not None else None
                             self.frames += 1
+                    elif shown and self.loaded and now - seen > 5:
+                        # nothing drawn for a while: a still page is fine, so ask for one picture ("show" redraws);
+                        # no picture after that = the browser is stuck: start it again
+                        if not poked:
+                            poked = now
+                            self._tell("show")
+                        elif now - poked > 5:
+                            raise RuntimeError("The built-in browser stopped drawing the page (started again)")
                     time.sleep(self.interval)
             except Exception as e:
                 if self._running:
@@ -324,6 +339,9 @@ class CefRenderer:
                         pass
             if not self._running:
                 break
+            if restart:
+                quick_fails = 0
+                continue
             # stopped at once without drawing anything: twice in a row = this PC cannot run it, use Edge / Chrome
             quick = self.frames == frames_before and time.monotonic() - started < 15
             quick_fails = quick_fails + 1 if quick else 0

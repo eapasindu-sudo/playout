@@ -36,6 +36,22 @@ try:
     assert abs(a - 128) <= 3 and red >= 250 and g <= 3, "red box colour / straight alpha wrong"
     assert rate >= 10, "the moving page should give many pictures a second"
     assert r._fallback is None, "fell back to Edge"
+    # Reload: the page comes back and keeps moving (it froze after a reload in 1.0.89)
+    r.reload()
+    time.sleep(6)
+    n1 = r.frames
+    time.sleep(3)
+    print("pictures after reload:", r.frames - n1, "error", r.error)
+    assert r.frames - n1 >= 20, "the page froze after Reload"
+    # off air and on again: pictures come back
+    r.active = False
+    time.sleep(2)
+    r.active = True
+    time.sleep(2)
+    n2 = r.frames
+    time.sleep(2)
+    print("pictures after off / on air:", r.frames - n2)
+    assert r.frames - n2 >= 10, "the page froze after going off and on air"
 finally:
     r.close()
 print("built-in browser OK")
