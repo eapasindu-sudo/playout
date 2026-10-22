@@ -108,6 +108,10 @@
   .screen { position:relative; aspect-ratio:16/9; background:#000; border:1px solid #333; }
   .screen img { width:100%; height:100%; display:block; object-fit:contain; }
   .screen .tag { position:absolute; top:6px; right:6px; font-weight:800; font-size:11px; padding:2px 6px; border-radius:2px; }
+  /* the GPU engine draws the preview in its own window over the whole box: the tag and rate choice go outside */
+  .screen.native { margin:20px 0 22px; }
+  .screen.native .tag { top:auto; bottom:100%; right:0; margin-bottom:2px; }
+  .screen.native #pvRate { bottom:auto !important; top:100%; right:0 !important; margin-top:2px; }
   .prog { grid-column: 2; height:5px; background:#050506; }
   .prog > div { height:100%; background:var(--orange); width:0; }
   .section-t { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); padding:8px 10px 4px; border-top:1px solid var(--line); }
@@ -2668,8 +2672,7 @@ const nativePv = {on: false, last: '', failed: false, since: 0, shown: -1};
     }
     try {
       const img = $('pv'), r = img.getBoundingClientRect(), d = window.devicePixelRatio || 1;
-      const sel = $('pvRate').getBoundingClientRect();
-      let w = r.width, h = Math.min(r.height, sel.top - r.top - 2);       // leave the rate choice uncovered
+      let w = r.width, h = r.height;                   // the whole box (the rate choice and tag move outside it)
       if (h * 16 / 9 < w) { w = h * 16 / 9; } else { h = w * 9 / 16; }
       const x = r.left + (r.width - w) / 2, y = r.top;
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -2680,7 +2683,8 @@ const nativePv = {on: false, last: '', failed: false, since: 0, shown: -1};
         nativePv.last = key;
         const res = await (await fetch('/api/native_preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: key})).json();
         nativePv.on = !!res.native && on;
-        if (nativePv.on) img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';  // no old picture around the GPU one
+        img.style.visibility = nativePv.on ? 'hidden' : '';          // no old picture around / under the GPU one
+        img.parentElement.classList.toggle('native', nativePv.on);
         if (!res.native) {                             // no GPU engine (or it is restarting): JPEG preview, ask again
           nativePv.last = '';
           setTimeout(tick, 2000);
