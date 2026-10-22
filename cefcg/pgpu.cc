@@ -602,17 +602,17 @@ class Mixer {
       End();
       return &t;
     }
-    // blur: the centre of the picture, made very small and blown up again (soft), a little darker; the whole
+    // blur: the centre of the picture, made very tiny and blown up again (soft), a little darker; the whole
     // picture over it across the width, in the middle
-    Tex& small = sized_[(static_cast<int64_t>(w / 8) << 32) | (static_cast<int64_t>(h / 8) << 1) | 1];
-    if (!small.tex && !MakeTex(small, w / 8 > 0 ? w / 8 : 1, h / 8 > 0 ? h / 8 : 1, true))
+    Tex& tiny = sized_[(static_cast<int64_t>(w / 8) << 32) | (static_cast<int64_t>(h / 8) << 1) | 1];
+    if (!tiny.tex && !MakeTex(tiny, w / 8 > 0 ? w / 8 : 1, h / 8 > 0 ? h / 8 : 1, true))
       return nullptr;
     const float u0 = (1 - f) * 0.5f;
-    Begin(small);
-    Draw(pgm_, 0, 0, static_cast<float>(small.w), static_cast<float>(small.h), 1, true, true, true, u0, 0, u0 + f, 1);
+    Begin(tiny);
+    Draw(pgm_, 0, 0, static_cast<float>(tiny.w), static_cast<float>(tiny.h), 1, true, true, true, u0, 0, u0 + f, 1);
     End();
     Begin(t);
-    Draw(small, 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true, 0, 0, 1, 1, -0.12f);
+    Draw(tiny, 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true, 0, 0, 1, 1, -0.12f);
     const float fh = w * 9.f / 16.f;
     Draw(pgm_, 0, (h - fh) / 2, static_cast<float>(w), fh, 1, true, true, true);
     End();
