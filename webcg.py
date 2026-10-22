@@ -157,7 +157,11 @@ def cef_exe():
 
 
 def WebRenderer(url, width, height, zoom=100, rate=10, css=""):
-    """A web page drawn for a CG: the built-in browser when Playout has it, else Edge / Chrome."""
+    """A web page drawn for a CG: on the GPU in Playout's native engine (pgpu.exe), else the built-in browser
+    when Playout has it, else Edge / Chrome."""
+    import gpuengine
+    if str(ENGINE or "").lower() != "edge" and gpuengine.available():
+        return gpuengine.NativeWebRenderer(url, width, height, zoom, rate, css)
     if str(ENGINE or "").lower() != "edge" and cef_exe():
         return CefRenderer(url, width, height, zoom, rate, css)
     return EdgeRenderer(url, width, height, zoom, rate, css)

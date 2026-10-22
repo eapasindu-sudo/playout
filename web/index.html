@@ -635,7 +635,7 @@
     <span style="display:flex; gap:6px; align-items:center"><input class="num" id="ssV" type="number" min="300" max="50000" step="100"> kbps
       <select id="ssVp" onchange="if(this.value) $('ssV').value=this.value; this.value=''">
         <option value="">presets</option><option value="2500">2500 (720p low)</option><option value="3500">3500 (720p)</option>
-        <option value="4500">4500 (1080p)</option><option value="6000">6000 (1080p high)</option><option value="8000">8000</option></select></span>
+        <option value="4500">4500 (1080p)</option><option value="6000">6000 (1080p high)</option><option value="8000">8000</option><option value="10000">10000 (10 Mbps: YouTube 1080p; Facebook takes up to about 9000)</option></select></span>
     <span>Audio bitrate</span><select id="ssA"><option>96</option><option>128</option><option>160</option><option>192</option><option>256</option><option>320</option></select>
     <span>Encoder</span><select id="ssE">
       <option value="auto">Auto: graphics card (GPU) if this PC has one</option><option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA GPU (NVENC)</option>
@@ -2656,12 +2656,45 @@ document.addEventListener('keydown', e => {
 
 // program preview: ask for the newest picture only when the last one is on screen,
 // so pictures never queue up and the preview never falls behind what is on air
+// desktop app: the GPU engine draws the program straight into the window over the preview box (like vMix's own
+// preview), so no JPEG pictures are made or shown. Hidden while something covers the box (a dialog).
+const nativePv = {on: false, last: ''};
+(function nativePreview() {
+  let waits = 0;
+  async function tick() {
+    if (!window.pywebview) {                               // only Playout's own window, not a remote browser
+      if (++waits < 40) setTimeout(tick, 250);
+      return;
+    }
+    try {
+      const img = $('pv'), r = img.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+      const sel = $('pvRate').getBoundingClientRect();
+      let w = r.width, h = Math.min(r.height, sel.top - r.top - 2);       // leave the rate choice uncovered
+      if (h * 16 / 9 < w) { w = h * 16 / 9; } else { h = w * 9 / 16; }
+      const x = r.left + (r.width - w) / 2, y = r.top;
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const on = +$('pvRate').value !== 0 && !document.hidden && w > 40 && (hit === img || img.contains(hit) || hit === img.parentElement);
+      const body = {x: Math.round(x * d), y: Math.round(y * d), w: Math.round(w * d), h: Math.round(h * d), on};
+      const key = JSON.stringify(body);
+      if (key !== nativePv.last) {
+        nativePv.last = key;
+        const res = await (await fetch('/api/native_preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: key})).json();
+        nativePv.on = !!res.native && on;
+        if (!res.native) return;                       // no GPU engine here: JPEG preview as before
+      }
+    } catch (e) {}
+    setTimeout(tick, 250);
+  }
+  tick();
+})();
+
 (function previewLoop() {
   let url = null;
   try { if (localStorage.pvRate) $('pvRate').value = localStorage.pvRate; } catch (e) {}
   async function next() {
     const gap = +$('pvRate').value;
     if (!gap) { setTimeout(next, 500); return; }        // preview off: no pictures made or shown
+    if (nativePv.on) { setTimeout(next, 500); return; } // the GPU engine draws the preview itself
     try {
       const r = await fetch('/api/preview.jpg?w=640&_=' + Date.now(), {cache: 'no-store'});
       if (!r.ok) throw new Error(r.status);

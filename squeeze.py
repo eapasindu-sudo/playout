@@ -143,12 +143,21 @@ class SqueezeLayer:
 
     def render(self, feed):
         """feed: program picture (H, W, 4). Returns the squeezed picture, or feed when off."""
-        if self.state == "off":
+        plan = self.plan()
+        if plan is None:
             return feed
+        box, ov, ox, oy, keyed, opacity = plan
+        return compose(feed, ov, ox, oy, box, keyed, opacity)
+
+    def plan(self):
+        """Advance one frame: None (the program as it is) or (box, overlay, ox, oy, keyed, opacity), the parts the
+        squeezed picture is made of (render() makes it here; the GPU engine makes it on the graphics card)."""
+        if self.state == "off":
+            return None
         if self.state == "wait":
             self.wait -= 1
             if self.wait > 0:
-                return feed
+                return None
             self.state = "in"
         if self.state == "on" and self.on_frames:
             self.on_count += 1
@@ -163,7 +172,7 @@ class SqueezeLayer:
             if self.pos <= 0:
                 self.pos, self.state = 0, "off"
                 self.overlay.close()
-                return feed
+                return None
         r = self.overlay.tick()
         if r is not None:
             self._pic = r
@@ -180,7 +189,7 @@ class SqueezeLayer:
             ov = self._pic[0]
             ox = int(self.cfg.get("x") or 0) + self._pic[2][0]
             oy = int(self.cfg.get("y") or 0) + self._pic[2][1]
-        return compose(feed, ov, ox, oy, box, self.keyed, int(255 * p))
+        return box, ov, ox, oy, self.keyed, int(255 * p)
 
     def close(self):
         self.overlay.close()

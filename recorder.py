@@ -9,6 +9,7 @@ and GPU on a busy live). While no stream is live it records on its own at 20 Mbp
 switch starts a new file part.
 """
 import datetime as dt
+import logging
 import os
 import queue
 import threading
@@ -19,6 +20,7 @@ import av
 import numpy as np
 
 import gpu
+import gpuengine
 from framequeue import FrameQueue
 from gpu import ENCODERS
 from ndi_io import SAMPLE_RATE
@@ -49,6 +51,7 @@ class Recorder:
         self._on = False
         self.streamer = None           # app.py sets it: "same as the stream" saves the stream's encode
         self._tapping = False
+        self._native = False           # recorded by the GPU engine (gpuengine.py)
 
     # ---- settings ------------------------------------------------------
     def configure(self, resolution=None, mbps=None, encoder=None, split=None):
@@ -70,6 +73,8 @@ class Recorder:
     def using(self):
         if self._tapping:
             return "the stream's encoder (no second encode)"
+        if self._native:
+            return f"{gpu.NAMES.get(self.active_encoder, self.active_encoder)} (GPU engine)"
         return gpu.NAMES.get(self.active_encoder or gpu.resolve(self.encoder))
 
     def _shared(self):
@@ -118,7 +123,7 @@ class Recorder:
 
     def push(self, video, audio):
         """Called by the engine's output loop for every program frame."""
-        if not self._on or self._tapping:
+        if not self._on or self._tapping or self._native:
             return
         if not self._q.put(video, audio):
             self.dropped += 1
@@ -217,7 +222,59 @@ class Recorder:
             if f is not None:
                 f.close()
 
+    def _run_native(self):
+        """The GPU engine records the mixed picture with the graphics card's encoder at this recording's own
+        bitrate (a second encode on the GPU, none on the CPU). False = it cannot: record the older way."""
+        nat = gpuengine.active()
+        if nat is None:
+            return False
+        fps = self.engine.fps
+        w, h = RESOLUTIONS[self.resolution]
+        kbps = (self.mbps or OWN_MBPS) * 1000
+        enc = self.encoder if self.encoder in ENCODERS else "auto"
+        ok, msg = nat.rec_start(self.file, w, h, kbps, enc, int(round(float(fps))))
+        if not ok:
+            logging.warning("recording on the GPU engine: %s", msg)
+            if os.path.isfile(self.file) and os.path.getsize(self.file) == 0:
+                os.remove(self.file)
+            return False
+        self._native = True
+        self.active_encoder = msg.split(" ")[0]
+        part_start = time.time()
+        try:
+            while self._on:
+                time.sleep(0.25)
+                try:
+                    self.frames = int(nat.stats.get("rec_frames") or self.frames)
+                    self.dropped = int(nat.stats.get("rec_drop") or 0)
+                except ValueError:
+                    pass
+                if self._shared():
+                    break                           # a stream went live: record its encode instead (next part)
+                if gpuengine.active() is not nat or not nat.ready:
+                    self.error = "Recording stopped: the GPU engine stopped (a new file part starts)"
+                    break
+                if self.split and time.time() - part_start >= self.split * 60:
+                    self.file = self._new_name()
+                    if os.path.exists(self.file):
+                        self.file = self.file[:-4] + f"_{self.part + 1}.mp4"
+                    self.part += 1
+                    ok, msg = nat.rec_start(self.file, w, h, kbps, enc, int(round(float(fps))))   # the old file finishes by itself
+                    if not ok:
+                        self.error = f"Recording stopped: {msg}"
+                        break
+                    part_start = time.time()
+        finally:
+            nat.rec_stop()
+            self._native = False
+        if self.error.startswith("Recording stopped: the GPU engine"):
+            self.error = ""
+            time.sleep(1)
+        return True
+
     def _run_own(self):
+        if gpuengine.available() and self._run_native():
+            return
         out = None
         try:
             enc = gpu.resolve(self.encoder)

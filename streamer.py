@@ -21,6 +21,7 @@ import av
 import numpy as np
 
 import gpu
+import gpuengine
 from framequeue import FrameQueue
 
 from ndi_io import SAMPLE_RATE
@@ -90,6 +91,7 @@ class Destination:
         self._waiting = 0
         self.last_error = ""      # kept after a reconnect (self.error is cleared once live again)
         self.late = 0             # times this destination could not keep up and was restarted
+        self.native_feed = False  # vertical picture made and encoded by the GPU engine: FFmpeg only sends it
 
     def target(self):
         url = self.url.strip()
@@ -99,7 +101,7 @@ class Destination:
 
     def command(self):
         st = self.streamer
-        vertical = self.layout in ("crop", "blur") and st is not None
+        vertical = self.layout in ("crop", "blur") and st is not None and not self.native_feed
         cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-fflags", "+genpts"]
         if vertical:
             cmd += ["-hwaccel", "auto"]          # decode on the graphics card when it can
@@ -260,6 +262,9 @@ class Streamer:
         self._encoding = False
         self.dropped = 0
         self._taps = set()
+        self._native = False           # encoded by the GPU engine (gpuengine.py) straight from the mixed picture
+        self._vfeeds = {}              # vertical destination slot -> its GPU encode (see _sync_vertical)
+        self._vfail = {}
 
     # -- config ---------------------------------------------------------
     def load(self, saved):
@@ -318,7 +323,7 @@ class Streamer:
 
     def push(self, video, audio):
         """Called by the engine's output loop for every program frame."""
-        if not self._encoding:
+        if not self._encoding or self._native:
             return
         if not self._q.put(video, audio):
             self.dropped += 1
@@ -327,7 +332,8 @@ class Streamer:
     def _start_encoder(self):
         self._encoding = True
         self._q = FrameQueue(self.QUEUE)
-        self._thread = threading.Thread(target=self._encode, daemon=True, name="stream encoder")
+        target = self._encode_native if gpuengine.available() else self._encode
+        self._thread = threading.Thread(target=target, daemon=True, name="stream encoder")
         self._thread.start()
 
     def add_tap(self, fn):
@@ -338,16 +344,20 @@ class Streamer:
     def remove_tap(self, fn):
         self._taps.discard(fn)
 
-    def _fanout(self, data):
-        for fn in list(self._taps):
-            try:
-                fn(data)
-            except Exception:
-                pass
+    def _fanout(self, data, only=None):
+        """data to every destination; only=d: a vertical destination's own GPU encode, to it alone."""
+        if only is None:
+            for fn in list(self._taps):
+                try:
+                    fn(data)
+                except Exception:
+                    pass
         with self._lock:
             now = time.time()
             for d in self.dests:
                 if not d.enabled:
+                    continue
+                if (d is not only) if only is not None else d.native_feed:
                     continue
                 if d.proc is None and now >= d._restart_at:
                     try:
@@ -425,17 +435,145 @@ class Streamer:
                     out.close()
                 except Exception:
                     pass
-            for fn in list(self._taps):
-                try:
-                    fn(None)
-                except Exception:
-                    pass
+            self._finished()
+
+    def _encode_native(self):
+        """The GPU engine encodes the mixed picture on the graphics card and sends the MPEG-TS through a pipe:
+        here it only goes on to the destinations. If the engine cannot encode, the older way (_encode) runs."""
+        fps = self.engine.fps
+        gop = int(round(float(fps) * 2))   # keyframe every 2 s (Facebook requirement)
+        enc = self.encoder if self.encoder in gpu.ENCODERS else "auto"
+        started = False
+        try:
+            while self._encoding:
+                nat = gpuengine.active()
+                if nat is None:
+                    if not gpuengine.available():
+                        break                      # given up on: the older way below
+                    time.sleep(0.5)                # restarting
+                    continue
+                pipe, msg = nat.stream_start(self.width, self.height, self.video_kbps, self.audio_kbps, enc, gop)
+                if pipe is None:
+                    for d in self.dests:
+                        if d.enabled:
+                            d.error = f"GPU engine encoder: {msg}"
+                    break
+                started = True
+                self._native = True
+                self.active_encoder = msg.split(" ")[0]
+                f = None
+                for _ in range(50):
+                    try:
+                        f = open(pipe, "rb", buffering=0)
+                        break
+                    except OSError:
+                        time.sleep(0.1)
+                if f is None:
+                    nat.stream_stop()
+                    raise RuntimeError("could not read the GPU engine's stream")
+                with f:
+                    synced = 0.0
+                    while self._encoding:
+                        data = f.read(1 << 16)
+                        if not data:
+                            break              # engine stopped (it is started again) or the stream was stopped
+                        self._fanout(data)
+                        if time.monotonic() - synced > 0.5:
+                            synced = time.monotonic()
+                            self._sync_vertical(nat, enc, gop)
+                self._stop_vertical(nat)
+                nat.stream_stop()
+                self._native = False
+                if self._encoding:
+                    time.sleep(0.5)
+        except Exception as e:
+            for d in self.dests:
+                if d.enabled:
+                    d.error = f"Encoder: {e}"
+                    d.status = "error"
+        finally:
+            self._native = False
+        if self._encoding and not started:
+            for d in self.dests:
+                if d.enabled and d.error.startswith("GPU engine"):
+                    d.error = ""
+            self._q = FrameQueue(self.QUEUE)
+            self._encode()                         # the older way: encoded here from each program frame
+            return
+        self._encoding = False
+        self._finished()
+
+    def _sync_vertical(self, nat, enc, gop):
+        """9:16 destinations get their own picture, cropped / blurred and encoded on the GPU (no FFmpeg re-encode)."""
+        want = {d.slot: (d.layout, d.crop_pos) for d in self.dests if d.enabled and d.layout in ("crop", "blur")}
+        for slot, feed in list(self._vfeeds.items()):
+            if want.get(slot) != feed["cfg"]:
+                self._stop_feed(nat, slot)
+        for slot, cfg in want.items():
+            if slot in self._vfeeds or self._vfail.get(slot) == cfg:
+                continue
+            d = self.dests[slot]
+            out_w, out_h = (720, 1280) if self.height <= 720 else (1080, 1920)
+            pipe, msg = nat.stream_start(out_w, out_h, self.video_kbps, self.audio_kbps, enc, gop,
+                                         name=f"v{slot}", layout=cfg[0], pos=cfg[1])
+            if pipe is None:
+                self._vfail[slot] = cfg               # FFmpeg makes this one, as before
+                logging.info("vertical destination %d on the GPU engine: %s", slot + 1, msg)
+                continue
+            feed = {"cfg": cfg, "run": True}
+            self._vfeeds[slot] = feed
             with self._lock:
-                for d in self.dests:
-                    d.kill()
-                    d.enabled = False
-                    if d.status != "error":
-                        d.status = "off"
+                d.native_feed = True
+                d.kill(wait=False)                    # starts again as a plain sender
+            threading.Thread(target=self._read_feed, args=(pipe, d, feed), daemon=True,
+                             name=f"vertical stream {slot + 1}").start()
+
+    def _read_feed(self, pipe, d, feed):
+        f = None
+        for _ in range(50):
+            try:
+                f = open(pipe, "rb", buffering=0)
+                break
+            except OSError:
+                time.sleep(0.1)
+        if f is None:
+            return
+        with f:
+            while feed["run"]:
+                data = f.read(1 << 16)
+                if not data:
+                    break
+                self._fanout(data, only=d)
+
+    def _stop_feed(self, nat, slot):
+        feed = self._vfeeds.pop(slot, None)
+        if feed is None:
+            return
+        feed["run"] = False
+        nat.stream_stop(f"v{slot}")
+        d = self.dests[slot]
+        with self._lock:
+            if d.native_feed:
+                d.native_feed = False
+                d.kill(wait=False)
+
+    def _stop_vertical(self, nat):
+        for slot in list(self._vfeeds):
+            self._stop_feed(nat, slot)
+        self._vfail = {}
+
+    def _finished(self):
+        for fn in list(self._taps):
+            try:
+                fn(None)
+            except Exception:
+                pass
+        with self._lock:
+            for d in self.dests:
+                d.kill()
+                d.enabled = False
+                if d.status != "error":
+                    d.status = "off"
 
     RESOLUTIONS = {"720p": (1280, 720), "1080p": (1920, 1080)}
 

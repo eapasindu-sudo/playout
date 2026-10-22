@@ -94,6 +94,7 @@ def build(home, cfg, store_data, health, sysmon, engine=None, streamer=None):
         "stream": redact(_try(lambda: streamer.info())) if streamer else None,
         "web_cg_pages": [{"url": redact(r.url), "engine": getattr(r, "engine", ""), "loaded": r.loaded, "on_air": r.active, "pictures": r.frames,
                           "error": r.error, "size": [r.width, r.height]} for r in list(webcg.LIVE)],
+        "gpu_engine": dict(__import__("gpuengine").STATE),
         "threads": sorted(t.name for t in threading.enumerate()),
     }
     buf = io.BytesIO()
