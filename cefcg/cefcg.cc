@@ -10,7 +10,8 @@
 // Shared memory NAME (made by Playout, 64 + width * height * 4 bytes):
 //   0  uint32 magic 'CEFG'   4 uint32 width   8 uint32 height   12 uint32 loaded (1 once the page loaded)
 //   16 int64 picture number: odd while a picture is being written, even when it is complete
-//   64 width * height BGRA pixels, premultiplied alpha, top row first
+//   24 int32 x, 28 y, 32 w, 36 h: the part of the page that is drawn (w = 0: nothing drawn)
+//   64 w * h BGRA pixels of that part, straight alpha (ready for the CG blend), top row first
 //
 // Commands on stdin, one per line: reload, hide (stop drawing: the CG is off air), show, quit.
 // stdin closing (Playout stopped) quits too. Lines on stdout: "loaded", "error <text>".
@@ -57,6 +58,21 @@ void Say(const std::string& line) {
     ::WriteFile(h, s.data(), static_cast<DWORD>(s.size()), &n, nullptr);
 }
 
+// straight = premultiplied * 255 / alpha, as a 256 x 256 table [alpha][value]
+const uint8_t* Unpremul() {
+  static uint8_t table[256 * 256];
+  static bool made = false;
+  if (!made) {
+    for (int a = 0; a < 256; ++a)
+      for (int v = 0; v < 256; ++v) {
+        int s = a ? v * 255 / a : v;
+        table[a * 256 + v] = static_cast<uint8_t>(s > 255 ? 255 : s);
+      }
+    made = true;
+  }
+  return table;
+}
+
 class Client : public CefClient, public CefRenderHandler, public CefLifeSpanHandler, public CefLoadHandler {
  public:
   CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
@@ -69,17 +85,60 @@ class Client : public CefClient, public CefRenderHandler, public CefLifeSpanHand
                int height) override {
     if (type != PET_VIEW || !g_mem)
       return;
-    auto* seq = reinterpret_cast<volatile LONG64*>(g_mem + 16);
-    ::InterlockedIncrement64(seq);  // odd: being written
     const int w = width < g_opt.width ? width : g_opt.width;
     const int h = height < g_opt.height ? height : g_opt.height;
     const auto* src = static_cast<const uint8_t*>(buffer);
-    uint8_t* dst = g_mem + kHeader;
-    if (w != g_opt.width || h != g_opt.height)
-      std::memset(dst, 0, static_cast<size_t>(g_opt.width) * g_opt.height * 4);
-    for (int y = 0; y < h; ++y)
-      std::memcpy(dst + static_cast<size_t>(y) * g_opt.width * 4, src + static_cast<size_t>(y) * width * 4,
-                  static_cast<size_t>(w) * 4);
+    const size_t stride = static_cast<size_t>(width) * 4;
+    // the drawn part: rows / columns with any pixel that is not fully see-through
+    int x0 = w, x1 = -1, y0 = h, y1 = -1;
+    for (int y = 0; y < h; ++y) {
+      const uint8_t* row = src + y * stride;
+      int first = -1, last = -1;
+      for (int x = 0; x < w; ++x)
+        if (row[x * 4 + 3]) {
+          if (first < 0)
+            first = x;
+          last = x;
+        }
+      if (first >= 0) {
+        if (y < y0)
+          y0 = y;
+        y1 = y;
+        if (first < x0)
+          x0 = first;
+        if (last > x1)
+          x1 = last;
+      }
+    }
+    auto* seq = reinterpret_cast<volatile LONG64*>(g_mem + 16);
+    auto* box = reinterpret_cast<volatile int32_t*>(g_mem + 24);
+    ::InterlockedIncrement64(seq);  // odd: being written
+    if (y1 < 0) {
+      box[0] = box[1] = box[2] = box[3] = 0;
+    } else {
+      const int bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+      uint8_t* dst = g_mem + kHeader;
+      for (int y = 0; y < bh; ++y) {
+        const uint8_t* s = src + (y0 + y) * stride + x0 * 4;
+        uint8_t* d = dst + static_cast<size_t>(y) * bw * 4;
+        for (int x = 0; x < bw * 4; x += 4) {
+          const uint8_t a = s[x + 3];
+          if (a == 255 || a == 0) {
+            std::memcpy(d + x, s + x, 4);
+          } else {  // the browser gives premultiplied colour: back to straight alpha
+            const uint8_t* t = Unpremul() + a * 256;
+            d[x] = t[s[x]];
+            d[x + 1] = t[s[x + 1]];
+            d[x + 2] = t[s[x + 2]];
+            d[x + 3] = a;
+          }
+        }
+      }
+      box[0] = x0;
+      box[1] = y0;
+      box[2] = bw;
+      box[3] = bh;
+    }
     ::InterlockedIncrement64(seq);  // even: complete
   }
 

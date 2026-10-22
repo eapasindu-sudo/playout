@@ -317,7 +317,9 @@
     <div class="box sticky">
       <div class="mon">
         <div class="meters"><div class="meter"><div id="mL"></div></div><div class="meter"><div id="mR"></div></div></div>
-        <div class="screen"><img id="pv" alt="Program output"><span class="tag" id="pvTag"></span></div>
+        <div class="screen"><img id="pv" alt="Program output"><span class="tag" id="pvTag"></span>
+          <select id="pvRate" title="Program preview on this screen: fewer pictures = less CPU (the output itself is not changed)" style="position:absolute; right:4px; bottom:4px; font-size:10px; padding:1px 2px; opacity:.75" onchange="try { localStorage.pvRate = this.value } catch (e) {}">
+            <option value="80">Preview: smooth</option><option value="250">Preview: light</option><option value="1000">Preview: 1 a second</option><option value="0">Preview: off</option></select></div>
         <div class="prog"><div id="pvProg"></div></div>
       </div>
       <div class="nextbox" id="nextBox"><div class="thumb" id="nxThumb"></div>
@@ -2656,7 +2658,10 @@ document.addEventListener('keydown', e => {
 // so pictures never queue up and the preview never falls behind what is on air
 (function previewLoop() {
   let url = null;
+  try { if (localStorage.pvRate) $('pvRate').value = localStorage.pvRate; } catch (e) {}
   async function next() {
+    const gap = +$('pvRate').value;
+    if (!gap) { setTimeout(next, 500); return; }        // preview off: no pictures made or shown
     try {
       const r = await fetch('/api/preview.jpg?w=640&_=' + Date.now(), {cache: 'no-store'});
       if (!r.ok) throw new Error(r.status);
@@ -2664,7 +2669,7 @@ document.addEventListener('keydown', e => {
       $('pv').src = u;
       if (url) URL.revokeObjectURL(url);
       url = u;
-      setTimeout(next, document.hidden ? 1000 : 80);   // about 12 a second: smooth enough to watch, light on the PC
+      setTimeout(next, document.hidden ? Math.max(1000, gap) : gap);   // smooth = about 12 a second
     } catch (e) { setTimeout(next, 2000); }
   }
   next();

@@ -283,18 +283,6 @@ class CefRenderer:
         if d:
             shutil.rmtree(d, ignore_errors=True)
 
-    @staticmethod
-    def _grab(arr, zoom):
-        """Crop / zoom / straight alpha of a picture already copied out of the shared memory."""
-        alpha = arr[..., 3]
-        rows = np.flatnonzero(alpha.any(axis=1))
-        if not len(rows):
-            return None, (0, 0)
-        r0, r1 = rows[0], rows[-1] + 1
-        cols = np.flatnonzero(alpha[r0:r1].any(axis=0))
-        c0, c1 = cols[0], cols[-1] + 1
-        return _finish(arr[r0:r1, c0:c1].copy(), int(c0), int(r0), zoom, premultiplied=True)
-
     def _run(self):
         import mmap
         quick_fails = 0
@@ -305,9 +293,6 @@ class CefRenderer:
             restart = False
             try:
                 mm = mmap.mmap(-1, 64 + self.width * self.height * 4, tagname=name)
-                arr = np.frombuffer(mm, dtype=np.uint8, count=self.width * self.height * 4, offset=64)
-                arr = arr.reshape(self.height, self.width, 4)
-                buf = np.empty_like(arr)
                 self._start(name)
                 shown, last, seen, poked = True, -1, time.monotonic(), 0.0
                 while self._running:
@@ -327,14 +312,17 @@ class CefRenderer:
                     if seq != last:
                         seen, poked = now, 0.0
                     if shown and seq != last and seq > 0 and seq % 2 == 0:
-                        # copy the picture out first (a few ms), then check the browser did not draw over it
-                        # meanwhile; the slower work (crop, alpha) is done on the copy. Checking only after
-                        # that work threw away nearly every picture of a busy page (it froze on air)
-                        np.copyto(buf, arr)
+                        # the browser already cropped the picture to what is drawn, with straight alpha:
+                        # copy it out (a few ms), then check it was not drawn over meanwhile
+                        x, y, w, h = struct.unpack_from("<4i", mm, 24)
+                        img = None
+                        if w > 0 and h > 0:
+                            img = np.frombuffer(mm, dtype=np.uint8, count=w * h * 4, offset=64).reshape(h, w, 4).copy()
                         if struct.unpack_from("<q", mm, 16)[0] == seq:
                             last = seq
-                            img, off = self._grab(buf, self.zoom)
-                            self.frame = (img, off) if img is not None else None
+                            if img is not None and abs(self.zoom - 1.0) > 0.001:
+                                img, (x, y) = _finish(img, x, y, self.zoom, premultiplied=False)
+                            self.frame = (img, (x, y)) if img is not None else None
                             self.frames += 1
                     elif shown and self.loaded and now - seen > 5:
                         # nothing drawn for a while: a still page is fine, so ask for one picture ("show" redraws);
