@@ -28,6 +28,8 @@ from fractions import Fraction
 
 import numpy as np
 
+import gpuengine
+
 from audiofx import MasterAudio
 from media import ClipPlayer, probe
 from capture import CaptureInput, UrlInput, make_bars
@@ -219,6 +221,7 @@ class Engine:
         self.heartbeat = time.monotonic()   # output loop alive (watchdog)
         self.loop_errors = 0
         self.late_frames = 0                # frames that took longer than one frame time to make
+        self.gpu_frames = self.gpu_misses = 0   # frames mixed by the GPU engine / mixed here because it did not answer
         self.load = 0.0                     # average work per frame / frame time (1.0 = no time to spare)
         self._running = False
         self._thread = None
@@ -912,9 +915,15 @@ class Engine:
             self._failover(True, n)       # live not on air: nothing to cover
         self._main_wanted = source in ("LIVE", "FILLER")
         self.clean_frame = video          # program before CGs (squeeze preview)
+        # the GPU engine (gpuengine.py) mixes the CGs itself: here only the list of what goes over the program
+        nat = gpuengine.active()
+        layers = None
         if self.cg is not None:
             try:
-                video = self.cg.render(video, source.startswith("LIVE"), n)
+                if nat is not None:
+                    video, layers = self.cg.render(video, source.startswith("LIVE"), n, collect=True)
+                else:
+                    video = self.cg.render(video, source.startswith("LIVE"), n)
                 sa = self.cg.stinger_audio
                 if sa is not None and sa.shape == audio.shape:
                     audio = np.clip(audio + sa, -1.0, 1.0)
@@ -923,10 +932,13 @@ class Engine:
         if self.key_input is not None and self.ndi_key.get("on"):
             kv, _ = self.key_input.grab(n)
             if kv is not None:
-                from cg import composite
-                out = np.array(video, copy=True).reshape(self.height, self.width, 4)
-                composite(out, kv.reshape(self.height, self.width, 4), 0, 0)
-                video = out.reshape(-1)
+                if nat is not None:
+                    layers = (layers or []) + [(kv.reshape(self.height, self.width, 4), 0, 0, 255)]
+                else:
+                    from cg import composite
+                    out = np.array(video, copy=True).reshape(self.height, self.width, 4)
+                    composite(out, kv.reshape(self.height, self.width, 4), 0, 0)
+                    video = out.reshape(-1)
         if self._k % 5 == 0:
             try:
                 self._tally(source, self._item(self._preview_next))
@@ -943,6 +955,21 @@ class Engine:
             self.message = f"Audio limiter error: {e}"
         peak = np.abs(audio).max(axis=1) if audio.size else np.zeros(CHANNELS)
         self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
+        if nat is not None:
+            # mixed (and encoded for the stream / recording) on the GPU; the mixed picture comes back for NDI
+            mixed = None
+            try:
+                mixed = nat.frame(video, audio, layers or [])
+            except Exception as e:
+                self.message = f"GPU engine error: {e}"
+            if mixed is not None:
+                video = mixed
+                self.gpu_frames += 1
+            else:
+                self.gpu_misses += 1
+                if layers and self.cg is not None:
+                    video = self.cg.composite(np.asarray(video).reshape(self.height, self.width, 4), layers)
+            video = np.asarray(video).reshape(-1)
         self.last_frame = video
         try:
             if self.output is not None:

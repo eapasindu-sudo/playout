@@ -113,6 +113,9 @@ if (store.data.get("ndi") or {}).get("name"):
 elif cfg.get("output_name") in (None, "", "PLAYOUT PGM"):
     cfg["output_name"] = "ENDORA PLAYOUT FINAL"        # the final program (with CGs and overlays) on NDI
 engine = Engine(cfg, cfg["media_dir"], cfg["log_dir"])
+import gpuengine
+gpuengine.MODE = cfg.get("native_engine", "auto")   # mixing, web overlays and encoding on the GPU (pgpu.exe): auto / off
+gpuengine.start(engine.width, engine.height, engine.fps)
 atem = AtemLink(engine.asrun, cfg.get("atem_switcher") or None)
 engine.listeners.append(atem.on_air)
 scheduler = Scheduler(engine)
@@ -1986,6 +1989,7 @@ def _watchdog():
 def shutdown():
     planner.stop()
     webcg.close_all()
+    gpuengine.stop()
     sdi.stop()
     try:
         os.remove(RUN_FLAG)

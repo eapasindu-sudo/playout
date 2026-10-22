@@ -155,6 +155,7 @@ class SystemMonitor:
                 kids += c
                 nm = (p.info["name"] or "?").removesuffix(".exe").lower()
                 nm = "scoreboard / web CG browser" if nm in ("msedge", "chrome", "chromium") else nm
+                nm = "GPU engine (mixer, scoreboard, encoders)" if nm == "pgpu" else nm
                 parts[nm] = parts.get(nm, 0.0) + c
             elif c >= 1 and (p.info["name"] or "").lower() not in ("system idle process", "idle"):
                 nm = (p.info["name"] or "?").removesuffix(".exe")

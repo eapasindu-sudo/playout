@@ -650,7 +650,9 @@ class CGManager:
         return self._stinger is not None
 
     # rendering (output thread)
-    def render(self, frame_flat, is_live, n_samples=0):
+    def render(self, frame_flat, is_live, n_samples=0, collect=False):
+        """The program with the CGs on air over it; collect=True: (program, [(image, x, y, opacity)]) for the
+        GPU engine to mix instead."""
         with self._lock:
             base = None
             sq = self._squeeze
@@ -704,19 +706,29 @@ class CGManager:
                     self._stinger = None
         if rewarm:
             self._warm_all()
-        if not jobs:
-            return frame_flat if base is None else base.reshape(-1)
         src = np.asarray(frame_flat).reshape(self.height, self.width, 4) if base is None else base
+        layers = [(img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
+                  for layer, (img, opacity, (dx, dy)) in jobs]
+        if collect:
+            return src, layers
+        return self.composite(src, layers, copy=base is None)
+
+    def composite(self, src, layers, copy=True):
+        """Mixes the CG pictures over src on this PC (OpenGL, else the CPU). Pages drawn on the GPU engine's
+        own GPU (gpuengine.WebTex) are left out: only the engine can draw them."""
+        import gpuengine
+        layers = [L for L in layers if not isinstance(L[0], gpuengine.WebTex)]
+        if not layers:
+            return np.asarray(src).reshape(-1)
         gl = gpucg.compositor()
         if gl is not None:
             try:
-                return gl.render(src, [(img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
-                                       for layer, (img, opacity, (dx, dy)) in jobs]).reshape(-1)
+                return gl.render(src, layers).reshape(-1)
             except Exception as e:
                 gpucg.failed(e)
-        out = np.array(src, copy=True) if base is None else base
-        for layer, (img, opacity, (dx, dy)) in jobs:
-            composite(out, img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
+        out = np.array(src, copy=True) if copy else src
+        for img, x, y, opacity in layers:
+            composite(out, img, x, y, opacity)
         return out.reshape(-1)
 
     def status(self):

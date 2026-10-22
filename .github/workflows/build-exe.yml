@@ -54,16 +54,31 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\cef" | Out-Null
           tar -xjf "$env:RUNNER_TEMP\cef.tar.bz2" -C "$env:RUNNER_TEMP\cef"
           $root = (Get-ChildItem "$env:RUNNER_TEMP\cef" -Directory | Select-Object -First 1).FullName -replace '\\', '/'
-          cmake -S cefcg -B cefcg\out -A x64 "-DCEF_ROOT=$root"
+          # FFmpeg 7.x development files (headers, import libraries, DLLs) for the GPU engine's encoders
+          $rel = Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:GH_TOKEN" } https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest
+          $ff = $rel.assets | Where-Object name -match '^ffmpeg-n7\.\d+-latest-win64-gpl-shared-7\.\d+\.zip$' | Sort-Object name -Descending | Select-Object -First 1
+          "FFmpeg $($ff.name)"
+          Invoke-WebRequest $ff.browser_download_url -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg"
+          $ffroot = (Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Directory | Select-Object -First 1).FullName -replace '\\', '/'
+          cmake -S cefcg -B cefcg\out -A x64 "-DCEF_ROOT=$root" "-DFFMPEG_ROOT=$ffroot"
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build cefcg\out --config Release --target cefcg
           if ($LASTEXITCODE -ne 0) { throw "cefcg build failed" }
+          cmake --build cefcg\out --config Release --target pgpu
+          if ($LASTEXITCODE -ne 0) { throw "pgpu (GPU engine) build failed" }
           New-Item -ItemType Directory -Force build\cef | Out-Null
           Copy-Item cefcg\out\Release\* build\cef -Recurse -Force -Exclude *.lib,*.pdb,*.exp,*.ilk
+          Copy-Item "$ffroot/bin/*.dll" build\cef -Force
           Get-ChildItem build\cef | Select-Object Name, Length
           if (-not (Test-Path build\cef\cefcg.exe)) { throw "cefcg.exe not built" }
+          if (-not (Test-Path build\cef\pgpu.exe)) { throw "pgpu.exe not built" }
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Test the built-in browser (draws a page into a web CG)
         run: python build/test_cefcg.py
+      - name: Test the GPU engine (mixing, web page, stream and recording encode)
+        run: python build/test_pgpu.py
       - name: Build Playout.exe
         working-directory: build
         run: pyinstaller --noconfirm playout.spec
