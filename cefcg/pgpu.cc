@@ -1811,21 +1811,22 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   return ::DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-void PreviewUi() {
-  CEF_REQUIRE_UI_THREAD();
+// The preview window lives on its own thread (with its own message loop), never on Chromium's UI thread and
+// never waiting for the GPU lock: Present() on the render thread can wait for the window's thread to answer,
+// and with Chromium's thread (which also takes the GPU lock for every page picture) that locked both up.
+DWORD g_pv_thread_id = 0;
+std::atomic<bool> g_pv_thread_up{false};
+
+void PreviewApply() {
   PreviewWant w;
   {
     std::lock_guard<std::mutex> l(g_pv_lock);
     w = g_pv_want;
   }
   if (g_pv_hwnd && (!w.parent || ::GetParent(g_pv_hwnd) != w.parent || !::IsWindow(w.parent))) {
+    // Playout's window changed (rare): leave the old one hidden; the render thread lets go of it by itself
     g_pv_ready = nullptr;
-    {
-      std::lock_guard<std::recursive_mutex> l(g_gpu);
-      g_pv_chain.Reset();
-      g_pv_chain_hwnd = nullptr;
-    }
-    ::DestroyWindow(g_pv_hwnd);
+    ::ShowWindow(g_pv_hwnd, SW_HIDE);
     g_pv_hwnd = nullptr;
   }
   if (!w.parent || !::IsWindow(w.parent))
@@ -1851,10 +1852,36 @@ void PreviewUi() {
   if (show) {
     g_pv_w = w.w;
     g_pv_h = w.h;
+  } else {
+    g_pv_ready = nullptr;
   }
   ::SetWindowPos(g_pv_hwnd, HWND_TOP, w.x, w.y, show ? w.w : 1, show ? w.h : 1,
-                 SWP_NOACTIVATE | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
-  g_pv_ready = show ? g_pv_hwnd : nullptr;
+                 SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  if (show)
+    g_pv_ready = g_pv_hwnd;
+}
+
+void PreviewThread() {
+  MSG m;
+  ::PeekMessageW(&m, nullptr, 0, 0, PM_NOREMOVE);   // makes this thread's message queue
+  g_pv_thread_id = ::GetCurrentThreadId();
+  g_pv_thread_up = true;
+  while (::GetMessageW(&m, nullptr, 0, 0) > 0) {
+    if (m.hwnd == nullptr && m.message == WM_APP) {
+      PreviewApply();
+      continue;
+    }
+    ::TranslateMessage(&m);
+    ::DispatchMessageW(&m);
+  }
+}
+
+void PreviewChanged() {
+  static std::once_flag once;
+  std::call_once(once, [] { std::thread(PreviewThread).detach(); });
+  while (!g_pv_thread_up)
+    ::Sleep(1);
+  ::PostThreadMessageW(g_pv_thread_id, WM_APP, 0, 0);
 }
 
 // render thread, GPU lock held: the mixed picture into the preview window
@@ -2182,7 +2209,7 @@ void ReadCommands() {
           g_pv_want.h = static_cast<int>(j.N("h"));
           g_pv_want.on = j.N("on") != 0;
         }
-        CefPostTask(TID_UI, base::BindOnce(&PreviewUi));
+        PreviewChanged();
         continue;
       }
       if (op.compare(0, 5, "clip_") == 0) {

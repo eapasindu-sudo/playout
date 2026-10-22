@@ -95,7 +95,7 @@ def stop():
 
 
 class NativeEngine:
-    ACK_TIMEOUT = 0.5
+    ACK_TIMEOUT = 0.25
     IMAGE_CACHE = 48
 
     def __init__(self, width, height, fps):
@@ -323,7 +323,7 @@ class NativeEngine:
             got, rb = self._ack >= k, self._ack_rb
         if not got:
             self._timeouts += 1
-            if self._timeouts >= 20 and self.ready:      # 10 s without an answer: stuck, start it again
+            if self._timeouts >= 8 and self.ready:       # 2 s without an answer: stuck, start it again
                 logging.warning("native GPU engine stopped answering: starting it again")
                 self._kill()
             return None
