@@ -1807,6 +1807,8 @@ std::atomic<int64_t> g_pv_shown{0};   // pictures presented (diagnostics)
 std::string g_pv_err;                  // the last step that failed (render thread)
 HWND g_pv_chain_hwnd = nullptr;
 
+void PreviewApply();
+
 LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_NCHITTEST)
     return HTTRANSPARENT;
@@ -1815,7 +1817,6 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_MOUSEACTIVATE)
     return MA_NOACTIVATE;
   if (msg == WM_TIMER) {
-    void PreviewApply();
     PreviewApply();
     return 0;
   }
