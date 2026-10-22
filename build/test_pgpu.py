@@ -131,6 +131,38 @@ try:
         eng.frame(base, silence, [])
         time.sleep(0.04)
     assert web.loaded, "the page did not come back after Reload"
+
+    # a clip decoded by the engine (GPU decoder on a real PC, the CPU here), as the program player uses it
+    import media
+    clip_path = os.path.join(tempfile.gettempdir(), "pgpu-clip.mp4")
+    with av.open(clip_path, "w") as c:
+        st = c.add_stream("libx264", rate=25)
+        st.width, st.height, st.pix_fmt = 640, 360, "yuv420p"
+        for i in range(75):
+            a = np.zeros((360, 640, 3), np.uint8)
+            a[...] = (255, 0, 0) if i < 25 else (0, 255, 0) if i < 50 else (0, 0, 255)    # RGB: red, green, blue
+            f = av.VideoFrame.from_ndarray(a, format="rgb24")
+            for pk in st.encode(f):
+                c.mux(pk)
+        for pk in st.encode(None):
+            c.mux(pk)
+    p = media.ClipPlayer(clip_path, W, H, 25)
+    end = time.monotonic() + 20
+    while not p.ready() and time.monotonic() < end:
+        time.sleep(0.05)
+    pics = []
+    for i in range(80):
+        v, a = p.next_frame(1920)
+        if v is not None:
+            pics.append(np.asarray(v).reshape(H, W, 4)[H // 2, W // 2].copy())
+        time.sleep(0.04)
+    print("clip decode:", media.DECODE, "pictures", len(pics), "error", p.error)
+    p.close()
+    assert "GPU engine" in media.DECODE["codec"], "the clip was not decoded by the engine"
+    assert len(pics) >= 70, "clip pictures missing"
+    print("clip colours (BGRA) at 0.4 s, 1.4 s, 2.4 s:", pics[10], pics[35], pics[60])
+    assert near(pics[10], (0, 0, 255, 255), 12) and near(pics[35], (0, 255, 0, 255), 12) and near(pics[60], (255, 0, 0, 255), 12), \
+        "clip colours wrong"
 finally:
     web.close()
     gpuengine.stop()

@@ -3,6 +3,7 @@ import collections
 import logging
 import math
 import os
+import struct
 import threading
 import queue
 import time
@@ -127,11 +128,68 @@ class ClipPlayer:
         self._pending = None
         self._last_t = 0.0
         self.tick = 0
-        self._thread = threading.Thread(target=self._decode, daemon=True, name=f"decode {self.name}")
+        self._t_offset = 0.0              # times of a decoder started part-way (GPU engine stopped mid-clip)
+        import gpuengine
+        target = self._decode_native if process is None and gpuengine.active() is not None else self._decode
+        self._thread = threading.Thread(target=target, daemon=True, name=f"decode {self.name}")
         self._thread.start()
 
     # -- decoder thread -------------------------------------------------
-    def _decode(self):
+    def _decode_native(self):
+        """The GPU engine decodes the picture on the graphics card (d3d11va) and makes it BGRA at the output size
+        there; here the ready pictures are only taken from its shared memory. The sound is decoded here as always.
+        If the engine cannot (or stops), the picture is decoded here from the same point on."""
+        import gpuengine
+        nat = gpuengine.active()
+        W, H = self.width, self.height
+        clip = nat.clip_open(self.path, W, H, self.start, self.end or 0, self.frame_dur) if nat is not None else None
+        if clip is None:
+            return self._decode()
+        threading.Thread(target=self._decode_audio, daemon=True, name=f"audio {self.name}").start()
+        self._has_audio = True
+        mm, size = clip.mm, W * H * 4
+        slot, got, last_t = 0, False, 0.0
+        fallback = False
+        try:
+            while not self._stop.is_set():
+                if struct.unpack_from("<i", mm, 64 + slot * 16)[0] == 1:
+                    t = struct.unpack_from("<d", mm, 64 + slot * 16 + 8)[0]
+                    img = np.frombuffer(mm, np.uint8, size, gpuengine.CLIP_PIXELS + slot * size).copy()
+                    struct.pack_into("<i", mm, 64 + slot * 16, 0)
+                    slot = (slot + 1) % gpuengine.CLIP_SLOTS
+                    if not got:
+                        got = True
+                        DECODE["gpu"] = clip.mode.startswith("gpu")
+                        DECODE["codec"] = clip.mode.partition(" ")[2] + " (GPU engine)"
+                    last_t = t
+                    while not self._stop.is_set():
+                        try:
+                            self._vq.put((t, img), timeout=0.1)
+                            break
+                        except queue.Full:
+                            continue
+                    continue
+                if clip.done.is_set():
+                    if struct.unpack_from("<i", mm, 64 + slot * 16)[0] == 1:
+                        continue                      # pictures written just before the end
+                    if clip.error:
+                        fallback = True
+                        logging.info("clip %s on the GPU engine: %s (decoding here)", self.name, clip.error)
+                    break
+                if not nat.ready:
+                    fallback = True
+                    break
+                time.sleep(0.003)
+        finally:
+            clip.close()
+        if fallback and not self._stop.is_set():
+            if got:
+                self._t_offset = last_t + self.frame_dur
+                self.start += self._t_offset
+            return self._decode(audio=False)
+        self._done.set()
+
+    def _decode(self, audio=True):
         try:
             with open_video(self.path) as c:
                 vs = c.streams.video[0] if c.streams.video else None
@@ -150,7 +208,7 @@ class ClipPlayer:
                     c.seek(int(t0 / vs.time_base), stream=vs, backward=True, any_frame=False)
                 end_t = (base + self.end) if self.end else None
                 last_slot = None
-                if aus is not None:
+                if aus is not None and audio:
                     # sound has its own reader, seconds ahead of the picture: when the PC is busy for a
                     # moment (a web overlay redrawing, a GPU stall) the pictures fall a few frames behind
                     # but the sound never runs dry (it used to wait behind the full picture queue)
@@ -177,9 +235,9 @@ class ClipPlayer:
                                 continue
                             last_slot = slot
                             if self.process is not None:
-                                item = (t - t0, self.process(frame))
+                                item = (t - t0 + self._t_offset, self.process(frame))
                             else:
-                                item = (t - t0, gpucg.to_bgra(frame, self.width, self.height))
+                                item = (t - t0 + self._t_offset, gpucg.to_bgra(frame, self.width, self.height))
                             while not self._stop.is_set():
                                 try:
                                     self._vq.put(item, timeout=0.1)

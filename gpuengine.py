@@ -31,6 +31,8 @@ MODE = "auto"                   # config "native_engine"
 EXE = "pgpu.exe"
 HEADER = 256
 MAX_SAMPLES = 8192
+CLIP_SLOTS = 4                  # clip pictures decoded ahead in pgpu (keep with pgpu.cc)
+CLIP_PIXELS = 4096              # where the clip pictures start in a clip's shared memory
 STATE = {"running": False, "gpu": "", "error": "", "restarts": 0, "stats": ""}   # health / diagnostics
 
 _engine = None
@@ -122,6 +124,7 @@ class NativeEngine:
         self._images = {}               # id(numpy array) -> (array, native id), oldest first
         self._drop = []
         self.pages = {}                 # page id -> NativeWebRenderer
+        self.clips = {}                 # clip id -> NativeClip
         self.events = {}                # "stream" / "rec" -> (threading.Event, [last line])
         self.stats = {}
         self._stops = []
@@ -193,6 +196,11 @@ class NativeEngine:
                 page = self.pages.get(int(pid)) if pid.isdigit() else None
                 if page is not None:
                     page._event(msg)
+            elif word == "clip":
+                cid, _, msg = rest.partition(" ")
+                clip = self.clips.get(int(cid)) if cid.isdigit() else None
+                if clip is not None:
+                    clip._event(msg)
             elif word in ("stream", "rec"):
                 ev = self.events.get(word)
                 if ev is not None:
@@ -208,6 +216,9 @@ class NativeEngine:
                     d[k] = v
                 self.stats = d
         # the process ended
+        for c in list(self.clips.values()):
+            c.error = c.error or "the GPU engine stopped"
+            c.done.set()
         was = self.ready
         self.ready = False
         with self._cv:
@@ -345,6 +356,17 @@ class NativeEngine:
         self.pages.pop(pid, None)
         self._send({"op": "web_close", "id": pid})
 
+    # ---- clips (decoded on the GPU) -------------------------------------
+    def clip_open(self, path, w, h, start, end, frame_dur):
+        """A NativeClip decoding path into its own shared memory, or None."""
+        c = NativeClip(self, w, h)
+        self.clips[c.id] = c
+        if not self._send({"op": "clip_open", "id": c.id, "path": path, "shm": c.name, "w": int(w), "h": int(h),
+                           "start": float(start or 0), "end": float(end or 0), "dur": float(frame_dur)}):
+            c.close()
+            return None
+        return c
+
     # ---- stream / recording --------------------------------------------
     def _encoder(self, kind, cmd, timeout=15):
         ev = self.events[kind] = (threading.Event(), [""])
@@ -372,6 +394,37 @@ class NativeEngine:
 
     def rec_stop(self):
         self._send({"op": "rec_stop"})
+
+
+class NativeClip:
+    """One clip being decoded in pgpu.exe: CLIP_SLOTS pictures in shared memory (see pgpu.cc Clip)."""
+
+    def __init__(self, engine, w, h):
+        self.engine = engine
+        self.id = next(_ids)
+        self.name = f"Local\\playout-clip-{os.getpid()}-{self.id}"
+        self.mm = mmap.mmap(-1, CLIP_PIXELS + CLIP_SLOTS * w * h * 4, tagname=self.name)
+        self.mode = ""
+        self.error = ""
+        self.done = threading.Event()
+
+    def _event(self, msg):
+        word, _, rest = msg.partition(" ")
+        if word in ("gpu", "cpu"):
+            self.mode = msg
+        elif word == "error":
+            self.error = rest[:200] or "error"
+            self.done.set()
+        elif word == "end":
+            self.done.set()
+
+    def close(self):
+        self.engine.clips.pop(self.id, None)
+        self.engine._send({"op": "clip_close", "id": self.id})
+        try:
+            self.mm.close()
+        except Exception:
+            pass
 
 
 class NativeWebRenderer:

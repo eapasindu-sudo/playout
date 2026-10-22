@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -1304,6 +1305,437 @@ void Retire(std::unique_ptr<Encoder> e) {
     std::thread([](Encoder* p) { delete p; }, e.release()).detach();
 }
 
+// ---------------------------------------------------------------- clips decoded on the GPU (d3d11va)
+// A program clip is decoded by the graphics card's video decoder, its NV12 / P010 picture turned into BGRA and
+// sized to the output by a shader, and the result handed to Playout in shared memory (Playout keeps the
+// timing, the sound and every other part of playing it). Without a GPU decoder the CPU decodes and converts.
+//
+// Clip shared memory (made by Playout): 64-byte header, then kClipSlots slot headers of 16 bytes
+// (int32 state: 0 free / 1 picture ready, int32 unused, double time in seconds from the in point), then
+// at kClipPixels the slots' pictures (w * h * 4 BGRA each).
+const int kClipSlots = 4;
+const size_t kClipPixels = 4096;
+
+const char* kYuvShader = R"(
+cbuffer P : register(b0) { float4 m0; float4 m1; float4 m2; float4 off; };
+Texture2D<float> lum : register(t0);
+Texture2D<float2> chroma : register(t1);
+SamplerState smp : register(s0);
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+V vs(uint id : SV_VertexID) {
+  float2 t = float2(id & 1, id >> 1);
+  V o;
+  o.pos = float4(t.x * 2 - 1, 1 - t.y * 2, 0, 1);
+  o.uv = t * off.zw;
+  return o;
+}
+float4 ps(V i) : SV_Target {
+  float3 yuv = float3(lum.Sample(smp, i.uv), chroma.Sample(smp, i.uv)) - float3(off.x, 0.5, 0.5);
+  float3 rgb = float3(dot(m0.xyz, yuv), dot(m1.xyz, yuv), dot(m2.xyz, yuv));
+  return float4(saturate(rgb), 1);
+}
+)";
+
+struct YuvParams {
+  float m0[4], m1[4], m2[4], off[4];
+};
+
+class YuvConverter {
+ public:
+  bool Init() {
+    ComPtr<ID3DBlob> vsb, psb, err;
+    if (FAILED(D3DCompile(kYuvShader, std::strlen(kYuvShader), "yuv", nullptr, nullptr, "vs", "vs_4_0", 0, 0, &vsb, &err)) ||
+        FAILED(D3DCompile(kYuvShader, std::strlen(kYuvShader), "yuv", nullptr, nullptr, "ps", "ps_4_0", 0, 0, &psb, &err)))
+      return false;
+    if (FAILED(g_dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs_)) ||
+        FAILED(g_dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &ps_)))
+      return false;
+    D3D11_BUFFER_DESC bd = {};
+    bd.ByteWidth = sizeof(YuvParams);
+    bd.Usage = D3D11_USAGE_DEFAULT;
+    bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_SAMPLER_DESC s = {};
+    s.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    s.AddressU = s.AddressV = s.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    s.MaxLOD = D3D11_FLOAT32_MAX;
+    D3D11_RASTERIZER_DESC r = {};
+    r.FillMode = D3D11_FILL_SOLID;
+    r.CullMode = D3D11_CULL_NONE;
+    r.DepthClipEnable = TRUE;
+    D3D11_BLEND_DESC b = {};
+    b.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    return SUCCEEDED(g_dev->CreateBuffer(&bd, nullptr, &cb_)) && SUCCEEDED(g_dev->CreateSamplerState(&s, &smp_)) &&
+           SUCCEEDED(g_dev->CreateRasterizerState(&r, &rs_)) && SUCCEEDED(g_dev->CreateBlendState(&b, &blend_));
+  }
+
+  // GPU lock held. frame: a d3d11va picture. Writes w x h BGRA to dst.
+  bool Convert(const AVFrame* frame, int w, int h, uint8_t* dst) {
+    auto* tex = reinterpret_cast<ID3D11Texture2D*>(frame->data[0]);
+    const UINT index = static_cast<UINT>(reinterpret_cast<intptr_t>(frame->data[1]));
+    D3D11_TEXTURE2D_DESC d;
+    tex->GetDesc(&d);
+    const bool p010 = d.Format == DXGI_FORMAT_P010 || d.Format == DXGI_FORMAT_P016;
+    if (!src_ || src_w_ != static_cast<int>(d.Width) || src_h_ != static_cast<int>(d.Height) || src_fmt_ != d.Format) {
+      D3D11_TEXTURE2D_DESC sd = {};
+      sd.Width = d.Width;
+      sd.Height = d.Height;
+      sd.MipLevels = sd.ArraySize = 1;
+      sd.Format = d.Format;
+      sd.SampleDesc.Count = 1;
+      sd.Usage = D3D11_USAGE_DEFAULT;
+      sd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      src_.Reset();
+      lum_.Reset();
+      chroma_.Reset();
+      if (FAILED(g_dev->CreateTexture2D(&sd, nullptr, &src_)))
+        return false;
+      D3D11_SHADER_RESOURCE_VIEW_DESC v = {};
+      v.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+      v.Texture2D.MipLevels = 1;
+      v.Format = p010 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+      if (FAILED(g_dev->CreateShaderResourceView(src_.Get(), &v, &lum_)))
+        return false;
+      v.Format = p010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+      if (FAILED(g_dev->CreateShaderResourceView(src_.Get(), &v, &chroma_)))
+        return false;
+      src_w_ = d.Width;
+      src_h_ = d.Height;
+      src_fmt_ = d.Format;
+    }
+    if (out_.w != w || out_.h != h) {
+      if (!MakeTex(out_, w, h, true))
+        return false;
+      D3D11_TEXTURE2D_DESC sd = {};
+      sd.Width = w;
+      sd.Height = h;
+      sd.MipLevels = sd.ArraySize = 1;
+      sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      sd.SampleDesc.Count = 1;
+      sd.Usage = D3D11_USAGE_STAGING;
+      sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+      staging_.Reset();
+      if (FAILED(g_dev->CreateTexture2D(&sd, nullptr, &staging_)))
+        return false;
+    }
+    g_ctx->CopySubresourceRegion(src_.Get(), 0, 0, 0, 0, tex, index, nullptr);
+    // colour matrix: BT.709 for HD, BT.601 for SD; limited (TV) range unless the file says full range
+    const bool full = frame->color_range == AVCOL_RANGE_JPEG;
+    const bool sd = frame->colorspace == AVCOL_SPC_BT470BG || frame->colorspace == AVCOL_SPC_SMPTE170M ||
+                    (frame->colorspace == AVCOL_SPC_UNSPECIFIED && frame->height < 720);
+    const float ys = full ? 1.f : 255.f / 219.f, cs = full ? 1.f : 255.f / 224.f;
+    const float kr = sd ? 0.299f : 0.2126f, kb = sd ? 0.114f : 0.0722f, kg = 1 - kr - kb;
+    YuvParams p = {};
+    p.m0[0] = ys; p.m0[1] = 0; p.m0[2] = cs * 2 * (1 - kr);
+    p.m1[0] = ys; p.m1[1] = -cs * 2 * (1 - kb) * kb / kg; p.m1[2] = -cs * 2 * (1 - kr) * kr / kg;
+    p.m2[0] = ys; p.m2[1] = cs * 2 * (1 - kb); p.m2[2] = 0;
+    p.off[0] = full ? 0.f : 16.f / 255.f;
+    // the picture may be padded (coded size): sample only the shown part
+    p.off[2] = static_cast<float>(frame->width) / d.Width;
+    p.off[3] = static_cast<float>(frame->height) / d.Height;
+    g_ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &p, 0, 0);
+    D3D11_VIEWPORT vp = {0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
+    ID3D11RenderTargetView* rtv = out_.rtv.Get();
+    g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
+    g_ctx->RSSetViewports(1, &vp);
+    g_ctx->RSSetState(rs_.Get());
+    float f[4] = {0, 0, 0, 0};
+    g_ctx->OMSetBlendState(blend_.Get(), f, 0xffffffff);
+    g_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    g_ctx->IASetInputLayout(nullptr);
+    g_ctx->VSSetShader(vs_.Get(), nullptr, 0);
+    g_ctx->PSSetShader(ps_.Get(), nullptr, 0);
+    ID3D11Buffer* cb = cb_.Get();
+    g_ctx->VSSetConstantBuffers(0, 1, &cb);
+    g_ctx->PSSetConstantBuffers(0, 1, &cb);
+    ID3D11ShaderResourceView* srv[2] = {lum_.Get(), chroma_.Get()};
+    g_ctx->PSSetShaderResources(0, 2, srv);
+    ID3D11SamplerState* smp = smp_.Get();
+    g_ctx->PSSetSamplers(0, 1, &smp);
+    g_ctx->Draw(4, 0);
+    ID3D11ShaderResourceView* none[2] = {nullptr, nullptr};
+    g_ctx->PSSetShaderResources(0, 2, none);
+    ID3D11RenderTargetView* no_rtv = nullptr;
+    g_ctx->OMSetRenderTargets(1, &no_rtv, nullptr);
+    g_ctx->CopyResource(staging_.Get(), out_.tex.Get());
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(g_ctx->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &m)))
+      return false;
+    const size_t row = static_cast<size_t>(w) * 4;
+    for (int y = 0; y < h; ++y)
+      std::memcpy(dst + y * row, static_cast<const uint8_t*>(m.pData) + static_cast<size_t>(y) * m.RowPitch, row);
+    g_ctx->Unmap(staging_.Get(), 0);
+    return true;
+  }
+
+ private:
+  ComPtr<ID3D11VertexShader> vs_;
+  ComPtr<ID3D11PixelShader> ps_;
+  ComPtr<ID3D11Buffer> cb_;
+  ComPtr<ID3D11SamplerState> smp_;
+  ComPtr<ID3D11RasterizerState> rs_;
+  ComPtr<ID3D11BlendState> blend_;
+  ComPtr<ID3D11Texture2D> src_, staging_;
+  ComPtr<ID3D11ShaderResourceView> lum_, chroma_;
+  int src_w_ = 0, src_h_ = 0;
+  DXGI_FORMAT src_fmt_ = DXGI_FORMAT_UNKNOWN;
+  Tex out_;
+};
+
+// one D3D11 device context for every GPU decoder (FFmpeg uses our GPU lock with it)
+AVBufferRef* g_decode_dev = nullptr;
+std::mutex g_decode_dev_lock;
+
+AVBufferRef* DecodeDevice() {
+  std::lock_guard<std::mutex> l(g_decode_dev_lock);
+  if (!g_decode_dev && !g_warp) {
+    AVBufferRef* dev = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
+    auto* d3d = reinterpret_cast<AVD3D11VADeviceContext*>(reinterpret_cast<AVHWDeviceContext*>(dev->data)->hwctx);
+    d3d->device = g_dev.Get();
+    d3d->device->AddRef();
+    d3d->lock = GpuLock;
+    d3d->unlock = GpuUnlock;
+    if (av_hwdevice_ctx_init(dev) < 0)
+      av_buffer_unref(&dev);
+    g_decode_dev = dev;
+  }
+  return g_decode_dev ? av_buffer_ref(g_decode_dev) : nullptr;
+}
+
+enum AVPixelFormat PickD3D11(AVCodecContext*, const enum AVPixelFormat* fmts) {
+  for (const enum AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p)
+    if (*p == AV_PIX_FMT_D3D11)
+      return *p;
+  return fmts[0];   // this codec / size has no GPU decoder: the first software format
+}
+
+class Clip {
+ public:
+  Clip(int id, std::string path, std::wstring shm, int w, int h, double start, double end, double frame_dur, bool gpu)
+      : id_(id), path_(std::move(path)), shm_(std::move(shm)), w_(w), h_(h), start_(start), end_(end),
+        dur_(frame_dur), gpu_(gpu) {}
+  ~Clip() { Stop(); }
+  void Start() { thread_ = std::thread(&Clip::Run, this); }
+  void Stop() {
+    stop_ = true;
+    if (thread_.joinable())
+      thread_.join();
+  }
+
+ private:
+  void Tell(const std::string& s) { Say("clip " + std::to_string(id_) + " " + s); }
+
+  // waits for a free slot; nullptr when the clip is closed
+  uint8_t* FreeSlot(int& slot) {
+    while (!stop_) {
+      auto* st = reinterpret_cast<volatile LONG*>(mem_ + 64 + next_ * 16);
+      if (*st == 0) {
+        slot = next_;
+        return mem_ + kClipPixels + static_cast<size_t>(next_) * w_ * h_ * 4;
+      }
+      ::Sleep(2);
+    }
+    return nullptr;
+  }
+  void Publish(int slot, double t) {
+    *reinterpret_cast<volatile double*>(mem_ + 64 + slot * 16 + 8) = t;
+    ::MemoryBarrier();
+    ::InterlockedExchange(reinterpret_cast<volatile LONG*>(mem_ + 64 + slot * 16), 1);
+    next_ = (next_ + 1) % kClipSlots;
+  }
+
+  void Run() {
+    const size_t size = kClipPixels + static_cast<size_t>(kClipSlots) * w_ * h_ * 4;
+    HANDLE map = ::OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, shm_.c_str());
+    if (map)
+      mem_ = static_cast<uint8_t*>(::MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, size));
+    if (!mem_) {
+      Tell("error could not open the clip's shared memory");
+      if (map)
+        ::CloseHandle(map);
+      return;
+    }
+    std::string err = Decode();
+    if (!err.empty())
+      Tell("error " + OneLine(err));
+    else
+      Tell("end");
+    ::UnmapViewOfFile(mem_);
+    ::CloseHandle(map);
+  }
+
+  std::string Decode() {
+    AVFormatContext* fmt = nullptr;
+    int r = avformat_open_input(&fmt, path_.c_str(), nullptr, nullptr);
+    if (r < 0)
+      return "open: " + AvErr(r);
+    std::unique_ptr<AVFormatContext, void (*)(AVFormatContext*)> fmt_guard(fmt, [](AVFormatContext* f) {
+      avformat_close_input(&f);
+    });
+    avformat_find_stream_info(fmt, nullptr);
+    const AVCodec* codec = nullptr;
+    const int vi = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+    if (vi < 0 || !codec)
+      return "no video stream";
+    AVStream* vs = fmt->streams[vi];
+    for (unsigned i = 0; i < fmt->nb_streams; ++i)
+      if (static_cast<int>(i) != vi)
+        fmt->streams[i]->discard = AVDISCARD_ALL;
+    AVCodecContext* dec = avcodec_alloc_context3(codec);
+    std::unique_ptr<AVCodecContext, void (*)(AVCodecContext*)> dec_guard(dec, [](AVCodecContext* c) {
+      avcodec_free_context(&c);
+    });
+    avcodec_parameters_to_context(dec, vs->codecpar);
+    dec->pkt_timebase = vs->time_base;
+    AVBufferRef* hw = gpu_ ? DecodeDevice() : nullptr;
+    if (hw) {
+      dec->hw_device_ctx = hw;
+      dec->get_format = PickD3D11;
+      dec->extra_hw_frames = kClipSlots + 2;
+    } else {
+      dec->thread_count = 0;   // all CPU cores
+    }
+    r = avcodec_open2(dec, codec, nullptr);
+    if (r < 0)
+      return std::string(codec->name) + ": " + AvErr(r);
+    const double tb = av_q2d(vs->time_base);
+    const double base = vs->start_time != AV_NOPTS_VALUE ? vs->start_time * tb : 0.0;
+    double t0 = -1;
+    if (start_ > 0) {
+      t0 = base + start_;
+      av_seek_frame(fmt, vi, static_cast<int64_t>(t0 / tb), AVSEEK_FLAG_BACKWARD);
+    }
+    const double end_t = end_ > 0 ? base + end_ : -1;
+    int64_t last_slot = INT64_MIN;
+    bool told = false;
+    SwsContext* sws = nullptr;
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    std::string result;
+    bool eof = false;
+    while (!stop_ && result.empty()) {
+      if (!eof) {
+        r = av_read_frame(fmt, pkt);
+        if (r < 0) {
+          eof = true;
+          avcodec_send_packet(dec, nullptr);
+        } else {
+          if (pkt->stream_index == vi)
+            avcodec_send_packet(dec, pkt);
+          av_packet_unref(pkt);
+        }
+      }
+      bool out_point = false;
+      while (!stop_ && (r = avcodec_receive_frame(dec, frame)) >= 0) {
+        const int64_t ts = frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame->best_effort_timestamp : frame->pts;
+        const double t = ts != AV_NOPTS_VALUE ? ts * tb : 0.0;
+        if (t0 < 0)
+          t0 = t;
+        if (t < t0 - dur_ * 0.5) {          // before the in point (after a seek)
+          av_frame_unref(frame);
+          continue;
+        }
+        if (end_t >= 0 && t >= end_t - dur_ * 0.5) {
+          out_point = true;
+          av_frame_unref(frame);
+          break;
+        }
+        // one picture per output frame (a 50p clip at 25p converts only the pictures shown)
+        const int64_t slot_no = static_cast<int64_t>(std::ceil((t - t0) / dur_ - 0.5 - 1e-6));
+        if (slot_no == last_slot) {
+          av_frame_unref(frame);
+          continue;
+        }
+        last_slot = slot_no;
+        int slot;
+        uint8_t* dst = FreeSlot(slot);
+        if (!dst) {
+          av_frame_unref(frame);
+          break;
+        }
+        bool ok = false;
+        if (frame->format == AV_PIX_FMT_D3D11) {
+          if (!told) {
+            Tell("gpu " + std::string(codec->name));
+            told = true;
+          }
+          std::lock_guard<std::recursive_mutex> l(g_gpu);
+          if (!conv_ready_) {
+            conv_ready_ = true;
+            conv_ok_ = conv_.Init();
+          }
+          ok = conv_ok_ && conv_.Convert(frame, w_, h_, dst);
+        } else {
+          if (!told) {
+            Tell("cpu " + std::string(codec->name));
+            told = true;
+          }
+          sws = sws_getCachedContext(sws, frame->width, frame->height, static_cast<AVPixelFormat>(frame->format), w_, h_,
+                                     AV_PIX_FMT_BGRA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+          if (sws) {
+            uint8_t* planes[4] = {dst, nullptr, nullptr, nullptr};
+            int lines[4] = {w_ * 4, 0, 0, 0};
+            sws_scale(sws, frame->data, frame->linesize, 0, frame->height, planes, lines);
+            ok = true;
+          }
+        }
+        av_frame_unref(frame);
+        if (!ok) {
+          result = "the picture could not be converted";
+          break;
+        }
+        Publish(slot, t - t0);
+      }
+      if (out_point || (eof && r == AVERROR_EOF))
+        break;
+    }
+    sws_freeContext(sws);
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    return result;
+  }
+
+  int id_;
+  std::string path_;
+  std::wstring shm_;
+  int w_, h_;
+  double start_, end_, dur_;
+  bool gpu_;
+  uint8_t* mem_ = nullptr;
+  int next_ = 0;
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
+  YuvConverter conv_;
+  bool conv_ready_ = false, conv_ok_ = false;
+};
+
+std::mutex g_clips_lock;
+std::map<int, std::unique_ptr<Clip>> g_clips;
+
+void ClipCommand(const Json& j) {
+  const std::string op = j.S("op");
+  const int id = static_cast<int>(j.N("id"));
+  std::unique_ptr<Clip> old;
+  {
+    std::lock_guard<std::mutex> l(g_clips_lock);
+    auto it = g_clips.find(id);
+    if (it != g_clips.end()) {
+      old = std::move(it->second);
+      g_clips.erase(it);
+    }
+  }
+  if (old)
+    std::thread([](Clip* c) { delete c; }, old.release()).detach();   // stops without holding up the commands
+  if (op != "clip_open")
+    return;
+  std::string shm = j.S("shm");
+  std::unique_ptr<Clip> c(new Clip(id, j.S("path"), std::wstring(shm.begin(), shm.end()), static_cast<int>(j.N("w")),
+                                   static_cast<int>(j.N("h")), j.N("start"), j.N("end"), j.N("dur", 0.04),
+                                   j.N("gpu", 1) != 0));
+  c->Start();
+  std::lock_guard<std::mutex> l(g_clips_lock);
+  g_clips[id] = std::move(c);
+}
+
 // ---------------------------------------------------------------- the render thread
 std::mutex g_cmd_lock;
 std::condition_variable g_cmd_cv;
@@ -1534,6 +1966,10 @@ void ReadCommands() {
       const std::string op = j.S("op");
       if (op == "quit")
         goto done;
+      if (op.compare(0, 5, "clip_") == 0) {
+        ClipCommand(j);
+        continue;
+      }
       if (op.compare(0, 4, "web_") == 0) {
         CefPostTask(TID_UI, base::BindOnce(&UiCommand, op, static_cast<int>(j.N("id")), j.S("url"),
                                            static_cast<int>(j.N("w", 1920)), static_cast<int>(j.N("h", 1080)),
