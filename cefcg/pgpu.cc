@@ -727,8 +727,6 @@ class Page : public CefClient, public CefRenderHandler, public CefLifeSpanHandle
     browser_ = browser;
     if (closing_)
       browser->GetHost()->CloseBrowser(true);
-    else if (hidden_)
-      browser->GetHost()->WasHidden(true);
   }
 
   void OnBeforeClose(CefRefPtr<CefBrowser>) override { browser_ = nullptr; }
@@ -755,10 +753,9 @@ class Page : public CefClient, public CefRenderHandler, public CefLifeSpanHandle
     if (on && hidden_)
       opened_at_ = Now();   // CheckPages: give the page time to draw again
     hidden_ = !on;
-    if (!browser_)
-      return;
-    browser_->GetHost()->WasHidden(!on);
-    if (on)
+    // the page keeps running off air, as in cefcg: a hidden page (document.hidden, no animation frames) can
+    // leave parts undrawn when it comes back, e.g. a score bar that slides in on an animation frame
+    if (browser_ && on)
       browser_->GetHost()->Invalidate(PET_VIEW);
   }
   void Close() {
