@@ -1,4 +1,4 @@
-"""CI: the built-in browser (build/cef/cefcg.exe) draws a test page into Playout's web CG: a red box on a
+"""CI: the built-in browser (a busy page: a big see-through bar changing 25 times a second) (build/cef/cefcg.exe) draws a test page into Playout's web CG: a red box on a
 see-through background, at its place and with straight alpha."""
 import os
 import pathlib
@@ -13,8 +13,9 @@ assert webcg.cef_exe(), "build/cef/cefcg.exe missing"
 page = pathlib.Path(tempfile.gettempdir()) / "cefcg-test.html"
 page.write_text("<html><body style='margin:0;background:transparent'>"
                 "<div style='position:absolute;left:100px;top:50px;width:200px;height:80px;background:rgba(255,0,0,.5)'></div>"
-                "<div id='t' style='position:absolute;left:400px;top:50px;width:40px;height:40px;background:#00f'></div>"
-                "<script>let n=0;setInterval(()=>{document.getElementById('t').style.left=(400+(n++%50))+'px'},40)</script>"
+                "<div id='t' style='position:absolute;left:0;top:400px;width:1280px;height:300px;background:rgba(0,0,255,.5)'></div>"
+                "<script>let n=0;setInterval(()=>{document.getElementById('t').style.background="
+                "'rgba(0,0,255,'+(0.3+(n++%5)/10)+')'},40)</script>"
                 "</body></html>", encoding="utf-8")
 r = webcg.WebRenderer(page.as_uri(), 1280, 720, rate=25)
 assert isinstance(r, webcg.CefRenderer), type(r)
@@ -30,8 +31,8 @@ try:
     print(f"pictures a second: {rate:.1f}")
     img, (dx, dy) = r.frame
     print("picture", img.shape, "at", dx, dy)
-    assert (dx, dy) == (100, 50), (dx, dy)
-    b, g, red, a = (int(v) for v in img[40, 100])
+    assert (dx, dy) == (0, 50), (dx, dy)
+    b, g, red, a = (int(v) for v in img[40, 150])
     print("red box BGRA", b, g, red, a)
     assert abs(a - 128) <= 3 and red >= 250 and g <= 3, "red box colour / straight alpha wrong"
     assert rate >= 10, "the moving page should give many pictures a second"
