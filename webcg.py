@@ -178,12 +178,27 @@ def _finish(out, dx, dy, zoom, premultiplied):
         im = Image.fromarray(out, "RGBA").resize((max(1, round(w * zoom)), max(1, round(h * zoom))), Image.BILINEAR)
         out = np.asarray(im).copy()
         dx, dy = round(dx * zoom), round(dy * zoom)
-    al = out[..., 3:4].astype(np.uint16)
-    part = (al > 0) & (al < 255)
-    if premultiplied and part.any():
-        rgb = out[..., :3].astype(np.uint16) * 255 // np.maximum(al, 1)
-        out[..., :3] = np.where(part, np.minimum(rgb, 255), out[..., :3]).astype(np.uint8)
+    if premultiplied:
+        # straight = premultiplied * 255 / alpha, looked up in a 256 x 256 table (fast on a full-screen page)
+        a = out[..., 3]
+        rows = np.flatnonzero(((a > 0) & (a < 255)).any(axis=1))   # rows with partly see-through pixels
+        if len(rows):
+            part = out[rows[0]:rows[-1] + 1]
+            idx = part[..., 3].astype(np.uint16)[..., None] << 8
+            idx = idx | part[..., :3]
+            part[..., :3] = _UNPREMUL.take(idx)
     return out, (dx, dy)
+
+
+def _unpremul_table():
+    a = np.arange(256, dtype=np.uint32)[:, None]
+    v = np.arange(256, dtype=np.uint32)[None, :]
+    t = np.where(a == 0, v, np.minimum(255, v * 255 // np.maximum(a, 1)))
+    t[255] = np.arange(256)
+    return t.astype(np.uint8).ravel()
+
+
+_UNPREMUL = _unpremul_table()
 
 
 _shm_ids = itertools.count(1)
@@ -270,6 +285,7 @@ class CefRenderer:
 
     @staticmethod
     def _grab(arr, zoom):
+        """Crop / zoom / straight alpha of a picture already copied out of the shared memory."""
         alpha = arr[..., 3]
         rows = np.flatnonzero(alpha.any(axis=1))
         if not len(rows):
@@ -286,28 +302,48 @@ class CefRenderer:
             name = f"Local\\playout-cefcg-{os.getpid()}-{next(_shm_ids)}"
             mm = arr = None
             started, frames_before = time.monotonic(), self.frames
+            restart = False
             try:
                 mm = mmap.mmap(-1, 64 + self.width * self.height * 4, tagname=name)
                 arr = np.frombuffer(mm, dtype=np.uint8, count=self.width * self.height * 4, offset=64)
                 arr = arr.reshape(self.height, self.width, 4)
+                buf = np.empty_like(arr)
                 self._start(name)
-                shown, last = True, -1
+                shown, last, seen, poked = True, -1, time.monotonic(), 0.0
                 while self._running:
                     if self._reload:
+                        # Reload = start the page in a fresh browser (the picture on air stays until the new one)
                         self._reload = False
-                        self._tell("reload")
+                        restart = True
+                        break
                     if self.active != shown:
                         shown = self.active
                         self._tell("show" if shown else "hide")
+                        seen, poked = time.monotonic(), 0.0
                     if self._proc.poll() is not None:
                         raise RuntimeError(f"The built-in browser stopped (exit code {self._proc.returncode})")
                     seq = struct.unpack_from("<q", mm, 16)[0]
+                    now = time.monotonic()
+                    if seq != last:
+                        seen, poked = now, 0.0
                     if shown and seq != last and seq > 0 and seq % 2 == 0:
-                        img, off = self._grab(arr, self.zoom)
-                        if struct.unpack_from("<q", mm, 16)[0] == seq:    # not drawn over while copied
+                        # copy the picture out first (a few ms), then check the browser did not draw over it
+                        # meanwhile; the slower work (crop, alpha) is done on the copy. Checking only after
+                        # that work threw away nearly every picture of a busy page (it froze on air)
+                        np.copyto(buf, arr)
+                        if struct.unpack_from("<q", mm, 16)[0] == seq:
                             last = seq
+                            img, off = self._grab(buf, self.zoom)
                             self.frame = (img, off) if img is not None else None
                             self.frames += 1
+                    elif shown and self.loaded and now - seen > 5:
+                        # nothing drawn for a while: a still page is fine, so ask for one picture ("show" redraws);
+                        # no picture after that = the browser is stuck: start it again
+                        if not poked:
+                            poked = now
+                            self._tell("show")
+                        elif now - poked > 5:
+                            raise RuntimeError("The built-in browser stopped drawing the page (started again)")
                     time.sleep(self.interval)
             except Exception as e:
                 if self._running:
@@ -324,6 +360,9 @@ class CefRenderer:
                         pass
             if not self._running:
                 break
+            if restart:
+                quick_fails = 0
+                continue
             # stopped at once without drawing anything: twice in a row = this PC cannot run it, use Edge / Chrome
             quick = self.frames == frames_before and time.monotonic() - started < 15
             quick_fails = quick_fails + 1 if quick else 0
