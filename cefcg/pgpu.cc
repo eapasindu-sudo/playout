@@ -1863,8 +1863,8 @@ void PreviewApply() {
                                   ::GetModuleHandleW(nullptr), nullptr);
     if (!g_pv_hwnd)
       return;
-    ::SetTimer(g_pv_hwnd, 1, 100, nullptr);
-    g_pv_up = false;   // follows Playout's window when it moves
+    ::SetTimer(g_pv_hwnd, 1, 100, nullptr);   // follows Playout's window when it moves
+    g_pv_up = false;
   }
   const bool show = w.on && w.w > 8 && w.h > 8 && !::IsIconic(w.parent);
   POINT at = {w.x, w.y};
