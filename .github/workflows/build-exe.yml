@@ -56,7 +56,11 @@ jobs:
           $root = (Get-ChildItem "$env:RUNNER_TEMP\cef" -Directory | Select-Object -First 1).FullName -replace '\\', '/'
           # FFmpeg 7.x development files (headers, import libraries, DLLs) for the GPU engine's encoders
           $rel = Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:GH_TOKEN" } https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest
-          $ff = $rel.assets | Where-Object name -match '^ffmpeg-n7\.\d+-latest-win64-gpl-shared-7\.\d+\.zip$' | Sort-Object name -Descending | Select-Object -First 1
+          $shared = $rel.assets | Where-Object name -match 'win64-gpl-shared-[\d.]+\.zip$' | Sort-Object name -Descending
+          $shared | ForEach-Object { $_.name }
+          $ff = ($shared | Where-Object name -match 'shared-7\.' | Select-Object -First 1)
+          if (-not $ff) { $ff = $shared | Select-Object -First 1 }
+          if (-not $ff) { throw "no FFmpeg shared build found" }
           "FFmpeg $($ff.name)"
           Invoke-WebRequest $ff.browser_download_url -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
           Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg"
