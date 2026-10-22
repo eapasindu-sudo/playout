@@ -635,7 +635,7 @@
     <span style="display:flex; gap:6px; align-items:center"><input class="num" id="ssV" type="number" min="300" max="50000" step="100"> kbps
       <select id="ssVp" onchange="if(this.value) $('ssV').value=this.value; this.value=''">
         <option value="">presets</option><option value="2500">2500 (720p low)</option><option value="3500">3500 (720p)</option>
-        <option value="4500">4500 (1080p)</option><option value="6000">6000 (1080p high)</option><option value="8000">8000</option></select></span>
+        <option value="4500">4500 (1080p)</option><option value="6000">6000 (1080p high)</option><option value="8000">8000</option><option value="10000">10000 (10 Mbps: YouTube 1080p; Facebook takes up to about 9000)</option></select></span>
     <span>Audio bitrate</span><select id="ssA"><option>96</option><option>128</option><option>160</option><option>192</option><option>256</option><option>320</option></select>
     <span>Encoder</span><select id="ssE">
       <option value="auto">Auto: graphics card (GPU) if this PC has one</option><option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA GPU (NVENC)</option>
