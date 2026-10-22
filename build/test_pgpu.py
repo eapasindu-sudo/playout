@@ -50,13 +50,13 @@ try:
         fr = web.frame
         jobs = [(cg, 20, 30, 255)] + ([(fr[0], 600, 300, 255)] if fr else [])
         out = eng.frame(base, silence, jobs)
-        if fr is not None and out is not None:
+        if fr is not None and out is not None and web.loaded:
             break
         time.sleep(0.04)
     print("web page: loaded", web.loaded, "drawn", web.frames, "mode", web.mode, "error", web.error)
     assert out is not None, "no mixed picture back"
     assert web.frame is not None, "the web page was never drawn: " + web.error
-    for _ in range(10):                           # a few more frames: the page has drawn its boxes
+    for _ in range(50):                           # a few more frames: the page has drawn its boxes
         out = eng.frame(base, silence, [(cg, 20, 30, 255), (web.frame[0], 600, 300, 255)])
         time.sleep(0.04)
     img = out.reshape(H, W, 4)
