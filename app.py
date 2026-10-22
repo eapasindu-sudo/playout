@@ -136,6 +136,7 @@ sysmon = SystemMonitor()
 audio_out = AudioOut()
 engine.audio_out = audio_out
 recorder = Recorder(engine, store.data.get("record_folder") or os.path.join(ROOT, cfg.get("record_dir", "recordings")))
+recorder.streamer = streamer          # "same as the stream" recording saves the stream's encode
 engine.recorder = recorder
 loudness = Loudness(cfg["data_dir"], streamer.ffmpeg)
 engine.loudness = loudness

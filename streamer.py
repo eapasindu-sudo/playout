@@ -259,6 +259,7 @@ class Streamer:
         self._thread = None
         self._encoding = False
         self.dropped = 0
+        self._taps = set()
 
     # -- config ---------------------------------------------------------
     def load(self, saved):
@@ -329,7 +330,20 @@ class Streamer:
         self._thread = threading.Thread(target=self._encode, daemon=True, name="stream encoder")
         self._thread.start()
 
+    def add_tap(self, fn):
+        """fn(data) gets every piece of the encoded stream (MPEG-TS bytes) as it is sent, and fn(None) when the
+        stream encoder stops: the recorder saves the same picture without encoding it a second time."""
+        self._taps.add(fn)
+
+    def remove_tap(self, fn):
+        self._taps.discard(fn)
+
     def _fanout(self, data):
+        for fn in list(self._taps):
+            try:
+                fn(data)
+            except Exception:
+                pass
         with self._lock:
             now = time.time()
             for d in self.dests:
@@ -409,6 +423,11 @@ class Streamer:
             if out is not None:
                 try:
                     out.close()
+                except Exception:
+                    pass
+            for fn in list(self._taps):
+                try:
+                    fn(None)
                 except Exception:
                     pass
             with self._lock:
