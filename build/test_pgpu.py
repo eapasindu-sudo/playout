@@ -132,6 +132,41 @@ try:
         time.sleep(0.04)
     assert web.loaded, "the page did not come back after Reload"
 
+    # squeeze (L-ad): the program into a box over black, a picture under it, all on the GPU
+    under = np.zeros((H, W, 4), np.uint8)
+    under[:, : W // 4] = (255, 0, 0, 255)                         # blue strip on the left
+    sq = [{"box": {"x": W // 2, "y": 0, "w": W // 2, "h": H // 2}, "under": [(under, 0, 0, 255)], "plan": None, "over": 0}]
+    img = eng.frame(base, silence, sq).reshape(H, W, 4)
+    print("squeeze: box", img[100, W * 3 // 4], "outside", img[H - 10, W // 2], "under", img[H - 10, 10])
+    assert near(img[100, W * 3 // 4], (128, 128, 128, 255), 2), "squeeze: program not in its box"
+    assert near(img[H - 10, W // 2], (0, 0, 0, 255), 2), "squeeze: not black outside the box"
+    assert near(img[H - 10, 10], (255, 0, 0, 255), 2), "squeeze: picture under the program missing"
+
+    # a vertical (9:16) destination encoded from the GPU picture
+    vp, vmsg = eng.stream_start(720, 1280, 2500, 128, "auto", 50, name="v0", layout="blur", pos=50)
+    assert vp, "vertical encode did not start: " + vmsg
+    vgot = io.BytesIO()
+
+    def vread():
+        with open(vp, "rb", buffering=0) as f:
+            while True:
+                d = f.read(65536)
+                if not d:
+                    break
+                vgot.write(d)
+
+    vt = threading.Thread(target=vread, daemon=True)
+    vt.start()
+    for k in range(50):
+        eng.frame(base, sound, [])
+        time.sleep(0.04)
+    eng.stream_stop("v0")
+    vt.join(10)
+    with av.open(io.BytesIO(vgot.getvalue()), format="mpegts") as c:
+        vf = [f for f in c.decode(video=0)]
+    print("vertical:", len(vf), "pictures", vf[0].width if vf else 0, "x", vf[0].height if vf else 0)
+    assert len(vf) >= 40 and (vf[0].width, vf[0].height) == (720, 1280), "vertical encode wrong"
+
     # a clip decoded by the engine (GPU decoder on a real PC, the CPU here), as the program player uses it
     import media
     clip_path = os.path.join(tempfile.gettempdir(), "pgpu-clip.mp4")

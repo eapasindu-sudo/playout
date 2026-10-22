@@ -721,6 +721,28 @@ def _jpeg(width=640, quality=75):
         return data
 
 
+_pv_hwnd = {"h": 0}
+
+
+@app.post("/api/native_preview")
+def native_preview():
+    """The desktop control screen's preview box drawn by the GPU engine straight into the window (no JPEGs).
+    Body: x, y, w, h of the box in window pixels, on. Answers native: false when the engine cannot."""
+    b = request.get_json(silent=True) or {}
+    nat = gpuengine.active()
+    if nat is None or sys.platform != "win32" or str(cfg.get("native_preview", "auto")).lower() == "off":
+        return jsonify(native=False)
+    import ctypes
+    u32 = ctypes.windll.user32
+    h = _pv_hwnd["h"]
+    if not h or not u32.IsWindow(h):
+        h = _pv_hwnd["h"] = u32.FindWindowW(None, "Endora Playout") or 0
+    if not h:
+        return jsonify(native=False)
+    nat.preview(h, b.get("x") or 0, b.get("y") or 0, b.get("w") or 0, b.get("h") or 0, bool(b.get("on")))
+    return jsonify(native=True)
+
+
 @app.get("/api/preview.jpg")
 def preview():
     w = max(160, min(engine.width, int(request.args.get("w") or 640)))

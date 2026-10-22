@@ -201,13 +201,14 @@ class NativeEngine:
                 clip = self.clips.get(int(cid)) if cid.isdigit() else None
                 if clip is not None:
                     clip._event(msg)
-            elif word in ("stream", "rec"):
-                ev = self.events.get(word)
+            elif word == "enc":
+                name, _, msg = rest.partition(" ")
+                ev = self.events.get(name)
                 if ev is not None:
-                    ev[1][0] = rest
+                    ev[1][0] = msg
                     ev[0].set()
-                if rest.startswith("error"):
-                    logging.warning("GPU engine %s: %s", word, rest)
+                if msg.startswith("error"):
+                    logging.warning("GPU engine encoder %s: %s", name, msg)
             elif word == "stats":
                 STATE["stats"] = rest
                 d = {}
@@ -291,6 +292,15 @@ class NativeEngine:
         if n:
             self._audio[:, :n] = audio[:, :n]
         up, layers, used = [], [], 0
+        box, under = None, []
+        if jobs and isinstance(jobs[0], dict):              # a squeeze: the program goes into box
+            b = jobs[0]["box"]
+            box = [int(b["x"]), int(b["y"]), int(b["w"]), int(b["h"])]
+            for img, x, y, op in jobs[0]["under"]:
+                nid, used = self._image(img, up, used)
+                if nid is not None:
+                    under.append({"img": nid, "x": int(x), "y": int(y), "o": int(op)})
+            jobs = jobs[1:]
         for img, x, y, op in jobs:
             if isinstance(img, WebTex):
                 layers.append({"web": img.page, "x": int(x), "y": int(y), "o": int(op), "z": round(float(img.zoom), 4)})
@@ -303,7 +313,10 @@ class NativeEngine:
             self._drop = []
         self._k += 1
         k = self._k
-        if not self._send({"op": "frame", "k": k, "n": n, "up": up, "layers": layers, "rb": 1 if readback else 0}):
+        cmd = {"op": "frame", "k": k, "n": n, "up": up, "layers": layers, "rb": 1 if readback else 0}
+        if box is not None:
+            cmd["box"], cmd["under"] = box, under
+        if not self._send(cmd):
             return None
         with self._cv:
             self._cv.wait_for(lambda: self._ack >= k or not self.ready, self.ACK_TIMEOUT)
@@ -356,6 +369,11 @@ class NativeEngine:
         self.pages.pop(pid, None)
         self._send({"op": "web_close", "id": pid})
 
+    # ---- the control screen's preview, drawn by the GPU ------------------
+    def preview(self, hwnd, x, y, w, h, on):
+        return self._send({"op": "preview", "hwnd": int(hwnd), "x": int(x), "y": int(y), "w": int(w), "h": int(h),
+                           "on": 1 if on else 0})
+
     # ---- clips (decoded on the GPU) -------------------------------------
     def clip_open(self, path, w, h, start, end, frame_dur):
         """A NativeClip decoding path into its own shared memory, or None."""
@@ -368,9 +386,10 @@ class NativeEngine:
         return c
 
     # ---- stream / recording --------------------------------------------
-    def _encoder(self, kind, cmd, timeout=15):
-        ev = self.events[kind] = (threading.Event(), [""])
-        if not self._send(cmd):
+    def _encoder(self, cmd, timeout=15):
+        name = cmd["name"]
+        ev = self.events[name] = (threading.Event(), [""])
+        if not self._send({"op": "enc_start", **cmd}):
             return False, "the GPU engine is not running"
         if not ev[0].wait(timeout):
             return False, "the GPU engine did not answer"
@@ -379,21 +398,23 @@ class NativeEngine:
             return True, msg[8:]
         return False, msg.partition(" ")[2] or msg
 
-    def stream_start(self, w, h, kbps, akbps, enc, gop):
+    def stream_start(self, w, h, kbps, akbps, enc, gop, name="stream", layout="", pos=50):
+        """An MPEG-TS encode of the mixed picture (layout "crop" / "blur": a 9:16 picture made on the GPU).
+        Returns (pipe name to read it from, encoder) or (None, why not)."""
         pipe = rf"\\.\pipe\playout-pgpu-{os.getpid()}-{next(_ids)}"
-        ok, msg = self._encoder("stream", {"op": "stream_start", "pipe": pipe, "w": int(w), "h": int(h), "kbps": int(kbps),
-                                           "akbps": int(akbps), "enc": enc, "gop": int(gop)})
+        ok, msg = self._encoder({"name": name, "kind": "stream", "pipe": pipe, "w": int(w), "h": int(h), "kbps": int(kbps),
+                                 "akbps": int(akbps), "enc": enc, "gop": int(gop), "layout": layout, "pos": int(pos)})
         return (pipe, msg) if ok else (None, msg)
 
-    def stream_stop(self):
-        self._send({"op": "stream_stop"})
+    def stream_stop(self, name="stream"):
+        self._send({"op": "enc_stop", "name": name})
 
     def rec_start(self, path, w, h, kbps, enc, gop):
-        return self._encoder("rec", {"op": "rec_start", "path": path, "w": int(w), "h": int(h), "kbps": int(kbps),
-                                     "akbps": 192, "enc": enc, "gop": int(gop)})
+        return self._encoder({"name": "rec", "kind": "rec", "path": path, "w": int(w), "h": int(h), "kbps": int(kbps),
+                              "akbps": 192, "enc": enc, "gop": int(gop)})
 
     def rec_stop(self):
-        self._send({"op": "rec_stop"})
+        self._send({"op": "enc_stop", "name": "rec"})
 
 
 class NativeClip:

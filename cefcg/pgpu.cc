@@ -434,7 +434,7 @@ V vs(uint id : SV_VertexID) {
 float4 ps(V i) : SV_Target {
   float4 c = tex.Sample(smp, i.uv);
   if (prm.y < 0.5) c.rgb *= c.a;       // straight alpha (CG pictures) -> premultiplied
-  if (prm.z > 0.5) return float4(c.rgb, 1);   // plain copy (scaling for the encoder)
+  if (prm.z > 0.5) return float4(saturate(c.rgb + prm.w), 1);   // plain copy (scaling, layouts), brightness
   return c * prm.x;                    // fade
 }
 )";
@@ -511,6 +511,19 @@ class Mixer {
     g_ctx->UpdateSubresource(pgm_.tex.Get(), 0, nullptr, bgra, pgm_.w * 4, 0);
   }
 
+  // squeeze: the program goes into box over black (and any picture under it): its own texture first
+  Tex* BaseTex(const uint8_t* bgra) {
+    if (!base_.tex && !MakeTex(base_, pgm_.w, pgm_.h, false))
+      return nullptr;
+    g_ctx->UpdateSubresource(base_.tex.Get(), 0, nullptr, bgra, pgm_.w * 4, 0);
+    return &base_;
+  }
+
+  void Black() {
+    const float black[4] = {0, 0, 0, 1};
+    g_ctx->ClearRenderTargetView(pgm_.rtv.Get(), black);
+  }
+
   void Begin(Tex& target) {
     D3D11_VIEWPORT vp = {0, 0, static_cast<float>(target.w), static_cast<float>(target.h), 0, 1};
     ID3D11RenderTargetView* rtv = target.rtv.Get();
@@ -530,7 +543,7 @@ class Mixer {
 
   // draws src (its part u0..u1, v0..v1) at x, y (w x h pixels) over the target
   void Draw(Tex& src, float x, float y, float w, float h, float opacity, bool premultiplied, bool scale,
-            bool plain_copy = false, float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1) {
+            bool plain_copy = false, float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1, float bright = 0) {
     Params p;
     p.rect[0] = x / tw_ * 2 - 1;
     p.rect[1] = 1 - y / th_ * 2;
@@ -543,7 +556,7 @@ class Mixer {
     p.prm[0] = opacity;
     p.prm[1] = premultiplied ? 1.f : 0.f;
     p.prm[2] = plain_copy ? 1.f : 0.f;
-    p.prm[3] = 0;
+    p.prm[3] = bright;
     g_ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &p, 0, 0);
     ID3D11ShaderResourceView* srv = src.srv.Get();
     g_ctx->PSSetShaderResources(0, 1, &srv);
@@ -574,6 +587,38 @@ class Mixer {
     return &t;
   }
 
+  // a vertical (9:16) picture for one destination, made from the mixed picture on the GPU
+  Tex* Layout(int w, int h, const std::string& layout, float pos) {
+    if (layout != "crop" && layout != "blur")
+      return Sized(w, h);
+    const float f = (pgm_.h * 9.f / 16.f) / pgm_.w;   // part of the width a 9:16 crop takes
+    Tex& t = sized_[(static_cast<int64_t>(w) << 32) | (static_cast<int64_t>(h) << 1) | 1];
+    if (!t.tex && !MakeTex(t, w, h, true))
+      return nullptr;
+    if (layout == "crop") {
+      const float u0 = (1 - f) * pos;
+      Begin(t);
+      Draw(pgm_, 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true, u0, 0, u0 + f, 1);
+      End();
+      return &t;
+    }
+    // blur: the centre of the picture, made very small and blown up again (soft), a little darker; the whole
+    // picture over it across the width, in the middle
+    Tex& small = sized_[(static_cast<int64_t>(w / 8) << 32) | (static_cast<int64_t>(h / 8) << 1) | 1];
+    if (!small.tex && !MakeTex(small, w / 8 > 0 ? w / 8 : 1, h / 8 > 0 ? h / 8 : 1, true))
+      return nullptr;
+    const float u0 = (1 - f) * 0.5f;
+    Begin(small);
+    Draw(pgm_, 0, 0, static_cast<float>(small.w), static_cast<float>(small.h), 1, true, true, true, u0, 0, u0 + f, 1);
+    End();
+    Begin(t);
+    Draw(small, 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true, 0, 0, 1, 1, -0.12f);
+    const float fh = w * 9.f / 16.f;
+    Draw(pgm_, 0, (h - fh) / 2, static_cast<float>(w), fh, 1, true, true, true);
+    End();
+    return &t;
+  }
+
   bool Readback(uint8_t* dst) {
     g_ctx->CopyResource(staging_.Get(), pgm_.tex.Get());
     D3D11_MAPPED_SUBRESOURCE m;
@@ -594,7 +639,7 @@ class Mixer {
   ComPtr<ID3D11SamplerState> point_, linear_;
   ComPtr<ID3D11RasterizerState> rs_;
   ComPtr<ID3D11Texture2D> staging_;
-  Tex pgm_;
+  Tex pgm_, base_;
   std::map<int64_t, Tex> sized_;
   float tw_ = 1, th_ = 1;
 };
@@ -866,7 +911,10 @@ class PipeOutput : public Output {
 };
 
 struct EncConfig {
-  std::string kind;     // "stream" or "rec"
+  std::string name;     // "stream", "rec", "v0".. (a vertical destination's own encode)
+  std::string kind;     // "stream" (MPEG-TS to a pipe) or "rec" (MP4 file)
+  std::string layout;   // "" as mixed, "crop" 9:16 crop, "blur" 9:16 whole picture on a blurred background
+  float pos = 0.5f;     // crop: 0 left .. 1 right
   std::string encoder;  // auto, h264_nvenc, h264_qsv, h264_amf, libx264
   std::string path;     // rec: the file
   std::wstring pipe;    // stream: the pipe name
@@ -919,6 +967,7 @@ class Encoder {
   int64_t frames() const { return vpts_; }
   int w() const { return c_.w; }
   int h() const { return c_.h; }
+  const EncConfig& config() const { return c_; }
 
   // render thread, GPU lock held: hand the mixed picture (and the frame's sound) to the encoder
   void Submit(Tex* src, const float* audio, int n) {
@@ -1736,19 +1785,147 @@ void ClipCommand(const Json& j) {
   g_clips[id] = std::move(c);
 }
 
+// ---------------------------------------------------------------- the layout's preview, drawn by the GPU itself
+// A child window over the control screen's preview box (Playout's window gives its handle and the box's place):
+// the mixed picture is drawn into it straight from the GPU every frame, so the control screen no longer makes,
+// sends and shows JPEG pictures of the program (as vMix's own preview).
+struct PreviewWant {
+  HWND parent = nullptr;
+  int x = 0, y = 0, w = 0, h = 0;
+  bool on = false;
+};
+std::mutex g_pv_lock;
+PreviewWant g_pv_want;
+HWND g_pv_hwnd = nullptr;          // UI thread makes and moves it
+std::atomic<HWND> g_pv_ready{nullptr};
+std::atomic<int> g_pv_w{0}, g_pv_h{0};
+ComPtr<IDXGISwapChain> g_pv_chain;    // render thread
+int g_pv_cw = 0, g_pv_ch = 0;
+HWND g_pv_chain_hwnd = nullptr;
+
+LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  if (msg == WM_NCHITTEST)
+    return HTTRANSPARENT;
+  if (msg == WM_ERASEBKGND)
+    return 1;
+  return ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void PreviewUi() {
+  CEF_REQUIRE_UI_THREAD();
+  PreviewWant w;
+  {
+    std::lock_guard<std::mutex> l(g_pv_lock);
+    w = g_pv_want;
+  }
+  if (g_pv_hwnd && (!w.parent || ::GetParent(g_pv_hwnd) != w.parent || !::IsWindow(w.parent))) {
+    g_pv_ready = nullptr;
+    {
+      std::lock_guard<std::recursive_mutex> l(g_gpu);
+      g_pv_chain.Reset();
+      g_pv_chain_hwnd = nullptr;
+    }
+    ::DestroyWindow(g_pv_hwnd);
+    g_pv_hwnd = nullptr;
+  }
+  if (!w.parent || !::IsWindow(w.parent))
+    return;
+  if (!g_pv_hwnd) {
+    static bool registered = false;
+    if (!registered) {
+      WNDCLASSW wc = {};
+      wc.lpfnWndProc = PreviewProc;
+      wc.hInstance = ::GetModuleHandleW(nullptr);
+      wc.lpszClassName = L"PlayoutGpuPreview";
+      wc.hbrBackground = static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH));
+      ::RegisterClassW(&wc);
+      registered = true;
+    }
+    g_pv_hwnd = ::CreateWindowExW(WS_EX_NOPARENTNOTIFY | WS_EX_TRANSPARENT, L"PlayoutGpuPreview", L"", WS_CHILD | WS_DISABLED,
+                                  w.x, w.y, w.w > 0 ? w.w : 16, w.h > 0 ? w.h : 9, w.parent, nullptr,
+                                  ::GetModuleHandleW(nullptr), nullptr);
+    if (!g_pv_hwnd)
+      return;
+  }
+  const bool show = w.on && w.w > 8 && w.h > 8;
+  if (show) {
+    g_pv_w = w.w;
+    g_pv_h = w.h;
+  }
+  ::SetWindowPos(g_pv_hwnd, HWND_TOP, w.x, w.y, show ? w.w : 1, show ? w.h : 1,
+                 SWP_NOACTIVATE | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  g_pv_ready = show ? g_pv_hwnd : nullptr;
+}
+
+// render thread, GPU lock held: the mixed picture into the preview window
+void PresentPreview() {
+  HWND hwnd = g_pv_ready.load();
+  if (!hwnd) {
+    return;
+  }
+  const int w = g_pv_w, h = g_pv_h;
+  if (!g_pv_chain || g_pv_chain_hwnd != hwnd) {
+    g_pv_chain.Reset();
+    ComPtr<IDXGIDevice> dxgi;
+    ComPtr<IDXGIAdapter> adapter;
+    ComPtr<IDXGIFactory> factory;
+    if (FAILED(g_dev.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory))))
+      return;
+    DXGI_SWAP_CHAIN_DESC d = {};
+    d.BufferDesc.Width = w;
+    d.BufferDesc.Height = h;
+    d.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    d.BufferCount = 1;
+    d.OutputWindow = hwnd;
+    d.Windowed = TRUE;
+    d.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    if (FAILED(factory->CreateSwapChain(g_dev.Get(), &d, &g_pv_chain)))
+      return;
+    factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+    g_pv_chain_hwnd = hwnd;
+    g_pv_cw = w;
+    g_pv_ch = h;
+  } else if (g_pv_cw != w || g_pv_ch != h) {
+    if (FAILED(g_pv_chain->ResizeBuffers(1, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 0))) {
+      g_pv_chain.Reset();
+      return;
+    }
+    g_pv_cw = w;
+    g_pv_ch = h;
+  }
+  ComPtr<ID3D11Texture2D> back;
+  if (FAILED(g_pv_chain->GetBuffer(0, IID_PPV_ARGS(&back))))
+    return;
+  Tex t;
+  t.tex = back;
+  t.w = w;
+  t.h = h;
+  if (FAILED(g_dev->CreateRenderTargetView(back.Get(), nullptr, &t.rtv)))
+    return;
+  g_mixer.Begin(t);
+  g_mixer.Draw(g_mixer.Program(), 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true);
+  g_mixer.End();
+  g_pv_chain->Present(0, 0);
+}
+
 // ---------------------------------------------------------------- the render thread
 std::mutex g_cmd_lock;
 std::condition_variable g_cmd_cv;
 std::deque<Json> g_cmds;
 bool g_cmd_stop = false;
 
-std::unique_ptr<Encoder> g_stream, g_rec;
+std::map<std::string, std::unique_ptr<Encoder>> g_encs;   // by name: stream, rec, v0..
 std::map<int64_t, Tex> g_images;   // CG pictures sent by Playout, by its id
 std::atomic<int64_t> g_frames{0};
 
-EncConfig ConfigFrom(const Json& j, const char* kind) {
+EncConfig ConfigFrom(const Json& j) {
   EncConfig c;
-  c.kind = kind;
+  c.name = j.S("name", "stream");
+  c.kind = j.S("kind", "stream");
+  c.layout = j.S("layout");
+  c.pos = static_cast<float>(j.N("pos", 50)) / 100.f;
   c.encoder = j.S("enc", "auto");
   c.path = j.S("path");
   std::string pipe = j.S("pipe");
@@ -1762,17 +1939,23 @@ EncConfig ConfigFrom(const Json& j, const char* kind) {
   return c;
 }
 
-void StartEncoder(std::unique_ptr<Encoder>& slot, const Json& j, const char* kind) {
-  Retire(std::move(slot));
-  std::unique_ptr<Encoder> e(new Encoder(ConfigFrom(j, kind)));
+void StartEncoder(const Json& j) {
+  EncConfig c = ConfigFrom(j);
+  const std::string name = c.name;
+  auto it = g_encs.find(name);
+  if (it != g_encs.end()) {
+    Retire(std::move(it->second));
+    g_encs.erase(it);
+  }
+  std::unique_ptr<Encoder> e(new Encoder(c));
   std::string err;
   if (!e->Open(err)) {
-    Say(std::string(kind) + " error " + OneLine(err));
+    Say("enc " + name + " error " + OneLine(err));
     Retire(std::move(e));
     return;
   }
-  Say(std::string(kind) + " started " + e->name());
-  slot = std::move(e);
+  Say("enc " + name + " started " + e->name());
+  g_encs[name] = std::move(e);
 }
 
 void Frame(const Json& j) {
@@ -1793,11 +1976,32 @@ void Frame(const Json& j) {
         g_images[static_cast<int64_t>(u.N("id"))] = t;
     }
   }
-  if (j.N("base", 1))
+  const Json* box = j.Get("box");
+  Tex* squeezed = nullptr;
+  if (box && box->arr.size() == 4) {
+    squeezed = g_mixer.BaseTex(g_mem + BaseOff());
+    g_mixer.Black();
+  } else {
     g_mixer.Base(g_mem + BaseOff());
+  }
   g_mixer.Begin(g_mixer.Program());
-  if (const Json* layers = j.Get("layers")) {
-    for (const auto& L : layers->arr) {
+  std::vector<const Json*> todo;
+  if (const Json* under = j.Get("under"))
+    for (const auto& L : under->arr)
+      todo.push_back(&L);
+  const size_t under_n = todo.size();
+  if (const Json* layers = j.Get("layers"))
+    for (const auto& L : layers->arr)
+      todo.push_back(&L);
+  if (squeezed && under_n == 0)
+    g_mixer.Draw(*squeezed, static_cast<float>(box->arr[0].num), static_cast<float>(box->arr[1].num),
+                 static_cast<float>(box->arr[2].num), static_cast<float>(box->arr[3].num), 1, true, true, true);
+  {
+    for (size_t li = 0; li < todo.size(); ++li) {
+      const Json& L = *todo[li];
+      if (squeezed && under_n > 0 && li == under_n)   // the program over the pictures under it
+        g_mixer.Draw(*squeezed, static_cast<float>(box->arr[0].num), static_cast<float>(box->arr[1].num),
+                     static_cast<float>(box->arr[2].num), static_cast<float>(box->arr[3].num), 1, true, true, true);
       const float x = static_cast<float>(L.N("x")), y = static_cast<float>(L.N("y"));
       const float op = static_cast<float>(L.N("o", 255)) / 255.f;
       if (L.Get("web")) {
@@ -1823,6 +2027,9 @@ void Frame(const Json& j) {
         g_mixer.Draw(t, x, y, static_cast<float>(t.w), static_cast<float>(t.h), op, false, false);
       }
     }
+    if (squeezed && under_n > 0 && todo.size() == under_n)
+      g_mixer.Draw(*squeezed, static_cast<float>(box->arr[0].num), static_cast<float>(box->arr[1].num),
+                   static_cast<float>(box->arr[2].num), static_cast<float>(box->arr[3].num), 1, true, true, true);
   }
   g_mixer.End();
   const float* audio = reinterpret_cast<const float*>(g_mem + AudioOff());
@@ -1831,10 +2038,11 @@ void Frame(const Json& j) {
     std::memcpy(sound.data(), audio, n * sizeof(float));
     std::memcpy(sound.data() + n, audio + kMaxSamples, n * sizeof(float));
   }
-  if (g_stream)
-    g_stream->Submit(g_mixer.Sized(g_stream->w(), g_stream->h()), sound.data(), n);
-  if (g_rec)
-    g_rec->Submit(g_mixer.Sized(g_rec->w(), g_rec->h()), sound.data(), n);
+  for (auto& kv : g_encs) {
+    const EncConfig& c = kv.second->config();
+    kv.second->Submit(g_mixer.Layout(c.w, c.h, c.layout, c.pos), sound.data(), n);
+  }
+  PresentPreview();
   const bool rb = j.N("rb", 1) != 0 && g_mixer.Readback(g_mem + ReadbackOff());
   ++g_frames;
   Say("ack " + std::to_string(k) + (rb ? " rb" : ""));
@@ -1867,10 +2075,9 @@ void RenderThread() {
       std::string s = "stats fps=" + std::to_string(static_cast<int>((f - frames_at) / (now - next_stats + 2) + 0.5));
       frames_at = f;
       next_stats = now + 2;
-      if (g_stream)
-        s += " stream_drop=" + std::to_string(g_stream->dropped());
-      if (g_rec)
-        s += " rec_drop=" + std::to_string(g_rec->dropped()) + " rec_frames=" + std::to_string(g_rec->frames());
+      for (auto& kv : g_encs)
+        s += " " + kv.first + "_drop=" + std::to_string(kv.second->dropped()) + " " + kv.first +
+             "_frames=" + std::to_string(kv.second->frames());
       {
         std::lock_guard<std::mutex> l(g_pages_lock);
         for (auto& kv : g_pages)
@@ -1881,8 +2088,9 @@ void RenderThread() {
     }
   }
   std::lock_guard<std::recursive_mutex> l(g_gpu);
-  Retire(std::move(g_stream));
-  Retire(std::move(g_rec));
+  for (auto& kv : g_encs)
+    Retire(std::move(kv.second));
+  g_encs.clear();
 }
 
 void UiCommand(std::string op, int id, std::string url, int w, int h, int fps, std::string js, bool on) {
@@ -1931,20 +2139,18 @@ void Command(const Json& j) {
     if (const Json* ids = j.Get("ids"))
       for (const auto& i : ids->arr)
         g_images.erase(static_cast<int64_t>(i.num));
-  } else if (op == "stream_start") {
+  } else if (op == "enc_start") {
     std::lock_guard<std::recursive_mutex> l(g_gpu);
-    StartEncoder(g_stream, j, "stream");
-  } else if (op == "stream_stop") {
+    StartEncoder(j);
+  } else if (op == "enc_stop") {
     std::lock_guard<std::recursive_mutex> l(g_gpu);
-    Retire(std::move(g_stream));
-    Say("stream stopped");
-  } else if (op == "rec_start") {
-    std::lock_guard<std::recursive_mutex> l(g_gpu);
-    StartEncoder(g_rec, j, "rec");
-  } else if (op == "rec_stop") {
-    std::lock_guard<std::recursive_mutex> l(g_gpu);
-    Retire(std::move(g_rec));
-    Say("rec stopped");
+    const std::string name = j.S("name");
+    auto it = g_encs.find(name);
+    if (it != g_encs.end()) {
+      Retire(std::move(it->second));
+      g_encs.erase(it);
+    }
+    Say("enc " + name + " stopped");
   }
 }
 
@@ -1966,6 +2172,19 @@ void ReadCommands() {
       const std::string op = j.S("op");
       if (op == "quit")
         goto done;
+      if (op == "preview") {
+        {
+          std::lock_guard<std::mutex> l(g_pv_lock);
+          g_pv_want.parent = reinterpret_cast<HWND>(static_cast<intptr_t>(j.N("hwnd")));
+          g_pv_want.x = static_cast<int>(j.N("x"));
+          g_pv_want.y = static_cast<int>(j.N("y"));
+          g_pv_want.w = static_cast<int>(j.N("w"));
+          g_pv_want.h = static_cast<int>(j.N("h"));
+          g_pv_want.on = j.N("on") != 0;
+        }
+        CefPostTask(TID_UI, base::BindOnce(&PreviewUi));
+        continue;
+      }
       if (op.compare(0, 5, "clip_") == 0) {
         ClipCommand(j);
         continue;
