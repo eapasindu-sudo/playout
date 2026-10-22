@@ -56,10 +56,14 @@ try:
     print("web page: loaded", web.loaded, "drawn", web.frames, "mode", web.mode, "error", web.error)
     assert out is not None, "no mixed picture back"
     assert web.frame is not None, "the web page was never drawn: " + web.error
-    for _ in range(50):                           # a few more frames: the page has drawn its boxes
+    end = time.monotonic() + 20                   # more frames until the page has drawn its boxes
+    while True:
         out = eng.frame(base, silence, [(cg, 20, 30, 255), (web.frame[0], 600, 300, 255)])
+        img = out.reshape(H, W, 4)
+        if near(img[390, 750], (64, 64, 192, 255)) or time.monotonic() > end:
+            break
         time.sleep(0.04)
-    img = out.reshape(H, W, 4)
+    print("page pictures", gpuengine.STATE["stats"])
     print("background", img[5, 5], "CG", img[50, 50], "web box", img[390, 750])
     assert near(img[5, 5], (128, 128, 128, 255), 1), "program picture wrong"
     assert near(img[50, 50], (64, 64, 192, 255)), "CG picture blend wrong"
