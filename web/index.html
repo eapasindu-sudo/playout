@@ -1783,7 +1783,7 @@ async function saveSettings() {
 }
 async function pollUpdate(r) {
   try { UPD = r || await api('/api/update'); } catch (e) { return; }
-  if (UPD.notice && !window.updNoticeShown) { window.updNoticeShown = true; say(UPD.notice); }
+  if (UPD.notice && !window.updNoticeShown) { window.updNoticeShown = true; $('msg').textContent = UPD.notice; }   // no dialog: it would hide the preview until closed
   const st = UPD.state === 'downloading' ? `Downloading ${UPD.progress}%` : UPD.state === 'ready' ? `Version ${UPD.latest} downloaded, ready to install`
     : UPD.state === 'checking' ? 'Checking...' : UPD.state === 'installing' ? 'Installing, Playout restarts by itself...'
     : UPD.available ? `Version ${UPD.latest} is available` : UPD.error ? UPD.error : UPD.checked ? 'Up to date' : 'Not checked yet';
@@ -2680,6 +2680,7 @@ const nativePv = {on: false, last: '', failed: false, since: 0, shown: -1};
         nativePv.last = key;
         const res = await (await fetch('/api/native_preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: key})).json();
         nativePv.on = !!res.native && on;
+        if (nativePv.on) img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';  // no old picture around the GPU one
         if (!res.native) return;                       // no GPU engine here: JPEG preview as before
         nativePv.since = Date.now();
         nativePv.shown = -1;
