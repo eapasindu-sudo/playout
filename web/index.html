@@ -2673,7 +2673,7 @@ const nativePv = {on: false, last: '', failed: false, since: 0, shown: -1};
       if (h * 16 / 9 < w) { w = h * 16 / 9; } else { h = w * 9 / 16; }
       const x = r.left + (r.width - w) / 2, y = r.top;
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      const on = !nativePv.failed && +$('pvRate').value !== 0 && !document.hidden && w > 40 && (hit === img || img.contains(hit) || hit === img.parentElement);
+      const on = !nativePv.failed && +$('pvRate').value !== 0 && w > 40 && (hit === img || img.contains(hit) || hit === img.parentElement);
       const body = {x: Math.round(x * d), y: Math.round(y * d), w: Math.round(w * d), h: Math.round(h * d), on};
       const key = JSON.stringify(body);
       if (key !== nativePv.last) {
@@ -2681,7 +2681,11 @@ const nativePv = {on: false, last: '', failed: false, since: 0, shown: -1};
         const res = await (await fetch('/api/native_preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: key})).json();
         nativePv.on = !!res.native && on;
         if (nativePv.on) img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';  // no old picture around the GPU one
-        if (!res.native) return;                       // no GPU engine here: JPEG preview as before
+        if (!res.native) {                             // no GPU engine (or it is restarting): JPEG preview, ask again
+          nativePv.last = '';
+          setTimeout(tick, 2000);
+          return;
+        }
         nativePv.since = Date.now();
         nativePv.shown = -1;
       }

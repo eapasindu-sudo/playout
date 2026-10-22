@@ -3,6 +3,7 @@ sends the mixed picture back, and encodes a stream (MPEG-TS through its pipe) an
 The CI machine has no graphics card: Windows' software Direct3D (WARP) and the CPU encoder stand in, which
 also tests the fallbacks."""
 import io
+import re
 import os
 import pathlib
 import sys
@@ -176,6 +177,25 @@ try:
     pt.join(5)
     assert "preview_error" not in gpuengine.STATE["stats"], "preview: " + gpuengine.STATE["stats"]
     assert near(inside, (128, 128, 128), 8), "the preview window does not show the program"
+    # minimised and back: the preview must come back live (1.0.118 came back frozen)
+    root.iconify()
+    for _ in range(10):
+        root.update()
+        time.sleep(0.05)
+    n0 = int((re.search(r"preview=(\d+)", gpuengine.STATE["stats"]) or [0, 0])[1])
+    root.deiconify()
+    stop["run"] = True
+    pt = threading.Thread(target=pump, daemon=True)
+    pt.start()
+    for _ in range(60):
+        root.update()
+        time.sleep(0.05)
+    stop["run"] = False
+    pt.join(5)
+    n1 = int((re.search(r"preview=(\d+)", gpuengine.STATE["stats"]) or [0, 0])[1])
+    print("preview after restore:", n0, "->", n1, gpuengine.STATE["stats"])
+    assert n1 > n0 and gpuengine.STATE["stats"].split("preview=")[1].split()[0].endswith("on"), \
+        "the preview did not come back after the window was restored"
     eng.preview(int(parent), 0, 0, 0, 0, False)
     root.update()
     print("preview: frames", stop["frames"], "no answer", stop["misses"], "drawn", web.frames)
