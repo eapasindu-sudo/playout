@@ -1803,13 +1803,23 @@ std::atomic<HWND> g_pv_ready{nullptr};
 std::atomic<int> g_pv_w{0}, g_pv_h{0};
 ComPtr<IDXGISwapChain> g_pv_chain;    // render thread
 int g_pv_cw = 0, g_pv_ch = 0;
+std::atomic<int64_t> g_pv_shown{0};   // pictures presented (diagnostics)
+std::string g_pv_err;                  // the last step that failed (render thread)
 HWND g_pv_chain_hwnd = nullptr;
+
+void PreviewApply();
 
 LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_NCHITTEST)
     return HTTRANSPARENT;
   if (msg == WM_ERASEBKGND)
     return 1;
+  if (msg == WM_MOUSEACTIVATE)
+    return MA_NOACTIVATE;
+  if (msg == WM_TIMER) {
+    PreviewApply();
+    return 0;
+  }
   return ::DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -1819,13 +1829,16 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 DWORD g_pv_thread_id = 0;
 std::atomic<bool> g_pv_thread_up{false};
 
+// The window is a borderless popup owned by Playout's window, not a child: the control screen (WebView2) draws
+// with DirectComposition above any child window of its own, which hid the GPU picture behind the last JPEG
+// picture. An owned popup always sits above its owner, hides with it, and follows the box when the window moves.
 void PreviewApply() {
   PreviewWant w;
   {
     std::lock_guard<std::mutex> l(g_pv_lock);
     w = g_pv_want;
   }
-  if (g_pv_hwnd && (!w.parent || ::GetParent(g_pv_hwnd) != w.parent || !::IsWindow(w.parent))) {
+  if (g_pv_hwnd && (!w.parent || ::GetWindow(g_pv_hwnd, GW_OWNER) != ::GetAncestor(w.parent, GA_ROOT) || !::IsWindow(w.parent))) {
     // Playout's window changed (rare): leave the old one hidden; the render thread lets go of it by itself
     g_pv_ready = nullptr;
     ::ShowWindow(g_pv_hwnd, SW_HIDE);
@@ -1844,21 +1857,32 @@ void PreviewApply() {
       ::RegisterClassW(&wc);
       registered = true;
     }
-    g_pv_hwnd = ::CreateWindowExW(WS_EX_NOPARENTNOTIFY | WS_EX_TRANSPARENT, L"PlayoutGpuPreview", L"", WS_CHILD | WS_DISABLED,
-                                  w.x, w.y, w.w > 0 ? w.w : 16, w.h > 0 ? w.h : 9, w.parent, nullptr,
+    g_pv_hwnd = ::CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT, L"PlayoutGpuPreview", L"",
+                                  WS_POPUP | WS_DISABLED, 0, 0, 16, 9, w.parent, nullptr,
                                   ::GetModuleHandleW(nullptr), nullptr);
     if (!g_pv_hwnd)
       return;
+    ::SetTimer(g_pv_hwnd, 1, 100, nullptr);   // follows Playout's window when it moves
   }
-  const bool show = w.on && w.w > 8 && w.h > 8;
+  const bool show = w.on && w.w > 8 && w.h > 8 && !::IsIconic(w.parent);
+  POINT at = {w.x, w.y};
+  ::ClientToScreen(w.parent, &at);
+  RECT now = {};
+  ::GetWindowRect(g_pv_hwnd, &now);
+  const bool visible = ::IsWindowVisible(g_pv_hwnd) != 0;
+  if (show && visible && now.left == at.x && now.top == at.y && now.right - now.left == w.w && now.bottom - now.top == w.h)
+    return;   // nothing changed (the timer)
+  if (!show && !visible)
+    return;
   if (show) {
     g_pv_w = w.w;
     g_pv_h = w.h;
   } else {
     g_pv_ready = nullptr;
   }
-  ::SetWindowPos(g_pv_hwnd, HWND_TOP, w.x, w.y, show ? w.w : 1, show ? w.h : 1,
-                 SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  ::SetWindowPos(g_pv_hwnd, nullptr, at.x, at.y, show ? w.w : 1, show ? w.h : 1,
+                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS |
+                     (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   if (show)
     g_pv_ready = g_pv_hwnd;
 }
@@ -1898,8 +1922,10 @@ void PresentPreview() {
     ComPtr<IDXGIDevice> dxgi;
     ComPtr<IDXGIAdapter> adapter;
     ComPtr<IDXGIFactory> factory;
-    if (FAILED(g_dev.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory))))
+    if (FAILED(g_dev.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) {
+      g_pv_err = "factory";
       return;
+    }
     DXGI_SWAP_CHAIN_DESC d = {};
     d.BufferDesc.Width = w;
     d.BufferDesc.Height = h;
@@ -1910,14 +1936,18 @@ void PresentPreview() {
     d.OutputWindow = hwnd;
     d.Windowed = TRUE;
     d.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-    if (FAILED(factory->CreateSwapChain(g_dev.Get(), &d, &g_pv_chain)))
+    HRESULT hr = factory->CreateSwapChain(g_dev.Get(), &d, &g_pv_chain);
+    if (FAILED(hr)) {
+      g_pv_err = "swapchain-" + std::to_string(static_cast<unsigned>(hr));
       return;
+    }
     factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
     g_pv_chain_hwnd = hwnd;
     g_pv_cw = w;
     g_pv_ch = h;
   } else if (g_pv_cw != w || g_pv_ch != h) {
     if (FAILED(g_pv_chain->ResizeBuffers(1, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 0))) {
+      g_pv_err = "resize";
       g_pv_chain.Reset();
       return;
     }
@@ -1925,18 +1955,28 @@ void PresentPreview() {
     g_pv_ch = h;
   }
   ComPtr<ID3D11Texture2D> back;
-  if (FAILED(g_pv_chain->GetBuffer(0, IID_PPV_ARGS(&back))))
+  if (FAILED(g_pv_chain->GetBuffer(0, IID_PPV_ARGS(&back)))) {
+    g_pv_err = "buffer";
     return;
+  }
   Tex t;
   t.tex = back;
   t.w = w;
   t.h = h;
-  if (FAILED(g_dev->CreateRenderTargetView(back.Get(), nullptr, &t.rtv)))
+  if (FAILED(g_dev->CreateRenderTargetView(back.Get(), nullptr, &t.rtv))) {
+    g_pv_err = "target";
     return;
+  }
   g_mixer.Begin(t);
   g_mixer.Draw(g_mixer.Program(), 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true);
   g_mixer.End();
-  g_pv_chain->Present(0, 0);
+  const HRESULT hr = g_pv_chain->Present(0, 0);
+  if (FAILED(hr)) {
+    g_pv_err = "present-" + std::to_string(static_cast<unsigned>(hr));
+    g_pv_chain.Reset();   // made again on the next picture
+    return;
+  }
+  ++g_pv_shown;
 }
 
 // ---------------------------------------------------------------- the render thread
@@ -2112,6 +2152,12 @@ void RenderThread() {
         for (auto& kv : g_pages)
           s += " web" + std::to_string(kv.first) + "=" + std::to_string(kv.second->frames()) +
                (kv.second->gpu() ? "g" : "c");
+      }
+      s += " preview=" + std::to_string(g_pv_shown.load()) + (g_pv_ready.load() ? "on" : "off");
+      {
+        std::lock_guard<std::recursive_mutex> l(g_gpu);
+        if (!g_pv_err.empty())
+          s += " preview_error=" + g_pv_err;
       }
       Say(s);
     }

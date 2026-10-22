@@ -56,10 +56,14 @@ try:
     print("web page: loaded", web.loaded, "drawn", web.frames, "mode", web.mode, "error", web.error)
     assert out is not None, "no mixed picture back"
     assert web.frame is not None, "the web page was never drawn: " + web.error
-    for _ in range(50):                           # a few more frames: the page has drawn its boxes
+    end = time.monotonic() + 20                   # more frames until the page has drawn its boxes
+    while True:
         out = eng.frame(base, silence, [(cg, 20, 30, 255), (web.frame[0], 600, 300, 255)])
+        img = out.reshape(H, W, 4)
+        if near(img[390, 750], (64, 64, 192, 255)) or time.monotonic() > end:
+            break
         time.sleep(0.04)
-    img = out.reshape(H, W, 4)
+    print("page pictures", gpuengine.STATE["stats"])
     print("background", img[5, 5], "CG", img[50, 50], "web box", img[390, 750])
     assert near(img[5, 5], (128, 128, 128, 255), 1), "program picture wrong"
     assert near(img[50, 50], (64, 64, 192, 255)), "CG picture blend wrong"
@@ -158,8 +162,20 @@ try:
         root.update()
         time.sleep(0.03)
         k += 1
+    # the preview window must show the program (grey with the red CG), not what was under it
+    eng.preview(int(parent), 100, 50, 640, 360, True)
+    for _ in range(40):
+        root.update()
+        time.sleep(0.05)
+    from PIL import ImageGrab
+    rx, ry = root.winfo_rootx(), root.winfo_rooty()
+    shot = ImageGrab.grab(bbox=(rx, ry, rx + 800, ry + 500), all_screens=True).convert("RGB")
+    inside, outside = shot.getpixel((100 + 320, 50 + 250)), shot.getpixel((20, 470))
+    print("preview window: inside", inside, "outside", outside, "stats", gpuengine.STATE["stats"])
     stop["run"] = False
     pt.join(5)
+    assert "preview_error" not in gpuengine.STATE["stats"], "preview: " + gpuengine.STATE["stats"]
+    assert near(inside, (128, 128, 128), 8), "the preview window does not show the program"
     eng.preview(int(parent), 0, 0, 0, 0, False)
     root.update()
     print("preview: frames", stop["frames"], "no answer", stop["misses"], "drawn", web.frames)

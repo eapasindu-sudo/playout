@@ -743,6 +743,15 @@ def native_preview():
     return jsonify(native=True)
 
 
+@app.get("/api/native_preview")
+def native_preview_state():
+    """How many pictures the GPU engine has drawn into the preview box (the control screen checks it is drawing)."""
+    import re
+    m = re.search(r"\bpreview=(\d+)", gpuengine.STATE.get("stats") or "")
+    err = re.search(r"\bpreview_error=(\S+)", gpuengine.STATE.get("stats") or "")
+    return jsonify(shown=int(m.group(1)) if m else -1, error=err.group(1) if err else "")
+
+
 @app.get("/api/preview.jpg")
 def preview():
     w = max(160, min(engine.width, int(request.args.get("w") or 640)))
