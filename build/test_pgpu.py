@@ -158,8 +158,20 @@ try:
         root.update()
         time.sleep(0.03)
         k += 1
+    # the preview window must show the program (grey with the red CG), not what was under it
+    eng.preview(int(parent), 100, 50, 640, 360, True)
+    for _ in range(40):
+        root.update()
+        time.sleep(0.05)
+    from PIL import ImageGrab
+    rx, ry = root.winfo_rootx(), root.winfo_rooty()
+    shot = ImageGrab.grab(bbox=(rx, ry, rx + 800, ry + 500), all_screens=True).convert("RGB")
+    inside, outside = shot.getpixel((100 + 320, 50 + 250)), shot.getpixel((20, 470))
+    print("preview window: inside", inside, "outside", outside, "stats", gpuengine.STATE["stats"])
     stop["run"] = False
     pt.join(5)
+    assert "preview_error" not in gpuengine.STATE["stats"], "preview: " + gpuengine.STATE["stats"]
+    assert near(inside, (128, 128, 128), 8), "the preview window does not show the program"
     eng.preview(int(parent), 0, 0, 0, 0, False)
     root.update()
     print("preview: frames", stop["frames"], "no answer", stop["misses"], "drawn", web.frames)

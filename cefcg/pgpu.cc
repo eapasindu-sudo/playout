@@ -1803,6 +1803,8 @@ std::atomic<HWND> g_pv_ready{nullptr};
 std::atomic<int> g_pv_w{0}, g_pv_h{0};
 ComPtr<IDXGISwapChain> g_pv_chain;    // render thread
 int g_pv_cw = 0, g_pv_ch = 0;
+std::atomic<int64_t> g_pv_shown{0};   // pictures presented (diagnostics)
+std::string g_pv_err;                  // the last step that failed (render thread)
 HWND g_pv_chain_hwnd = nullptr;
 
 LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1898,8 +1900,10 @@ void PresentPreview() {
     ComPtr<IDXGIDevice> dxgi;
     ComPtr<IDXGIAdapter> adapter;
     ComPtr<IDXGIFactory> factory;
-    if (FAILED(g_dev.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory))))
+    if (FAILED(g_dev.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) {
+      g_pv_err = "factory";
       return;
+    }
     DXGI_SWAP_CHAIN_DESC d = {};
     d.BufferDesc.Width = w;
     d.BufferDesc.Height = h;
@@ -1910,14 +1914,18 @@ void PresentPreview() {
     d.OutputWindow = hwnd;
     d.Windowed = TRUE;
     d.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-    if (FAILED(factory->CreateSwapChain(g_dev.Get(), &d, &g_pv_chain)))
+    HRESULT hr = factory->CreateSwapChain(g_dev.Get(), &d, &g_pv_chain);
+    if (FAILED(hr)) {
+      g_pv_err = "swapchain-" + std::to_string(static_cast<unsigned>(hr));
       return;
+    }
     factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
     g_pv_chain_hwnd = hwnd;
     g_pv_cw = w;
     g_pv_ch = h;
   } else if (g_pv_cw != w || g_pv_ch != h) {
     if (FAILED(g_pv_chain->ResizeBuffers(1, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 0))) {
+      g_pv_err = "resize";
       g_pv_chain.Reset();
       return;
     }
@@ -1925,18 +1933,28 @@ void PresentPreview() {
     g_pv_ch = h;
   }
   ComPtr<ID3D11Texture2D> back;
-  if (FAILED(g_pv_chain->GetBuffer(0, IID_PPV_ARGS(&back))))
+  if (FAILED(g_pv_chain->GetBuffer(0, IID_PPV_ARGS(&back)))) {
+    g_pv_err = "buffer";
     return;
+  }
   Tex t;
   t.tex = back;
   t.w = w;
   t.h = h;
-  if (FAILED(g_dev->CreateRenderTargetView(back.Get(), nullptr, &t.rtv)))
+  if (FAILED(g_dev->CreateRenderTargetView(back.Get(), nullptr, &t.rtv))) {
+    g_pv_err = "target";
     return;
+  }
   g_mixer.Begin(t);
   g_mixer.Draw(g_mixer.Program(), 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true);
   g_mixer.End();
-  g_pv_chain->Present(0, 0);
+  const HRESULT hr = g_pv_chain->Present(0, 0);
+  if (FAILED(hr)) {
+    g_pv_err = "present-" + std::to_string(static_cast<unsigned>(hr));
+    g_pv_chain.Reset();   // made again on the next picture
+    return;
+  }
+  ++g_pv_shown;
 }
 
 // ---------------------------------------------------------------- the render thread
@@ -2112,6 +2130,12 @@ void RenderThread() {
         for (auto& kv : g_pages)
           s += " web" + std::to_string(kv.first) + "=" + std::to_string(kv.second->frames()) +
                (kv.second->gpu() ? "g" : "c");
+      }
+      s += " preview=" + std::to_string(g_pv_shown.load()) + (g_pv_ready.load() ? "on" : "off");
+      {
+        std::lock_guard<std::recursive_mutex> l(g_gpu);
+        if (!g_pv_err.empty())
+          s += " preview_error=" + g_pv_err;
       }
       Say(s);
     }
