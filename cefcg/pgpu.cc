@@ -1812,6 +1812,13 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return HTTRANSPARENT;
   if (msg == WM_ERASEBKGND)
     return 1;
+  if (msg == WM_MOUSEACTIVATE)
+    return MA_NOACTIVATE;
+  if (msg == WM_TIMER) {
+    void PreviewApply();
+    PreviewApply();
+    return 0;
+  }
   return ::DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -1821,13 +1828,16 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 DWORD g_pv_thread_id = 0;
 std::atomic<bool> g_pv_thread_up{false};
 
+// The window is a borderless popup owned by Playout's window, not a child: the control screen (WebView2) draws
+// with DirectComposition above any child window of its own, which hid the GPU picture behind the last JPEG
+// picture. An owned popup always sits above its owner, hides with it, and follows the box when the window moves.
 void PreviewApply() {
   PreviewWant w;
   {
     std::lock_guard<std::mutex> l(g_pv_lock);
     w = g_pv_want;
   }
-  if (g_pv_hwnd && (!w.parent || ::GetParent(g_pv_hwnd) != w.parent || !::IsWindow(w.parent))) {
+  if (g_pv_hwnd && (!w.parent || ::GetWindow(g_pv_hwnd, GW_OWNER) != w.parent || !::IsWindow(w.parent))) {
     // Playout's window changed (rare): leave the old one hidden; the render thread lets go of it by itself
     g_pv_ready = nullptr;
     ::ShowWindow(g_pv_hwnd, SW_HIDE);
@@ -1846,21 +1856,32 @@ void PreviewApply() {
       ::RegisterClassW(&wc);
       registered = true;
     }
-    g_pv_hwnd = ::CreateWindowExW(WS_EX_NOPARENTNOTIFY | WS_EX_TRANSPARENT, L"PlayoutGpuPreview", L"", WS_CHILD | WS_DISABLED,
-                                  w.x, w.y, w.w > 0 ? w.w : 16, w.h > 0 ? w.h : 9, w.parent, nullptr,
+    g_pv_hwnd = ::CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT, L"PlayoutGpuPreview", L"",
+                                  WS_POPUP | WS_DISABLED, 0, 0, 16, 9, w.parent, nullptr,
                                   ::GetModuleHandleW(nullptr), nullptr);
     if (!g_pv_hwnd)
       return;
+    ::SetTimer(g_pv_hwnd, 1, 100, nullptr);   // follows Playout's window when it moves
   }
-  const bool show = w.on && w.w > 8 && w.h > 8;
+  const bool show = w.on && w.w > 8 && w.h > 8 && !::IsIconic(w.parent);
+  POINT at = {w.x, w.y};
+  ::ClientToScreen(w.parent, &at);
+  RECT now = {};
+  ::GetWindowRect(g_pv_hwnd, &now);
+  const bool visible = ::IsWindowVisible(g_pv_hwnd) != 0;
+  if (show && visible && now.left == at.x && now.top == at.y && now.right - now.left == w.w && now.bottom - now.top == w.h)
+    return;   // nothing changed (the timer)
+  if (!show && !visible)
+    return;
   if (show) {
     g_pv_w = w.w;
     g_pv_h = w.h;
   } else {
     g_pv_ready = nullptr;
   }
-  ::SetWindowPos(g_pv_hwnd, HWND_TOP, w.x, w.y, show ? w.w : 1, show ? w.h : 1,
-                 SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  ::SetWindowPos(g_pv_hwnd, nullptr, at.x, at.y, show ? w.w : 1, show ? w.h : 1,
+                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS |
+                     (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   if (show)
     g_pv_ready = g_pv_hwnd;
 }
