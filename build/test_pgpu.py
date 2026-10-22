@@ -196,6 +196,21 @@ try:
     print("preview after restore:", n0, "->", n1, gpuengine.STATE["stats"])
     assert n1 > n0 and gpuengine.STATE["stats"].split("preview=")[1].split()[0].endswith("on"), \
         "the preview did not come back after the window was restored"
+    # turned off while minimised: it must stay hidden when the window comes back (1.0.120 showed a frozen picture)
+    import ctypes
+    root.iconify()
+    for _ in range(10):
+        root.update()
+        time.sleep(0.05)
+    eng.preview(int(parent), 100, 50, 640, 360, False)
+    time.sleep(0.5)
+    root.deiconify()
+    for _ in range(20):
+        root.update()
+        time.sleep(0.05)
+    pv = ctypes.windll.user32.FindWindowW("PlayoutGpuPreview", None)
+    print("preview window after off + restore: visible", bool(pv and ctypes.windll.user32.IsWindowVisible(pv)))
+    assert not (pv and ctypes.windll.user32.IsWindowVisible(pv)), "the preview window came back while turned off"
     eng.preview(int(parent), 0, 0, 0, 0, False)
     root.update()
     print("preview: frames", stop["frames"], "no answer", stop["misses"], "drawn", web.frames)

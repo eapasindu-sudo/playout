@@ -1808,6 +1808,7 @@ std::string g_pv_err;                  // the last step that failed (render thre
 HWND g_pv_chain_hwnd = nullptr;
 
 void PreviewApply();
+bool g_pv_up = false;   // preview thread: the window is meant to be showing
 
 LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_NCHITTEST)
@@ -1816,6 +1817,8 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 1;
   if (msg == WM_MOUSEACTIVATE)
     return MA_NOACTIVATE;
+  if (msg == WM_SHOWWINDOW && wp && lp == SW_PARENTOPENING && !g_pv_up)
+    return 0;   // Playout's window restored: shown again only when we want it (else a frozen picture)
   if (msg == WM_TIMER) {
     PreviewApply();
     return 0;
@@ -1827,7 +1830,6 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // never waiting for the GPU lock: Present() on the render thread can wait for the window's thread to answer,
 // and with Chromium's thread (which also takes the GPU lock for every page picture) that locked both up.
 DWORD g_pv_thread_id = 0;
-bool g_pv_up = false;   // preview thread: the window is meant to be showing
 std::atomic<bool> g_pv_thread_up{false};
 
 // The window is a borderless popup owned by Playout's window, not a child: the control screen (WebView2) draws
@@ -1875,8 +1877,11 @@ void PreviewApply() {
   // shows it again on restore by itself, which brought back a frozen picture after we had turned it off
   if (show && g_pv_up && now.left == at.x && now.top == at.y && now.right - now.left == w.w && now.bottom - now.top == w.h)
     return;   // nothing changed (the timer)
-  if (!show && !g_pv_up)
+  if (!show && !g_pv_up) {
+    if (::IsWindowVisible(g_pv_hwnd))
+      ::ShowWindow(g_pv_hwnd, SW_HIDE);   // shown again by Windows on its own: hide it once more
     return;
+  }
   g_pv_up = show;
   if (!show) {
     g_pv_ready = nullptr;
