@@ -1066,7 +1066,10 @@ class Encoder {
     pipe_.reset();
   }
 
+  void Key() { key_ = true; }
+
  private:
+  std::atomic<bool> key_{false};
   bool OpenVideo(const std::string& name, bool hw, std::string& err) {
     const AVCodec* codec = avcodec_find_encoder_by_name(name.c_str());
     if (!codec) {
@@ -1304,6 +1307,8 @@ class Encoder {
         f = conv_;
       }
       f->pts = vpts_++;
+      // a destination joined mid-stream: a keyframe now (with its SPS/PPS) so it can start at once
+      f->pict_type = key_.exchange(false) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
       if (avcodec_send_frame(venc_, f) >= 0)
         Drain(venc_, vs_);
       av_frame_free(&j.video);
@@ -2166,6 +2171,11 @@ void Command(const Json& j) {
   } else if (op == "enc_start") {
     std::lock_guard<std::recursive_mutex> l(g_gpu);
     StartEncoder(j);
+  } else if (op == "enc_key") {
+    std::lock_guard<std::recursive_mutex> l(g_gpu);
+    auto it = g_encs.find(j.S("name"));
+    if (it != g_encs.end())
+      it->second->Key();
   } else if (op == "enc_stop") {
     std::lock_guard<std::recursive_mutex> l(g_gpu);
     const std::string name = j.S("name");
@@ -2248,6 +2258,8 @@ class App : public CefApp {
     cl->AppendSwitch("disable-renderer-backgrounding");
     cl->AppendSwitch("disable-extensions");
     cl->AppendSwitch("no-first-run");
+    cl->AppendSwitch("disable-backgrounding-occluded-windows");
+    cl->AppendSwitchWithValue("disable-features", "OptimizationGuideModelDownloading,OptimizationHints,OnDeviceModelPerformanceParams");
   }
 
  private:

@@ -362,6 +362,9 @@ class Streamer:
                 if d.proc is None and now >= d._restart_at:
                     try:
                         d.spawn()
+                        nat = gpuengine.active() if self._native or only is not None else None
+                        if nat is not None:          # joined mid-stream: a keyframe (SPS/PPS) at once
+                            nat.stream_key(f"v{only.slot}" if only is not None else "stream")
                     except Exception as e:
                         d.error = str(e)
                         d.status = "error"

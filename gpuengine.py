@@ -406,6 +406,10 @@ class NativeEngine:
                                  "akbps": int(akbps), "enc": enc, "gop": int(gop), "layout": layout, "pos": int(pos)})
         return (pipe, msg) if ok else (None, msg)
 
+    def stream_key(self, name="stream"):
+        """A keyframe on the next picture (a destination joined mid-stream)."""
+        self._send({"op": "enc_key", "name": name})
+
     def stream_stop(self, name="stream"):
         self._send({"op": "enc_stop", "name": name})
 
