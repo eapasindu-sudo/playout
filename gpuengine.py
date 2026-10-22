@@ -95,7 +95,7 @@ def stop():
 
 
 class NativeEngine:
-    ACK_TIMEOUT = 0.5
+    ACK_TIMEOUT = 0.25
     IMAGE_CACHE = 48
 
     def __init__(self, width, height, fps):
@@ -323,7 +323,7 @@ class NativeEngine:
             got, rb = self._ack >= k, self._ack_rb
         if not got:
             self._timeouts += 1
-            if self._timeouts >= 20 and self.ready:      # 10 s without an answer: stuck, start it again
+            if self._timeouts >= 8 and self.ready:       # 2 s without an answer: stuck, start it again
                 logging.warning("native GPU engine stopped answering: starting it again")
                 self._kill()
             return None
@@ -405,6 +405,10 @@ class NativeEngine:
         ok, msg = self._encoder({"name": name, "kind": "stream", "pipe": pipe, "w": int(w), "h": int(h), "kbps": int(kbps),
                                  "akbps": int(akbps), "enc": enc, "gop": int(gop), "layout": layout, "pos": int(pos)})
         return (pipe, msg) if ok else (None, msg)
+
+    def stream_key(self, name="stream"):
+        """A keyframe on the next picture (a destination joined mid-stream)."""
+        self._send({"op": "enc_key", "name": name})
 
     def stream_stop(self, name="stream"):
         self._send({"op": "enc_stop", "name": name})

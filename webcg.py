@@ -647,7 +647,9 @@ class EdgeRenderer:
 
 def snapshot(url, width, height, wait=3.0, timeout=20.0, css=""):
     """One picture of the page (RGBA PIL image on a see-through background) and an error text."""
-    r = WebRenderer(url, width, height, rate=4, css=css)
+    # a picture that comes back to Python: never the GPU engine, whose pictures stay on the GPU
+    r = CefRenderer(url, width, height, rate=4, css=css) if str(ENGINE or "").lower() != "edge" and cef_exe() \
+        else EdgeRenderer(url, width, height, rate=4, css=css)
     try:
         end = time.monotonic() + timeout
         seen = None

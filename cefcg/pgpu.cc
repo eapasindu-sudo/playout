@@ -727,8 +727,6 @@ class Page : public CefClient, public CefRenderHandler, public CefLifeSpanHandle
     browser_ = browser;
     if (closing_)
       browser->GetHost()->CloseBrowser(true);
-    else if (hidden_)
-      browser->GetHost()->WasHidden(true);
   }
 
   void OnBeforeClose(CefRefPtr<CefBrowser>) override { browser_ = nullptr; }
@@ -755,10 +753,9 @@ class Page : public CefClient, public CefRenderHandler, public CefLifeSpanHandle
     if (on && hidden_)
       opened_at_ = Now();   // CheckPages: give the page time to draw again
     hidden_ = !on;
-    if (!browser_)
-      return;
-    browser_->GetHost()->WasHidden(!on);
-    if (on)
+    // the page keeps running off air, as in cefcg: a hidden page (document.hidden, no animation frames) can
+    // leave parts undrawn when it comes back, e.g. a score bar that slides in on an animation frame
+    if (browser_ && on)
       browser_->GetHost()->Invalidate(PET_VIEW);
   }
   void Close() {
@@ -1069,7 +1066,10 @@ class Encoder {
     pipe_.reset();
   }
 
+  void Key() { key_ = true; }
+
  private:
+  std::atomic<bool> key_{false};
   bool OpenVideo(const std::string& name, bool hw, std::string& err) {
     const AVCodec* codec = avcodec_find_encoder_by_name(name.c_str());
     if (!codec) {
@@ -1307,6 +1307,8 @@ class Encoder {
         f = conv_;
       }
       f->pts = vpts_++;
+      // a destination joined mid-stream: a keyframe now (with its SPS/PPS) so it can start at once
+      f->pict_type = key_.exchange(false) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
       if (avcodec_send_frame(venc_, f) >= 0)
         Drain(venc_, vs_);
       av_frame_free(&j.video);
@@ -1811,21 +1813,22 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   return ::DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-void PreviewUi() {
-  CEF_REQUIRE_UI_THREAD();
+// The preview window lives on its own thread (with its own message loop), never on Chromium's UI thread and
+// never waiting for the GPU lock: Present() on the render thread can wait for the window's thread to answer,
+// and with Chromium's thread (which also takes the GPU lock for every page picture) that locked both up.
+DWORD g_pv_thread_id = 0;
+std::atomic<bool> g_pv_thread_up{false};
+
+void PreviewApply() {
   PreviewWant w;
   {
     std::lock_guard<std::mutex> l(g_pv_lock);
     w = g_pv_want;
   }
   if (g_pv_hwnd && (!w.parent || ::GetParent(g_pv_hwnd) != w.parent || !::IsWindow(w.parent))) {
+    // Playout's window changed (rare): leave the old one hidden; the render thread lets go of it by itself
     g_pv_ready = nullptr;
-    {
-      std::lock_guard<std::recursive_mutex> l(g_gpu);
-      g_pv_chain.Reset();
-      g_pv_chain_hwnd = nullptr;
-    }
-    ::DestroyWindow(g_pv_hwnd);
+    ::ShowWindow(g_pv_hwnd, SW_HIDE);
     g_pv_hwnd = nullptr;
   }
   if (!w.parent || !::IsWindow(w.parent))
@@ -1851,10 +1854,36 @@ void PreviewUi() {
   if (show) {
     g_pv_w = w.w;
     g_pv_h = w.h;
+  } else {
+    g_pv_ready = nullptr;
   }
   ::SetWindowPos(g_pv_hwnd, HWND_TOP, w.x, w.y, show ? w.w : 1, show ? w.h : 1,
-                 SWP_NOACTIVATE | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
-  g_pv_ready = show ? g_pv_hwnd : nullptr;
+                 SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  if (show)
+    g_pv_ready = g_pv_hwnd;
+}
+
+void PreviewThread() {
+  MSG m;
+  ::PeekMessageW(&m, nullptr, 0, 0, PM_NOREMOVE);   // makes this thread's message queue
+  g_pv_thread_id = ::GetCurrentThreadId();
+  g_pv_thread_up = true;
+  while (::GetMessageW(&m, nullptr, 0, 0) > 0) {
+    if (m.hwnd == nullptr && m.message == WM_APP) {
+      PreviewApply();
+      continue;
+    }
+    ::TranslateMessage(&m);
+    ::DispatchMessageW(&m);
+  }
+}
+
+void PreviewChanged() {
+  static std::once_flag once;
+  std::call_once(once, [] { std::thread(PreviewThread).detach(); });
+  while (!g_pv_thread_up)
+    ::Sleep(1);
+  ::PostThreadMessageW(g_pv_thread_id, WM_APP, 0, 0);
 }
 
 // render thread, GPU lock held: the mixed picture into the preview window
@@ -2142,6 +2171,11 @@ void Command(const Json& j) {
   } else if (op == "enc_start") {
     std::lock_guard<std::recursive_mutex> l(g_gpu);
     StartEncoder(j);
+  } else if (op == "enc_key") {
+    std::lock_guard<std::recursive_mutex> l(g_gpu);
+    auto it = g_encs.find(j.S("name"));
+    if (it != g_encs.end())
+      it->second->Key();
   } else if (op == "enc_stop") {
     std::lock_guard<std::recursive_mutex> l(g_gpu);
     const std::string name = j.S("name");
@@ -2182,7 +2216,7 @@ void ReadCommands() {
           g_pv_want.h = static_cast<int>(j.N("h"));
           g_pv_want.on = j.N("on") != 0;
         }
-        CefPostTask(TID_UI, base::BindOnce(&PreviewUi));
+        PreviewChanged();
         continue;
       }
       if (op.compare(0, 5, "clip_") == 0) {
@@ -2224,6 +2258,8 @@ class App : public CefApp {
     cl->AppendSwitch("disable-renderer-backgrounding");
     cl->AppendSwitch("disable-extensions");
     cl->AppendSwitch("no-first-run");
+    cl->AppendSwitch("disable-backgrounding-occluded-windows");
+    cl->AppendSwitchWithValue("disable-features", "OptimizationGuideModelDownloading,OptimizationHints,OnDeviceModelPerformanceParams");
   }
 
  private:

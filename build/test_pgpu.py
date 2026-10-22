@@ -50,13 +50,13 @@ try:
         fr = web.frame
         jobs = [(cg, 20, 30, 255)] + ([(fr[0], 600, 300, 255)] if fr else [])
         out = eng.frame(base, silence, jobs)
-        if fr is not None and out is not None:
+        if fr is not None and out is not None and web.loaded:
             break
         time.sleep(0.04)
     print("web page: loaded", web.loaded, "drawn", web.frames, "mode", web.mode, "error", web.error)
     assert out is not None, "no mixed picture back"
     assert web.frame is not None, "the web page was never drawn: " + web.error
-    for _ in range(10):                           # a few more frames: the page has drawn its boxes
+    for _ in range(50):                           # a few more frames: the page has drawn its boxes
         out = eng.frame(base, silence, [(cg, 20, 30, 255), (web.frame[0], 600, 300, 255)])
         time.sleep(0.04)
     img = out.reshape(H, W, 4)
@@ -131,6 +131,40 @@ try:
         eng.frame(base, silence, [])
         time.sleep(0.04)
     assert web.loaded, "the page did not come back after Reload"
+
+    # the control screen's preview drawn by the engine into a window of another program (here a Tk window),
+    # while the web page keeps drawing: nothing may lock up (1.0.103 locked up here on a real PC)
+    import tkinter
+    root = tkinter.Tk()
+    root.geometry("800x500")
+    root.update()
+    parent = root.winfo_id()
+    stop = {"run": True, "frames": 0, "misses": 0}
+
+    def pump():
+        while stop["run"]:
+            r = eng.frame(base, silence, [(cg, 20, 30, 255), (web.frame[0], 600, 300, 255)])
+            stop["frames" if r is not None else "misses"] += 1
+            time.sleep(0.04)
+
+    pt = threading.Thread(target=pump, daemon=True)
+    pt.start()
+    t0 = time.monotonic()
+    k = 0
+    while time.monotonic() - t0 < 6:
+        if k % 10 == 0:
+            on = (k // 10) % 3 != 2
+            eng.preview(int(parent), 10 + k % 7, 10, 640 - k % 5, 360, on)
+        root.update()
+        time.sleep(0.03)
+        k += 1
+    stop["run"] = False
+    pt.join(5)
+    eng.preview(int(parent), 0, 0, 0, 0, False)
+    root.update()
+    print("preview: frames", stop["frames"], "no answer", stop["misses"], "drawn", web.frames)
+    assert stop["frames"] >= 100 and stop["misses"] <= 2, "the engine locked up with the preview window on"
+    root.destroy()
 
     # squeeze (L-ad): the program into a box over black, a picture under it, all on the GPU
     under = np.zeros((H, W, 4), np.uint8)
