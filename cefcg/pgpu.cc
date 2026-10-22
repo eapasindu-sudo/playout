@@ -1827,6 +1827,7 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // never waiting for the GPU lock: Present() on the render thread can wait for the window's thread to answer,
 // and with Chromium's thread (which also takes the GPU lock for every page picture) that locked both up.
 DWORD g_pv_thread_id = 0;
+bool g_pv_up = false;   // preview thread: the window is meant to be showing
 std::atomic<bool> g_pv_thread_up{false};
 
 // The window is a borderless popup owned by Playout's window, not a child: the control screen (WebView2) draws
@@ -1862,18 +1863,26 @@ void PreviewApply() {
                                   ::GetModuleHandleW(nullptr), nullptr);
     if (!g_pv_hwnd)
       return;
-    ::SetTimer(g_pv_hwnd, 1, 100, nullptr);   // follows Playout's window when it moves
+    ::SetTimer(g_pv_hwnd, 1, 100, nullptr);
+    g_pv_up = false;   // follows Playout's window when it moves
   }
   const bool show = w.on && w.w > 8 && w.h > 8 && !::IsIconic(w.parent);
   POINT at = {w.x, w.y};
   ::ClientToScreen(w.parent, &at);
   RECT now = {};
   ::GetWindowRect(g_pv_hwnd, &now);
-  const bool visible = ::IsWindowVisible(g_pv_hwnd) != 0;
-  if (show && visible && now.left == at.x && now.top == at.y && now.right - now.left == w.w && now.bottom - now.top == w.h)
+  // g_pv_up is what we asked for, not IsWindowVisible: Windows hides an owned popup with a minimised owner and
+  // shows it again on restore by itself, which brought back a frozen picture after we had turned it off
+  if (show && g_pv_up && now.left == at.x && now.top == at.y && now.right - now.left == w.w && now.bottom - now.top == w.h)
     return;   // nothing changed (the timer)
-  if (!show && !visible)
+  if (!show && !g_pv_up)
     return;
+  g_pv_up = show;
+  if (!show) {
+    g_pv_ready = nullptr;
+    ::ShowWindow(g_pv_hwnd, SW_HIDE);   // hidden by us: not shown again by Windows on restore
+    return;
+  }
   if (show) {
     g_pv_w = w.w;
     g_pv_h = w.h;
