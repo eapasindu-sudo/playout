@@ -1838,7 +1838,7 @@ void PreviewApply() {
     std::lock_guard<std::mutex> l(g_pv_lock);
     w = g_pv_want;
   }
-  if (g_pv_hwnd && (!w.parent || ::GetWindow(g_pv_hwnd, GW_OWNER) != w.parent || !::IsWindow(w.parent))) {
+  if (g_pv_hwnd && (!w.parent || ::GetWindow(g_pv_hwnd, GW_OWNER) != ::GetAncestor(w.parent, GA_ROOT) || !::IsWindow(w.parent))) {
     // Playout's window changed (rare): leave the old one hidden; the render thread lets go of it by itself
     g_pv_ready = nullptr;
     ::ShowWindow(g_pv_hwnd, SW_HIDE);
