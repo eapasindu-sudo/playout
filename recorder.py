@@ -2,6 +2,11 @@
 
 Files go to Documents\\Playout\\recordings\\PGM_<date>_<time>.mp4. The MP4 is written in
 fragments, so a recording is still playable if the PC loses power mid-way.
+
+Bitrate "Same as the stream" (mbps 0): while a stream is live, the recording is the stream's own encoded
+picture and sound saved as it is sent (an .ts file), so the picture is not encoded a second time (less CPU
+and GPU on a busy live). While no stream is live it records on its own at 20 Mbps (an .mp4 file); each
+switch starts a new file part.
 """
 import datetime as dt
 import os
@@ -18,7 +23,8 @@ from framequeue import FrameQueue
 from gpu import ENCODERS
 from ndi_io import SAMPLE_RATE
 
-BITRATES = (10, 20, 50)            # Mbps choices on screen
+BITRATES = (0, 10, 20, 50)         # Mbps choices on screen (0 = same as the stream)
+OWN_MBPS = 20                      # "same as the stream" while no stream is live
 RESOLUTIONS = {"720p": (1280, 720), "1080p": (1920, 1080)}
 SPLITS = (0, 30, 40, 60, 120)      # minutes per file (0 = one file)
 
@@ -41,6 +47,8 @@ class Recorder:
         self._q = None
         self._thread = None
         self._on = False
+        self.streamer = None           # app.py sets it: "same as the stream" saves the stream's encode
+        self._tapping = False
 
     # ---- settings ------------------------------------------------------
     def configure(self, resolution=None, mbps=None, encoder=None, split=None):
@@ -50,8 +58,8 @@ class Recorder:
             return self.info()          # settings are locked while recording
         if resolution in RESOLUTIONS:
             self.resolution = resolution
-        if mbps:
-            self.mbps = max(2, min(100, int(mbps)))
+        if mbps is not None and str(mbps) != "":
+            self.mbps = 0 if int(mbps) == 0 else max(2, min(100, int(mbps)))
         if encoder in ENCODERS:
             self.encoder = encoder
         return self.info()
@@ -60,7 +68,14 @@ class Recorder:
         return {"resolution": self.resolution, "mbps": self.mbps, "encoder": self.encoder, "split": self.split}
 
     def using(self):
+        if self._tapping:
+            return "the stream's encoder (no second encode)"
         return gpu.NAMES.get(self.active_encoder or gpu.resolve(self.encoder))
+
+    def _shared(self):
+        """Record the stream's own encode now: "same as the stream" and a stream is live."""
+        st = self.streamer
+        return self.mbps == 0 and st is not None and st._encoding
 
     def info(self):
         up = time.time() - self.started if (self._on and self.started) else 0
@@ -91,8 +106,8 @@ class Recorder:
         self._thread.start()
         return self.info()
 
-    def _new_name(self):
-        return os.path.join(self.folder, dt.datetime.now().strftime("PGM_%Y-%m-%d_%H-%M-%S.mp4"))
+    def _new_name(self, ext=".mp4"):
+        return os.path.join(self.folder, dt.datetime.now().strftime("PGM_%Y-%m-%d_%H-%M-%S") + ext)
 
     def stop(self):
         self._on = False
@@ -103,7 +118,7 @@ class Recorder:
 
     def push(self, video, audio):
         """Called by the engine's output loop for every program frame."""
-        if not self._on:
+        if not self._on or self._tapping:
             return
         if not self._q.put(video, audio):
             self.dropped += 1
@@ -117,7 +132,7 @@ class Recorder:
         vs = out.add_stream(encoder, rate=fps)
         vs.width, vs.height = w, h
         vs.pix_fmt = gpu.input_format(encoder) or "yuv420p"
-        kbps = self.mbps * 1000
+        kbps = (self.mbps or OWN_MBPS) * 1000
         vs.bit_rate = kbps * 1000
         gop = int(round(float(fps)))       # keyframe every second
         opts = {"g": str(gop), "maxrate": f"{kbps}k", "bufsize": f"{kbps * 2}k"}
@@ -137,6 +152,72 @@ class Recorder:
         return out, vs, aus, (w, h)
 
     def _run(self):
+        first = True
+        while self._on:
+            if not first:
+                self.part += 1
+            if self._shared():
+                if not first:
+                    self.file = self._new_name(".ts")
+                elif self.file.endswith(".mp4"):
+                    self.file = self.file[:-4] + ".ts"
+                self._run_tap()
+            else:
+                if not first:
+                    self.file = self._new_name()
+                self._run_own()
+            first = False
+            if self.error.startswith("Recording stopped"):
+                break
+        self._on = False
+        self._tapping = False
+
+    def _run_tap(self):
+        """Save the stream's MPEG-TS as it is sent, until the stream stops or recording stops."""
+        q = queue.Queue(maxsize=2000)
+        st = self.streamer
+
+        def tap(data):
+            try:
+                q.put_nowait(data)
+            except queue.Full:
+                self.dropped += 1
+
+        self._tapping = True
+        self.active_encoder = st.active_encoder
+        st.add_tap(tap)
+        f = None
+        synced = False
+        try:
+            f = open(self.file, "wb")
+            while self._on:
+                try:
+                    data = q.get(timeout=0.5)
+                except queue.Empty:
+                    if not st._encoding:
+                        break
+                    continue
+                if data is None:
+                    break
+                if not synced:
+                    # start on a whole 188-byte TS packet (the stream was already running)
+                    i = next((k for k in range(min(len(data), 188)) if data[k] == 0x47
+                              and (k + 188 >= len(data) or data[k + 188] == 0x47)), None)
+                    if i is None:
+                        continue
+                    data, synced = data[i:], True
+                f.write(data)
+                if self.split and time.time() - self.started >= self.split * 60 * self.part:
+                    break
+        except Exception as e:
+            self.error = f"Recording stopped: {e}"
+        finally:
+            st.remove_tap(tap)
+            self._tapping = False
+            if f is not None:
+                f.close()
+
+    def _run_own(self):
         out = None
         try:
             enc = gpu.resolve(self.encoder)
@@ -161,6 +242,8 @@ class Recorder:
                     video, audio, frames = self._q.get(timeout=0.5)
                 except queue.Empty:
                     continue
+                if self._shared():
+                    break                           # a stream went live: record its encode instead (next part)
                 if self.split and vpts >= int(self.split * 60 * float(self.engine.fps)):
                     # next file: finish this one (playable on its own) and go on without losing a frame
                     for st in (vs, aus):
@@ -197,7 +280,6 @@ class Recorder:
         except Exception as e:
             self.error = f"Recording stopped: {e}"
         finally:
-            self._on = False
             if out is not None:
                 try:
                     out.close()

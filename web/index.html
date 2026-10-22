@@ -390,7 +390,7 @@
       <div class="section-t">Recording <span class="hint" id="recFmt" style="text-transform:none; letter-spacing:0"></span></div>
       <div class="recrow lockable">
         <select id="recRes" onchange="setRec()"><option value="1080p">1080p</option><option value="720p">720p</option></select>
-        <select id="recMbps" onchange="setRec()"><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="50">50 Mbps</option></select>
+        <select id="recMbps" onchange="setRec()" title="Same as the stream: while a stream is live the recording is the stream's own picture (no second encode, less CPU / GPU), saved as .ts; otherwise 20 Mbps"><option value="0">Same as the stream (lightest)</option><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="50">50 Mbps</option></select>
         <select id="recSplit" onchange="setRec()" title="Start a new file every 30 / 40 / 60 / 120 minutes (no frame is lost between files)"><option value="0">One file</option><option value="30">30 min files</option><option value="40">40 min files</option><option value="60">60 min files</option><option value="120">120 min files</option></select>
         <select id="recEnc" onchange="setRec()"><option value="auto">Auto (GPU)</option><option value="libx264">CPU (x264)</option><option value="h264_nvenc">NVIDIA</option><option value="h264_qsv">Intel</option><option value="h264_amf">AMD</option></select>
       </div>
@@ -2566,7 +2566,7 @@ async function pollRec(r) {
   if (document.activeElement?.closest?.('.recrow') == null) {
     $('recRes').value = REC.resolution; $('recMbps').value = String(REC.mbps); $('recSplit').value = String(REC.split || 0); $('recEnc').value = REC.encoder; $('recEnc').title = 'Recording with: ' + (REC.using || '');
   }
-  $('recFmt').textContent = `- ${REC.resolution} ${REC.mbps} Mbps MP4` + (REC.split ? `, new file every ${REC.split} min` : '');
+  $('recFmt').textContent = (REC.mbps ? `- ${REC.resolution} ${REC.mbps} Mbps MP4` : '- same as the stream (no second encode)') + (REC.split ? `, new file every ${REC.split} min` : '');
   $('recPanel').className = on ? 'recon' : 'recoff';
   $('recSt').style.color = REC.error ? 'var(--orange)' : '';
   $('recSt').textContent = on ? `${fmtUp(REC.elapsed)}  ${REC.size_mb >= 1024 ? (REC.size_mb / 1024).toFixed(2) + ' GB' : REC.size_mb + ' MB'}  ${REC.file}` + (REC.split && REC.part > 1 ? `  (file ${REC.part})` : '')
