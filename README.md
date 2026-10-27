@@ -458,6 +458,13 @@ puts it in `Program Files\Playout\atem`, with the Sony camera bridge). Start men
 
 - **Switcher + Cameras**: PROGRAM / PREVIEW, CUT, AUTO, T-bar, and the Sony **CCU** (iris, shutter, ISO,
   white balance, ND, focus, REC) for FX3 / FX30 / FX6 / A7 IV / A7S III and other Sony bodies with PC Remote.
+  The CCU also has a **LIVE** camera picture with timecode, a **LOOK** page (tint A-B / G-M, Picture Profile,
+  black level, saturation, Creative Look), **PRESETS** (save, recall on one or all cameras, match all cameras
+  to one), power **zoom**, **PUSH AF**, **REC ALL**, battery and recording time left, and **MIDI** knobs.
+- **ATEM Software Control camera page**: the Camera page of ATEM Software Control (and ATEM camera control
+  panels) controls the Sony camera on that ATEM input, like Middle Control: iris, shutter, gain / ISO,
+  white balance and tint, ND, focus, zoom, contrast, saturation and record. Setup can also light the
+  cameras' **tally lamps** and start camera **REC with the ATEM's recording**.
 - **MORE** (in the switcher): transition style and rate, Fade to Black, upstream keys with picture-in-picture
   corners, downstream keys (ON / AUTO / TIE), the audio mixer (level, OFF / ON / AFV, master) and macros.
 - **Setup**: the ATEM's IP address, Sony cameras (add / find on the network), connected phones and the QR
@@ -476,7 +483,8 @@ last switch. A switch only shows as done when the ATEM itself says so; when the 
 written to the **Air Logs** (type `atem`; the Ad Report only counts clips).
 
 The ATEM must be on the network (Ethernet) with the playout PC. Sony cameras join the same network with
-PC Remote on (see the ATEM Web Switcher README). The installer lets the switcher page and the Sony camera
+PC Remote on, over Wi-Fi or a USB-C to LAN adapter (camera menu: Network, Wired LAN), which is steadier
+(see the ATEM Web Switcher README). The installer lets the switcher page and the Sony camera
 search through Windows Firewall, and installs the Microsoft Visual C++ runtime the Sony SDK needs when the
 PC does not have it. Running from source: put `ATEM-Switcher.exe` (and its `sony` folder) in `build\atem`,
 or start ATEM Switcher yourself: Playout uses any ATEM Switcher answering on port 3000 (`atem_switcher` in
@@ -489,6 +497,9 @@ Plain GET URLs:
 `/trigger/item/<item name>` (plays that playlist item now).
 ATEM (ATEM & Cameras): `/trigger/atem/cut`, `/trigger/atem/auto`, `/trigger/atem/program/<input>`,
 `/trigger/atem/preview/<input>`.
+Sony cameras (ATEM & Cameras, port 3000): `http://PLAYOUT-PC:3000/api/sony/<cam>/<action>/<value>`, where
+`<cam>` is 1, 2, … or `all`, for example `/api/sony/all/rec/toggle`, `/api/sony/1/iris/up`,
+`/api/sony/1/zoom/in`, `/api/sony/1/preset/2`.
 
 ## Air logs
 
