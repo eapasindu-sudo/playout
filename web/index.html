@@ -875,6 +875,7 @@
     </div>
     <div class="setsec">Station</div>
     <div class="form"><span>Station name</span><input id="stName" placeholder="shown on the ad reports and alerts"></div>
+    <div class="form"><span>Clip converter</span><label><input type="checkbox" id="convOn"> On: offer Convert for clips not in the program's format and show the converted copy in the library. Off: no Convert button, the library shows the original clips.</label></div>
     <div class="setsec" id="secPw">Passwords</div>
     <div class="form">
       <span>Lock password</span><span><input id="pwLock" type="password" placeholder="empty = no password" autocomplete="new-password"> <span class="hint" id="pwLockSt"></span></span>
@@ -1705,6 +1706,7 @@ async function openSettings(focus) {
   const MA = S.master || {}; $('maLimOn').checked = !!MA.limiter; $('maCeil').value = String(Math.round(MA.ceiling ?? -1));
   $('maAgcOn').checked = !!MA.agc; $('maTarget').value = String(Math.round(MA.target ?? -18));
   $('stName').value = SET.station_name || '';
+  $('convOn').checked = SET.clip_convert !== false;
   const sc = SET.security;
   $('pwLock').value = sc.lock_password_set ? '********' : ''; $('pwLockSt').textContent = sc.lock_password_set ? 'set' : 'not set';
   $('pwRemote').value = sc.remote_password_set ? '********' : ''; $('pwRemoteSt').textContent = sc.remote_password_set ? 'set' : 'not set';
@@ -1758,6 +1760,7 @@ async function saveSettings() {
     failover: {enabled:$('foOn').checked, after:+$('foAfter').value || 3, mode:$('foMode').value, file:$('foFile').value},
     audio: {normalize:$('anOn').checked, target:+$('anTarget').value},
     station_name: $('stName').value.trim(),
+    clip_convert: $('convOn').checked,
     security: {lock_password:$('pwLock').value, remote_password:$('pwRemote').value, remote_enabled:$('rmOn').checked, lock_on_start:$('lockStart').checked},
     update: {repo:$('upRepo').value.trim(), token:$('upToken').value, auto_check:$('upAuto').checked},
     alerts: {enabled:$('alOn').checked, token:$('alToken').value, chat_id:$('alChat').value.trim(),

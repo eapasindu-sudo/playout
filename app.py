@@ -440,6 +440,8 @@ def settings_api():
             store.set(audio_norm=loudness.configure(a.get("normalize"), a.get("target")))
         if "station_name" in b:
             store.set(station_name=str(b["station_name"] or "")[:80])
+        if "clip_convert" in b:
+            store.set(clip_convert=bool(b["clip_convert"]))
         if "security" in b:
             s = sec()
             n = b["security"] or {}
@@ -502,6 +504,7 @@ def settings_api():
     s = sec()
     return jsonify(
         failover=engine.failover, audio=loudness.settings(), station_name=store.data.get("station_name", ""),
+        clip_convert=store.data.get("clip_convert", True),
         security={"remote_enabled": s["remote_enabled"], "remote_password_set": bool(s["remote_hash"]),
                   "lock_password_set": bool(s["lock_hash"]), "lock_on_start": s["lock_on_start"]},
         update={"repo": updater.repo, "token_set": bool(updater.token), "auto_check": updater.auto_check},
@@ -1039,6 +1042,8 @@ def media_convert():
     path = os.path.join(cfg["media_dir"], name)
     if not name or not os.path.isfile(path):
         return jsonify(error="No such clip"), 404
+    if not store.data.get("clip_convert", True):
+        return jsonify(error="Clip converter is off (Settings)"), 409
     out = conform.convert(path, engine.fps, engine.width, engine.height, streamer.ffmpeg)
     return jsonify(ok=True, file=os.path.basename(out))
 
@@ -1046,6 +1051,7 @@ def media_convert():
 @app.get("/api/media")
 def media():
     out = list_media(cfg["media_dir"])
+    conv_on = store.data.get("clip_convert", True)   # off: no Convert button, the library shows the originals
     for m in out:
         path = os.path.join(cfg["media_dir"], m["name"])
         info = loudness.info(path)
@@ -1053,11 +1059,11 @@ def media():
             loudness.request(path)
         m["lufs"] = (info or {}).get("lufs")
         m["check"] = clip_warnings(info) if loudness.checked(path) else None   # None = still checking
-        m["convert"] = conform.needs(path, engine.fps, engine.width, engine.height) \
+        m["convert"] = conv_on and conform.needs(path, engine.fps, engine.width, engine.height) \
             and not os.path.isfile(conform.target(path, engine.fps))   # not the program's format: Converter offers a copy
         m["converting"] = conform.STATUS.get(m["name"])
         copy = conform.target(path, engine.fps)
-        m["replaced"] = os.path.normcase(copy) != os.path.normcase(path) and os.path.isfile(copy) \
+        m["replaced"] = conv_on and os.path.normcase(copy) != os.path.normcase(path) and os.path.isfile(copy) \
             and conform.STATUS.get(m["name"]) in (None, "ready")   # converted: the library shows only the copy
     return jsonify(out)
 
