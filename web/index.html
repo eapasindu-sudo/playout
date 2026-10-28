@@ -515,6 +515,15 @@
 </dialog>
 
 <!-- Squeeze feed position -->
+<dialog id="dTm">
+  <header>CG timer: <span id="tmTitle"></span> <button class="sm" onclick="dTm.close()">Close</button></header>
+  <div class="form" style="padding:12px">
+    <span>Auto IN</span><label><input id="tmHour" type="number" min="0" max="60" style="width:60px"> times an hour (0 = off), while the playlist plays</label>
+    <span>On screen</span><label><input id="tmSecs" type="number" min="1" max="3600" style="width:60px"> seconds, then OUT by itself</label>
+    <span>Only on live</span><label><input id="tmLive" type="checkbox"> Wait for a LIVE card (not during commercials)</label>
+    <span></span><div><button class="blue" onclick="tmSave()">Save</button></div>
+  </div>
+</dialog>
 <dialog id="dSq">
   <header>Squeeze Feed: <span id="sqTitle"></span> <button class="sm" onclick="dSq.close()">Close</button></header>
   <div style="padding:12px; display:flex; flex-direction:column; gap:10px">
@@ -2164,7 +2173,7 @@ async function pollCG() {
     el.className = 'cgrow ' + st;
     const live = st === 'on' || st === 'in';
     el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
-      (c.live_only ? ' - live only' : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
+      (c.live_only ? ' - live only' : '') + (c.auto_hour ? ` - auto ${c.auto_hour}x an hour${c.auto_live ? ' on live' : ''}` : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
     el.querySelector('.in').classList.toggle('red', live);
   }
   const card = r.card || [];
@@ -2178,8 +2187,21 @@ function renderManual() {
     <div style="min-width:0"><div class="nm">${esc(c.name || c.file || 'Scoreboard')}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
       ${c.kind === 'web' ? `<button class="sm" onclick="cgTake('${c.id}', 'reload')" title="Load the page again">Reload</button>` : ''}
-      <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button><button class="sm lockable" onclick="delManualCG('${c.id}')">Delete</button></div></div>`).join('')
+      <button class="sm lockable" onclick="tmOpen('${c.id}')" title="Play it by itself every so often">Timer</button><button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button><button class="sm lockable" onclick="delManualCG('${c.id}')">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No manual CGs. Press <b>+ Add CG</b>. They go on air with IN, even while a commercial plays.</div>';
+}
+let tmId = null;
+function tmOpen(id) {
+  const c = cgManual.find(x => x.id === id); if (!c) return; tmId = id;
+  $('tmTitle').textContent = c.name || c.file || 'CG';
+  $('tmHour').value = c.auto_hour || 0; $('tmSecs').value = c.auto_secs || 10; $('tmLive').checked = !!c.auto_live;
+  dTm.showModal();
+}
+function tmSave() {
+  const c = cgManual.find(x => x.id === tmId);
+  if (c) Object.assign(c, {auto_hour: Math.max(0, Math.min(60, +$('tmHour').value || 0)),
+    auto_secs: Math.max(1, Math.min(3600, +$('tmSecs').value || 10)), auto_live: $('tmLive').checked});
+  dTm.close(); saveManual();
 }
 // Squeeze feed (L-ad): program squeezed into the green area of an overlay
 let sqItems = [], sqShown = '', sqEdit = null, sqDim = {w:1920, h:1080};

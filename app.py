@@ -2022,9 +2022,9 @@ def _air_saver():
 def _squeeze_auto():
     """Squeeze timer: a squeeze set to N times an hour goes IN every 60/N minutes while the playlist
     plays (only on a LIVE card when set so). It goes OUT by itself when its overlay ends."""
-    last = {}
+    last, outs = {}, {}
     while True:
-        time.sleep(5)
+        time.sleep(1)
         try:
             now = time.monotonic()
             playing = engine.state == "PLAYING"
@@ -2043,8 +2043,27 @@ def _squeeze_auto():
                 last[p["name"]] = now
                 if err:
                     logging.info("squeeze timer: %s: %s", p["name"], err)
+            # manual CGs: the same timer (Timer button), OUT again after their seconds on screen
+            on = cgm.status()["manual_on"]
+            for c in list(cgm.manual):
+                cid, n = c["id"], int(c.get("auto_hour") or 0)
+                if cid in outs and now >= outs[cid]:
+                    del outs[cid]
+                    cgm.take_out(cid)
+                if n <= 0:
+                    last.pop(cid, None)
+                    continue
+                last.setdefault(cid, now)
+                if now - last[cid] < 3600.0 / n or not playing or (c.get("auto_live") and not live) or cid in on:
+                    continue
+                r = cgm.take_in(cid)
+                last[cid] = now
+                if isinstance(r, str):
+                    logging.info("CG timer: %s: %s", c.get("name") or cid, r)
+                else:
+                    outs[cid] = now + max(1.0, float(c.get("auto_secs") or 10))
         except Exception as e:
-            logging.info("squeeze timer: %s", e)
+            logging.info("squeeze / CG timer: %s", e)
 
 
 def _watchdog():
