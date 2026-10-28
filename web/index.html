@@ -824,6 +824,7 @@
         <input id="noName" style="flex:1; min-width:180px" maxlength="80" title="The name vMix / OBS / monitors see"><button class="sm" onclick="ndiOut()">Rename</button></span>
       <span>Clean feed</span><label><input type="checkbox" id="noClean" onchange="ndiOut()"> "<span class="noN"></span> - Clean": the program without CGs, squeeze and stingers, with sound (archive, second channel)</label>
       <span>Preview</span><label><input type="checkbox" id="noPrev" onchange="ndiOut()"> "<span class="noN"></span> - Preview": what goes on air next (the next live card's source, or the next clip's first picture) for a studio monitor</label>
+      <span>LED</span><label><input type="checkbox" id="noLed" onchange="ndiOut()"> "<span class="noN"></span> - LED": the program with its CGs but without the score overlay (web CG on a score /overlay/ link), with sound, for Endora LED Display on a stadium screen</label>
       <span>Status</span><span class="hint" id="noSt"></span>
     </div>
     <div class="setsec" style="display:flex; align-items:center; gap:8px">NDI sources on the network <span style="flex:1"></span><button class="sm" onclick="ndiLoad()">Refresh</button></div>
@@ -2528,12 +2529,12 @@ async function ndiLoad(fill) {
   try { NDI = await api('/api/ndi'); } catch (e) { return; }
   const o = NDI.outputs;
   if (fill || document.activeElement !== $('noName')) $('noName').value = o.name;
-  $('noOn').checked = o.enabled; $('noClean').checked = !!o.clean; $('noPrev').checked = !!o.preview;
+  $('noOn').checked = o.enabled; $('noClean').checked = !!o.clean; $('noPrev').checked = !!o.preview; $('noLed').checked = !!o.led;
   document.querySelectorAll('.noN').forEach(e => e.textContent = o.name);
   const st = [];
   if (o.program) st.push(`Program: ${o.program.connections ?? '?'} receiver(s)` + (o.program.tally?.[0] ? ', ON AIR on a mixer' : o.program.tally?.[1] ? ', on preview on a mixer' : ''));
   else st.push('Program output is OFF: vMix / OBS / monitors do not get Playout');
-  for (const k of ['clean', 'preview']) if (o[k]) st.push(`${k[0].toUpperCase() + k.slice(1)}: ${o[k].connections ?? '?'} receiver(s)` + (o[k].error ? ' - ' + o[k].error : ''));
+  for (const k of ['clean', 'preview', 'led']) if (o[k]) st.push(`${k[0].toUpperCase() + k.slice(1)}: ${o[k].connections ?? '?'} receiver(s)` + (o[k].error ? ' - ' + o[k].error : ''));
   $('noSt').textContent = st.join('   |   ');
   const used = {}; (NDI.inputs || []).forEach(i => { (used[i.source] = used[i.source] || []).push(i); });
   const names = [...new Set([...(NDI.sources || []).map(x => x.name), ...Object.keys(used)])];
@@ -2558,7 +2559,7 @@ async function ndiLoad(fill) {
   const kf = k.input?.format || {};
   $('nkSt').textContent = !k.source ? '' : (k.on ? 'ON AIR. ' : 'Off air. ') + (k.input?.connected ? (kf.width ? `${kf.width}x${kf.height}` + (kf.alpha ? ' with alpha' : ' - NO alpha: covers the whole picture') : 'connected') : 'not connected');
 }
-const ndiOut = () => api('/api/ndi/output', {enabled:$('noOn').checked, name:$('noName').value.trim(), clean:$('noClean').checked, preview:$('noPrev').checked}).then(r => { if (r.error) say(r.error); ndiLoad(true); });
+const ndiOut = () => api('/api/ndi/output', {enabled:$('noOn').checked, name:$('noName').value.trim(), clean:$('noClean').checked, preview:$('noPrev').checked, led:$('noLed').checked}).then(r => { if (r.error) say(r.error); ndiLoad(true); });
 const ndiKey = b => api('/api/ndi/key', b).then(() => ndiLoad(false));
 const ndiPair = (source, pair) => api('/api/ndi/audio', {source, pair:+pair}).then(() => ndiLoad(false));
 const ndiMain = name => api('/api/live_source', {name}).then(() => { poll(); setTimeout(() => ndiLoad(false), 500); });

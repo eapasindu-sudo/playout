@@ -934,11 +934,11 @@ def ndi_info():
 def ndi_output():
     b = request.get_json(silent=True) or {}
     try:
-        out = engine.set_ndi_outputs(b.get("enabled"), b.get("name"), b.get("clean"), b.get("preview"))
+        out = engine.set_ndi_outputs(b.get("enabled"), b.get("name"), b.get("clean"), b.get("preview"), b.get("led"))
     except Exception as e:
         return jsonify(error=f"NDI output: {e}"), 400
     store.set(ndi={"enabled": out["enabled"], "name": out["name"], "clean": bool(out["clean"]),
-                   "preview": bool(out["preview"])})
+                   "preview": bool(out["preview"]), "led": bool(out["led"])})
     return jsonify(out)
 
 
@@ -1945,7 +1945,8 @@ def start_backend():
     engine.set_live_source(cfg.get("live_source") or store.data.get("live_source"))
     nd = store.data.get("ndi") or {}
     try:
-        engine.set_ndi_outputs(nd.get("enabled", True), None, nd.get("clean", False), nd.get("preview", False))
+        engine.set_ndi_outputs(nd.get("enabled", True), None, nd.get("clean", False), nd.get("preview", False),
+                              nd.get("led", False))
     except Exception as e:
         engine.message = f"NDI output: {e}"
     for src, pair in (store.data.get("ndi_audio_pairs") or {}).items():

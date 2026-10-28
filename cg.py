@@ -716,6 +716,9 @@ class CGManager:
         src = np.asarray(frame_flat).reshape(self.height, self.width, 4) if base is None else base
         layers = [(img, int(layer.cfg.get("x") or 0) + dx, int(layer.cfg.get("y") or 0) + dy, opacity)
                   for layer, (img, opacity, (dx, dy)) in jobs]
+        # LED feed (NDI "<name> - LED"): the program with its CGs but not the score overlay, for a
+        # stadium screen that shows the scoreboard beside it (web CGs on a score /overlay/ link)
+        self.led_hide = {id(img) for layer, (img, _o, _d) in jobs if _is_scoreboard(layer.cfg)}
         if collect:
             if squeeze is not None:
                 box, ov, ox, oy, keyed, op = squeeze
@@ -755,6 +758,10 @@ class CGManager:
             errors = {cid: l.error for cid, l in self._manual_layers.items() if isinstance(l, WebLayer) and l.error}
             card = [{"file": l.cfg.get("file") or l.cfg.get("name"), "state": l.state} for l in self._card_layers]
             return {"manual_on": on, "manual_errors": errors, "card": card, "card_id": self._card_id, "squeeze": self.squeeze_state}
+
+
+def _is_scoreboard(cfg):
+    return cfg.get("kind") == "web" and ("/overlay" in str(cfg.get("url") or "") or bool(cfg.get("led_hide")))
 
 
 def _changed(a, b):

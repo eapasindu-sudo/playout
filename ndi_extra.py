@@ -1,9 +1,11 @@
-"""Extra NDI outputs next to the program: CLEAN feed and PREVIEW.
+"""Extra NDI outputs next to the program: CLEAN feed, PREVIEW and LED.
 
     <name> - Clean     the program before CGs, squeeze, comments and stingers (with program sound),
                        for an archive recorder or a second channel
     <name> - Preview   what goes on air next: the next live card's source as it is now, or the first
                        picture of the next clip (no sound), for a studio / director's monitor
+    <name> - LED       the program with its CGs but without the score overlay (with program sound), for
+                       Endora LED Display on a stadium screen that shows the scoreboard beside it
 
 Each one sends from its own thread, so the NDI encoding never holds up the program output.
 The output loop only hands over its latest picture.
@@ -18,8 +20,9 @@ from ndi_io import CHANNELS, SAMPLE_RATE, NDIOutput
 
 
 class ExtraOutput:
-    def __init__(self, name, width, height, fps, sound=True):
+    def __init__(self, name, width, height, fps, sound=True, compose=None):
         self.name = name
+        self.compose = compose          # LED: (program, layers) -> picture, mixed on this thread
         self.sound = sound
         n = int(SAMPLE_RATE / float(fps)) + 8
         # a picture that was skipped hands its sound on to the next one: room for 10 frames of it
@@ -44,6 +47,8 @@ class ExtraOutput:
             except Exception:
                 continue
             try:
+                if self.compose is not None:
+                    video = self.compose(video)
                 if audio.shape[1] > self._max:          # the PC was stuck for a while: keep the latest sound
                     audio = audio[:, -self._max:]
                 self.out.send(video, np.ascontiguousarray(audio))

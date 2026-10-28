@@ -243,8 +243,8 @@ class Engine:
             return dict(f)
 
     # -- NDI outputs, key, sound channels (NDI Sources panel) --------------------
-    def set_ndi_outputs(self, enabled=None, name=None, clean=None, preview=None):
-        """Program NDI output on / off and its name; the extra Clean and Preview outputs on / off."""
+    def set_ndi_outputs(self, enabled=None, name=None, clean=None, preview=None, led=None):
+        """Program NDI output on / off and its name; the extra Clean, Preview and LED outputs on / off."""
         with self._lock:
             name = (str(name).strip()[:80] if name is not None else "") or self.output_name
             renamed = name != self.output_name
@@ -257,14 +257,15 @@ class Engine:
             if want and self.output is None:
                 self.output = NDIOutput(self.output_name, self.width, self.height, self.fps)
             extra = dict(self.extra)
-            for kind, on in (("clean", clean), ("preview", preview)):
+            for kind, on in (("clean", clean), ("preview", preview), ("led", led)):
                 cur = extra.get(kind)
                 on = (cur is not None) if on is None else bool(on)
                 if cur is not None and (renamed or not on):
                     old.append(extra.pop(kind))
                 if on and kind not in extra:
-                    extra[kind] = ExtraOutput(f"{self.output_name} - {kind.title()}", self.width, self.height,
-                                              self.fps, sound=(kind == "clean"))
+                    extra[kind] = ExtraOutput(f"{self.output_name} - {kind.upper() if kind == 'led' else kind.title()}",
+                                              self.width, self.height, self.fps, sound=(kind != "preview"),
+                                              compose=self._led_frame if kind == "led" else None)
             self.extra = extra           # a new dict: the output loop never sees it half changed
             if old:
                 # the output loop may be sending on an old one this very moment: close it a little later
@@ -278,7 +279,15 @@ class Engine:
             prog = {"name": self.output.name, "connections": self.output.connections(), "tally": [on_pgm, on_pvw]}
         return {"name": self.output_name, "enabled": self.output is not None, "program": prog,
                 "clean": self.extra["clean"].info() if "clean" in self.extra else None,
-                "preview": self.extra["preview"].info() if "preview" in self.extra else None}
+                "preview": self.extra["preview"].info() if "preview" in self.extra else None,
+                "led": self.extra["led"].info() if "led" in self.extra else None}
+
+    def _led_frame(self, job):
+        """LED output thread: the program with the CGs it was handed (no score overlay)."""
+        src, layers = job
+        if not layers or self.cg is None:
+            return np.asarray(src).reshape(-1)
+        return np.asarray(self.cg.composite(np.asarray(src).reshape(self.height, self.width, 4), layers)).reshape(-1)
 
     def set_ndi_key(self, source=None, on=None):
         """An NDI source with alpha (graphics from vMix, CasparCG, a titler PC) keyed over the program."""
@@ -918,10 +927,14 @@ class Engine:
         # the GPU engine (gpuengine.py) mixes the CGs itself: here only the list of what goes over the program
         nat = gpuengine.active()
         layers = None
+        led_src = video
         if self.cg is not None:
             try:
-                if nat is not None:
+                if nat is not None or "led" in self.extra:
                     video, layers = self.cg.render(video, source.startswith("LIVE"), n, collect=True)
+                    led_src = video
+                    if nat is None:
+                        video = self.cg.composite(video, layers)
                 else:
                     video = self.cg.render(video, source.startswith("LIVE"), n)
                 sa = self.cg.stinger_audio
@@ -979,6 +992,9 @@ class Engine:
         ex = self.extra
         if "clean" in ex:
             ex["clean"].push(self.clean_frame, audio)
+        if "led" in ex:
+            hide = getattr(self.cg, "led_hide", ()) if self.cg is not None else ()
+            ex["led"].push((led_src, [L for L in (layers or []) if isinstance(L, dict) or id(L[0]) not in hide]), audio)
         if "preview" in ex:
             try:
                 ex["preview"].push(self._preview_frame(n, live_v), audio)
