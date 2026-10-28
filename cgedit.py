@@ -24,7 +24,8 @@ from squeeze import clean_box, compose, find_green
 PRESET_EXT = ".cgp"
 KEEP = ("name", "x", "y", "zoom", "zoom_x", "zoom_y", "rotate", "crop", "fade", "loop", "live_only",
         "delay", "duration", "key", "key_color", "key_similarity", "key_blend", "key_spill",
-        "luma_threshold", "luma_softness", "squeeze", "squeeze_time")
+        "luma_threshold", "luma_softness", "squeeze", "squeeze_time",
+        "auto_hour", "auto_live")
 
 
 def test_feed(W, H):
