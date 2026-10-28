@@ -515,6 +515,15 @@
 </dialog>
 
 <!-- Squeeze feed position -->
+<dialog id="dTm">
+  <header>CG timer: <span id="tmTitle"></span> <button class="sm" onclick="dTm.close()">Close</button></header>
+  <div class="form" style="padding:12px">
+    <span>Auto IN</span><label><input id="tmHour" type="number" min="0" max="60" style="width:60px"> times an hour (0 = off), while the playlist plays</label>
+    <span>On screen</span><label><input id="tmSecs" type="number" min="1" max="3600" style="width:60px"> seconds, then OUT by itself</label>
+    <span>Only on live</span><label><input id="tmLive" type="checkbox"> Wait for a LIVE card (not during commercials)</label>
+    <span></span><div><button class="blue" onclick="tmSave()">Save</button></div>
+  </div>
+</dialog>
 <dialog id="dSq">
   <header>Squeeze Feed: <span id="sqTitle"></span> <button class="sm" onclick="dSq.close()">Close</button></header>
   <div style="padding:12px; display:flex; flex-direction:column; gap:10px">
@@ -536,6 +545,8 @@
       <button onclick="sqFull()">Full screen</button>
       <label>Squeeze time <input id="sqT" type="number" step="0.1" min="0" max="5" style="width:60px"> s</label>
       <label title="Repeat the overlay until OUT. Off: it goes back to full screen when the overlay ends."><input id="sqLoop" type="checkbox"> Loop overlay</label>
+      <label title="Timer: IN by itself this many times an hour while the playlist plays (0 = off). It goes OUT when the overlay ends, so keep Loop off.">Auto <input id="sqAuto" type="number" min="0" max="60" style="width:50px"> times an hour</label>
+      <label><input id="sqAutoLive" type="checkbox"> Only on live</label>
       <span style="flex:1"></span>
       <button class="blue" onclick="sqSave()">Save</button>
     </div>
@@ -2162,7 +2173,7 @@ async function pollCG() {
     el.className = 'cgrow ' + st;
     const live = st === 'on' || st === 'in';
     el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
-      (c.live_only ? ' - live only' : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
+      (c.live_only ? ' - live only' : '') + (c.auto_hour ? ` - auto ${c.auto_hour}x an hour${c.auto_live ? ' on live' : ''}` : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
     el.querySelector('.in').classList.toggle('red', live);
   }
   const card = r.card || [];
@@ -2176,8 +2187,21 @@ function renderManual() {
     <div style="min-width:0"><div class="nm">${esc(c.name || c.file || 'Scoreboard')}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
       ${c.kind === 'web' ? `<button class="sm" onclick="cgTake('${c.id}', 'reload')" title="Load the page again">Reload</button>` : ''}
-      <button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button><button class="sm lockable" onclick="delManualCG('${c.id}')">Delete</button></div></div>`).join('')
+      <button class="sm lockable" onclick="tmOpen('${c.id}')" title="Play it by itself every so often">Timer</button><button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button><button class="sm lockable" onclick="delManualCG('${c.id}')">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No manual CGs. Press <b>+ Add CG</b>. They go on air with IN, even while a commercial plays.</div>';
+}
+let tmId = null;
+function tmOpen(id) {
+  const c = cgManual.find(x => x.id === id); if (!c) return; tmId = id;
+  $('tmTitle').textContent = c.name || c.file || 'CG';
+  $('tmHour').value = c.auto_hour || 0; $('tmSecs').value = c.auto_secs || 10; $('tmLive').checked = !!c.auto_live;
+  dTm.showModal();
+}
+function tmSave() {
+  const c = cgManual.find(x => x.id === tmId);
+  if (c) Object.assign(c, {auto_hour: Math.max(0, Math.min(60, +$('tmHour').value || 0)),
+    auto_secs: Math.max(1, Math.min(3600, +$('tmSecs').value || 10)), auto_live: $('tmLive').checked});
+  dTm.close(); saveManual();
 }
 // Squeeze feed (L-ad): program squeezed into the green area of an overlay
 let sqItems = [], sqShown = '', sqEdit = null, sqDim = {w:1920, h:1080};
@@ -2200,7 +2224,7 @@ function sqState(on) {
     el.className = 'cgrow ' + st;
     const b = q.cfg.squeeze || {};
     el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'squeezing in' : st === 'out' ? 'going full screen' : 'off') +
-      ` - feed ${b.x}, ${b.y}, ${b.w} x ${b.h}${q.cfg.loop ? ' - loop' : ''}`;
+      ` - feed ${b.x}, ${b.y}, ${b.w} x ${b.h}${q.cfg.loop ? ' - loop' : ''}${q.cfg.auto_hour ? ` - auto ${q.cfg.auto_hour}x an hour${q.cfg.auto_live ? ' on live' : ''}` : ''}`;
     el.querySelector('.in').classList.toggle('red', st === 'on' || st === 'in');
   });
 }
@@ -2222,7 +2246,8 @@ function sqOpen(i) {
   const b = q.cfg.squeeze;
   $('sqX').value = b.x; $('sqY').value = b.y; $('sqW').value = b.w; $('sqH').value = b.h;
   $('sqLock').checked = Math.abs(b.w / b.h - sqDim.w / sqDim.h) < 0.02;
-  $('sqT').value = q.cfg.squeeze_time ?? 0.6; $('sqLoop').checked = !!q.cfg.loop; $('sqMsg').textContent = '';
+  $('sqT').value = q.cfg.squeeze_time ?? 0.6; $('sqLoop').checked = !!q.cfg.loop;
+  $('sqAuto').value = q.cfg.auto_hour || 0; $('sqAutoLive').checked = !!q.cfg.auto_live; $('sqMsg').textContent = '';
   dSq.showModal(); sqDraw(true);
 }
 const sqVal = () => ({x: +$('sqX').value || 0, y: +$('sqY').value || 0, w: Math.max(16, +$('sqW').value || 16), h: Math.max(16, +$('sqH').value || 16)});
@@ -2268,7 +2293,8 @@ async function sqFit() {
 }
 function sqFull() { $('sqX').value = 0; $('sqY').value = 0; $('sqW').value = sqDim.w; $('sqH').value = sqDim.h; sqDraw(true); }
 async function sqSave() {
-  const r = await api('/api/squeeze/save', {preset: sqEdit.q.preset, squeeze: sqVal(), squeeze_time: +$('sqT').value, loop: $('sqLoop').checked});
+  const r = await api('/api/squeeze/save', {preset: sqEdit.q.preset, squeeze: sqVal(), squeeze_time: +$('sqT').value, loop: $('sqLoop').checked,
+    auto_hour: +$('sqAuto').value || 0, auto_live: $('sqAutoLive').checked});
   if (r.error) { $('sqMsg').textContent = r.error; return; }
   $('sqMsg').textContent = r.live ? 'Saved. The feed moved on air.' : 'Saved.';
   await loadSqueeze();

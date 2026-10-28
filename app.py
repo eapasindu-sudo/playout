@@ -6,6 +6,7 @@ import conform
 import datetime as dt
 import io
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -1770,6 +1771,10 @@ def squeeze_action(action):
             changes["squeeze_time"] = max(0.0, min(5.0, float(b["squeeze_time"] or 0)))
         if b.get("loop") is not None:
             changes["loop"] = bool(b["loop"])
+        if b.get("auto_hour") is not None:
+            changes["auto_hour"] = max(0, min(60, int(b["auto_hour"] or 0)))
+        if b.get("auto_live") is not None:
+            changes["auto_live"] = bool(b["auto_live"])
         update_preset(os.path.join(cfg["cg_dir"], c["preset"]), changes)
         return jsonify(ok=True, live=cgm.squeeze_update(c["name"], changes))
     abort(404)
@@ -1996,6 +2001,7 @@ def start_backend():
             (" (the item on air was not put back: it stopped Playout more than once)" if "--no-resume" in sys.argv else "")
     threading.Thread(target=_air_saver, daemon=True, name="air state").start()
     threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
+    threading.Thread(target=_squeeze_auto, daemon=True, name="squeeze timer").start()
 
 
 def _air_saver():
@@ -2011,6 +2017,53 @@ def _air_saver():
                 last = on
         except Exception:
             pass
+
+
+def _squeeze_auto():
+    """Squeeze timer: a squeeze set to N times an hour goes IN every 60/N minutes while the playlist
+    plays (only on a LIVE card when set so). It goes OUT by itself when its overlay ends."""
+    last, outs = {}, {}
+    while True:
+        time.sleep(1)
+        try:
+            now = time.monotonic()
+            playing = engine.state == "PLAYING"
+            live = (engine.last_source or "").startswith("LIVE")
+            for p in _squeeze_presets():
+                c = p.get("cfg") or {}
+                n = int(c.get("auto_hour") or 0)
+                if n <= 0:
+                    last.pop(p["name"], None)
+                    continue
+                last.setdefault(p["name"], now)          # first one a full interval after it is turned on
+                if now - last[p["name"]] < 3600.0 / n or not playing or (c.get("auto_live") and not live) \
+                        or cgm.squeeze_state is not None:
+                    continue                               # not due yet, or waits for live / the one on air
+                err = cgm.squeeze_in(_squeeze_cfg(p["name"]))
+                last[p["name"]] = now
+                if err:
+                    logging.info("squeeze timer: %s: %s", p["name"], err)
+            # manual CGs: the same timer (Timer button), OUT again after their seconds on screen
+            on = cgm.status()["manual_on"]
+            for c in list(cgm.manual):
+                cid, n = c["id"], int(c.get("auto_hour") or 0)
+                if cid in outs and now >= outs[cid]:
+                    del outs[cid]
+                    cgm.take_out(cid)
+                if n <= 0:
+                    last.pop(cid, None)
+                    continue
+                last.setdefault(cid, now)
+                if now - last[cid] < 3600.0 / n or not playing or (c.get("auto_live") and not live) or cid in on:
+                    continue
+                r = cgm.take_in(cid)
+                last[cid] = now
+                if isinstance(r, str):
+                    logging.info("CG timer: %s: %s", c.get("name") or cid, r)
+                else:
+                    outs[cid] = now + max(1.0, float(c.get("auto_secs") or 10))
+        except Exception as e:
+            logging.info("squeeze / CG timer: %s", e)
 
 
 def _watchdog():
