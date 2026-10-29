@@ -177,6 +177,10 @@ class NativeEngine:
             return True
         except Exception as e:
             self.error = self.error or str(e)[:200] or type(e).__name__
+            p = self._proc
+            code = p.poll() if p is not None else None
+            if code is not None:               # it ended before answering: say how, and what it printed
+                self.error = f"{self.error} (pgpu.exe exit code {code:#x}) {self._errtail()}"[:400]
             self._kill()
             return False
 
@@ -263,6 +267,7 @@ class NativeEngine:
         except Exception:
             logging.exception("GPU engine messages")
         # the process ended
+        self._ready_ev.set()                   # a start that is still waiting learns now, not after 30 s
         for c in list(self.clips.values()):
             c.error = c.error or "the GPU engine stopped"
             c.done.set()
