@@ -255,6 +255,7 @@ class NDIOutput:
             self._pacer = _Pacer(self.sender, fps)
 
     def send(self, video, audio):
+        audio = np.ascontiguousarray(audio, dtype=np.float32)   # NDI takes float32 only (mixing can give float64)
         if self._pacer is not None:
             self._pacer.push(video, audio)
         else:
