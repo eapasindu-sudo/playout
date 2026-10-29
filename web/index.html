@@ -2728,12 +2728,13 @@ const nativePv = {on: false, last: '', failed: false, since: 0, shown: -1};
       if (nativePv.on && Date.now() - nativePv.since > 2000) {
         const st = await (await fetch('/api/native_preview')).json();
         // pictures still coming, or the engine has it hidden on purpose (window minimised): all well
-        if (st.shown > nativePv.shown || !st.on) { nativePv.shown = st.shown; nativePv.since = Date.now(); }
+        if (st.running !== false && (st.shown > nativePv.shown || !st.on)) { nativePv.shown = st.shown; nativePv.since = Date.now(); }
         else if (Date.now() - nativePv.since > 6000) {
           nativePv.failed = true;
           setTimeout(() => { nativePv.failed = false; nativePv.last = ''; }, 30000);   // try the GPU again later
           nativePv.on = false;
           nativePv.last = '';
+          $('pv').style.visibility = ''; $('pv').parentElement.classList.remove('native');
           console.warn('GPU preview not drawing', st.error);
         }
       }

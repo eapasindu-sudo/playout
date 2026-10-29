@@ -165,7 +165,7 @@ class NativeEngine:
                     f"--pg-fps-num={self.fps_num}", f"--pg-fps-den={self.fps_den}",
                     f"--pg-cache={os.path.join(self._dir, 'cache')}"]
             self._ready_ev = threading.Event()
-            self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._errlog(),
                                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             threading.Thread(target=self._read, args=(self._proc,), daemon=True, name="gpu engine messages").start()
             if not self._ready_ev.wait(30) or not self.ready:
@@ -190,50 +190,78 @@ class NativeEngine:
             except Exception:
                 pass
 
+    def _errlog(self):
+        """pgpu.exe's own error output goes to a file next to its cache, so a silent exit can be explained."""
+        try:
+            self._errpath = os.path.join(self._dir, "pgpu-stderr.txt")
+            return open(self._errpath, "ab")
+        except Exception:
+            self._errpath = None
+            return subprocess.DEVNULL
+
+    def _errtail(self):
+        try:
+            with open(self._errpath, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 600))
+                return f.read().decode("utf-8", "replace").strip()
+        except Exception:
+            return ""
+
+    def _line(self, raw):
+        line = raw.decode("utf-8", "replace").strip()
+        if not line:
+            return
+        word, _, rest = line.partition(" ")
+        if word == "ack":
+            k, _, flag = rest.partition(" ")
+            with self._cv:
+                self._ack = int(k)
+                self._ack_rb = flag == "rb"
+                self._cv.notify_all()
+        elif word == "ready":
+            self.gpu = rest
+            self.ready = True
+            self._ready_ev.set()
+        elif word == "error":
+            self.error = rest[:200]
+            self._ready_ev.set()
+        elif word == "web":
+            pid, _, msg = rest.partition(" ")
+            page = self.pages.get(int(pid)) if pid.isdigit() else None
+            if page is not None:
+                page._event(msg)
+        elif word == "clip":
+            cid, _, msg = rest.partition(" ")
+            clip = self.clips.get(int(cid)) if cid.isdigit() else None
+            if clip is not None:
+                clip._event(msg)
+        elif word == "enc":
+            name, _, msg = rest.partition(" ")
+            ev = self.events.get(name)
+            if ev is not None:
+                ev[1][0] = msg
+                ev[0].set()
+            if msg.startswith("error"):
+                logging.warning("GPU engine encoder %s: %s", name, msg)
+        elif word == "stats":
+            STATE["stats"] = rest
+            d = {}
+            for part in rest.split():
+                k, _, v = part.partition("=")
+                d[k] = v
+            self.stats = d
+
     def _read(self, proc):
-        for raw in proc.stdout:
-            line = raw.decode("utf-8", "replace").strip()
-            if not line:
-                continue
-            word, _, rest = line.partition(" ")
-            if word == "ack":
-                k, _, flag = rest.partition(" ")
-                with self._cv:
-                    self._ack = int(k)
-                    self._ack_rb = flag == "rb"
-                    self._cv.notify_all()
-            elif word == "ready":
-                self.gpu = rest
-                self.ready = True
-                self._ready_ev.set()
-            elif word == "error":
-                self.error = rest[:200]
-                self._ready_ev.set()
-            elif word == "web":
-                pid, _, msg = rest.partition(" ")
-                page = self.pages.get(int(pid)) if pid.isdigit() else None
-                if page is not None:
-                    page._event(msg)
-            elif word == "clip":
-                cid, _, msg = rest.partition(" ")
-                clip = self.clips.get(int(cid)) if cid.isdigit() else None
-                if clip is not None:
-                    clip._event(msg)
-            elif word == "enc":
-                name, _, msg = rest.partition(" ")
-                ev = self.events.get(name)
-                if ev is not None:
-                    ev[1][0] = msg
-                    ev[0].set()
-                if msg.startswith("error"):
-                    logging.warning("GPU engine encoder %s: %s", name, msg)
-            elif word == "stats":
-                STATE["stats"] = rest
-                d = {}
-                for part in rest.split():
-                    k, _, v = part.partition("=")
-                    d[k] = v
-                self.stats = d
+        try:
+            for raw in proc.stdout:
+                try:
+                    self._line(raw)
+                except Exception:
+                    # one bad line must never stop this reader (the engine would then look alive but be gone)
+                    logging.exception("GPU engine message %r", raw[:200])
+        except Exception:
+            logging.exception("GPU engine messages")
         # the process ended
         for c in list(self.clips.values()):
             c.error = c.error or "the GPU engine stopped"
@@ -244,7 +272,11 @@ class NativeEngine:
             self._cv.notify_all()
         if was and not self._closing and proc is self._proc:
             STATE["running"] = False
-            logging.warning("native GPU engine stopped (exit code %s)", proc.poll())
+            try:
+                code = proc.wait(timeout=5)
+            except Exception:
+                code = proc.poll()
+            logging.warning("native GPU engine stopped (exit code %s) %s", code, self._errtail())
             threading.Thread(target=self._restart, daemon=True, name="gpu engine restart").start()
 
     def _restart(self):
