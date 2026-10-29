@@ -1775,6 +1775,8 @@ def squeeze_action(action):
             changes["auto_hour"] = max(0, min(60, int(b["auto_hour"] or 0)))
         if b.get("auto_live") is not None:
             changes["auto_live"] = bool(b["auto_live"])
+        if b.get("auto_secs") is not None:
+            changes["auto_secs"] = max(0, min(3600, int(b["auto_secs"] or 0)))
         update_preset(os.path.join(cfg["cg_dir"], c["preset"]), changes)
         return jsonify(ok=True, live=cgm.squeeze_update(c["name"], changes))
     abort(404)
@@ -2022,7 +2024,8 @@ def _air_saver():
 
 def _squeeze_auto():
     """Squeeze timer: a squeeze set to N times an hour goes IN every 60/N minutes while the playlist
-    plays (only on a LIVE card when set so). It goes OUT by itself when its overlay ends."""
+    plays (only on a LIVE card when set so). It goes OUT after its seconds on screen, or when its overlay
+    ends if no seconds are set."""
     last, outs = {}, {}
     while True:
         time.sleep(1)
@@ -2030,8 +2033,14 @@ def _squeeze_auto():
             now = time.monotonic()
             playing = engine.state == "PLAYING"
             live = (engine.last_source or "").startswith("LIVE")
+            sq = cgm.squeeze_state
             for p in _squeeze_presets():
                 c = p.get("cfg") or {}
+                key = "sq:" + p["name"]
+                if key in outs and now >= outs[key][0]:
+                    if sq is not None and sq["name"] == outs[key][1]:
+                        cgm.squeeze_out()          # its seconds are up (a looping overlay never ends by itself)
+                    del outs[key]
                 n = int(c.get("auto_hour") or 0)
                 if n <= 0:
                     last.pop(p["name"], None)
@@ -2040,10 +2049,13 @@ def _squeeze_auto():
                 if now - last[p["name"]] < 3600.0 / n or not playing or (c.get("auto_live") and not live) \
                         or cgm.squeeze_state is not None:
                     continue                               # not due yet, or waits for live / the one on air
-                err = cgm.squeeze_in(_squeeze_cfg(p["name"]))
+                sc = _squeeze_cfg(p["name"])
+                err = cgm.squeeze_in(sc)
                 last[p["name"]] = now
                 if err:
                     logging.info("squeeze timer: %s: %s", p["name"], err)
+                elif int(c.get("auto_secs") or 0) > 0:
+                    outs[key] = (now + int(c["auto_secs"]), sc["name"])
             # manual CGs: the same timer (Timer button), OUT again after their seconds on screen
             on = cgm.status()["manual_on"]
             for c in list(cgm.manual):

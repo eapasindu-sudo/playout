@@ -545,7 +545,8 @@
       <button onclick="sqFull()">Full screen</button>
       <label>Squeeze time <input id="sqT" type="number" step="0.1" min="0" max="5" style="width:60px"> s</label>
       <label title="Repeat the overlay until OUT. Off: it goes back to full screen when the overlay ends."><input id="sqLoop" type="checkbox"> Loop overlay</label>
-      <label title="Timer: IN by itself this many times an hour while the playlist plays (0 = off). It goes OUT when the overlay ends, so keep Loop off.">Auto <input id="sqAuto" type="number" min="0" max="60" style="width:50px"> times an hour</label>
+      <label title="Timer: IN by itself this many times an hour while the playlist plays (0 = off). ">Auto <input id="sqAuto" type="number" min="0" max="60" style="width:50px"> times an hour</label>
+      <label title="How long it stays squeezed before going OUT by itself (0 = until the overlay ends; with Loop on, set this)."><input id="sqSecs" type="number" min="0" max="3600" style="width:60px"> s on screen</label>
       <label><input id="sqAutoLive" type="checkbox"> Only on live</label>
       <span style="flex:1"></span>
       <button class="blue" onclick="sqSave()">Save</button>
@@ -2248,7 +2249,7 @@ function sqOpen(i) {
   $('sqX').value = b.x; $('sqY').value = b.y; $('sqW').value = b.w; $('sqH').value = b.h;
   $('sqLock').checked = Math.abs(b.w / b.h - sqDim.w / sqDim.h) < 0.02;
   $('sqT').value = q.cfg.squeeze_time ?? 0.6; $('sqLoop').checked = !!q.cfg.loop;
-  $('sqAuto').value = q.cfg.auto_hour || 0; $('sqAutoLive').checked = !!q.cfg.auto_live; $('sqMsg').textContent = '';
+  $('sqAuto').value = q.cfg.auto_hour || 0; $('sqSecs').value = q.cfg.auto_secs || 0; $('sqAutoLive').checked = !!q.cfg.auto_live; $('sqMsg').textContent = '';
   dSq.showModal(); sqDraw(true);
 }
 const sqVal = () => ({x: +$('sqX').value || 0, y: +$('sqY').value || 0, w: Math.max(16, +$('sqW').value || 16), h: Math.max(16, +$('sqH').value || 16)});
@@ -2295,7 +2296,7 @@ async function sqFit() {
 function sqFull() { $('sqX').value = 0; $('sqY').value = 0; $('sqW').value = sqDim.w; $('sqH').value = sqDim.h; sqDraw(true); }
 async function sqSave() {
   const r = await api('/api/squeeze/save', {preset: sqEdit.q.preset, squeeze: sqVal(), squeeze_time: +$('sqT').value, loop: $('sqLoop').checked,
-    auto_hour: +$('sqAuto').value || 0, auto_live: $('sqAutoLive').checked});
+    auto_hour: +$('sqAuto').value || 0, auto_secs: +$('sqSecs').value || 0, auto_live: $('sqAutoLive').checked});
   if (r.error) { $('sqMsg').textContent = r.error; return; }
   $('sqMsg').textContent = r.live ? 'Saved. The feed moved on air.' : 'Saved.';
   await loadSqueeze();
