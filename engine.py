@@ -163,7 +163,7 @@ class Engine:
         self.live = MainInput(self.finder, self.width, self.height, self.fps)
         self.master = MasterAudio()          # program sound: auto level + limiter
         self.output_name = cfg.get("output_name", "ENDORA PLAYOUT FINAL")
-        self.output = NDIOutput(self.output_name, self.width, self.height, self.fps)   # None = NDI output off
+        self.output = NDIOutput(self.output_name, self.width, self.height, self.fps, paced=True)   # None = NDI output off
         self.extra = {}              # "clean" / "preview": ExtraOutput (NDI Sources panel)
         self.ndi_key = {"source": "", "on": False}   # an NDI source with alpha keyed over the program
         self.key_input = None
@@ -255,7 +255,7 @@ class Engine:
                 old.append(self.output)
                 self.output = None
             if want and self.output is None:
-                self.output = NDIOutput(self.output_name, self.width, self.height, self.fps)
+                self.output = NDIOutput(self.output_name, self.width, self.height, self.fps, paced=True)
             extra = dict(self.extra)
             for kind, on in (("clean", clean), ("preview", preview), ("led", led)):
                 cur = extra.get(kind)
@@ -986,7 +986,7 @@ class Engine:
         self.last_frame = video
         try:
             if self.output is not None:
-                self.output.send(video, audio)   # the loop itself keeps the frame rate (see _run)
+                self.output.send(video, audio)   # NDIOutput's pacer sends it on an exact frame clock
         except Exception:
             pass
         ex = self.extra
@@ -1149,6 +1149,7 @@ class Engine:
                 "inputs": {k: bool(getattr(v, "connected", False)) for k, v in self.inputs.items()},
                 "output": self.output_name,
                 "ndi_out": self.output is not None,
+                "ndi_pacing": self.output.stats() if self.output is not None else None,
                 "ndi_extra": sorted(self.extra),
                 "ndi_key": dict(self.ndi_key),
                 "fps": fps,

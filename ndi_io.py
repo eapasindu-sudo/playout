@@ -1,4 +1,5 @@
 """NDI input (vMix program feed) and NDI output, built on cyndilib."""
+import collections
 import threading
 import time
 from fractions import Fraction
@@ -235,8 +236,9 @@ def fit_audio(a, n_samples):
 class NDIOutput:
     """The playout's program output as an NDI source. The engine's loop keeps the frame rate itself."""
 
-    def __init__(self, name, width, height, fps: Fraction, max_samples=None):
+    def __init__(self, name, width, height, fps: Fraction, max_samples=None, paced=False):
         self.name = name
+        self._pacer = None
         self.sender = Sender(name, clock_video=False, clock_audio=False)
         vf = VideoSendFrame()
         vf.set_resolution(width, height)
@@ -249,9 +251,19 @@ class NDIOutput:
         af.set_max_num_samples(max_samples or int(SAMPLE_RATE / float(fps)) + 8)
         self.sender.set_audio_frame(af)
         self.sender.open()
+        if paced:
+            self._pacer = _Pacer(self.sender, fps)
 
     def send(self, video, audio):
-        self.sender.write_video_and_audio(video, audio)
+        if self._pacer is not None:
+            self._pacer.push(video, audio)
+        else:
+            self.sender.write_video_and_audio(video, audio)
+
+    def stats(self):
+        """Pacer counts (None when not paced): repeats = frames sent again because none was ready."""
+        p = self._pacer
+        return None if p is None else {"repeats": p.repeats, "dropped": p.dropped, "buffered": len(p.q)}
 
     def connections(self):
         """How many receivers (vMix, OBS, a monitor) are watching this output."""
@@ -269,4 +281,110 @@ class NDIOutput:
             return False, False
 
     def close(self):
+        if self._pacer is not None:
+            self._pacer.stop()
         self.sender.close()
+
+
+class _Pacer:
+    """Sends the program to NDI on an exact frame clock, like a hardware output.
+
+    The engine makes frames on its own clock, and a slow frame is made up by the next ones, so frames come
+    out of it unevenly. Receivers (vMix, OBS) then see the frame rate move. Here frames wait in a short
+    buffer (BUFFER frames) and one leaves every frame time, timed to well under a millisecond. When none
+    is ready the last picture goes out again with silence, and one frame is dropped later to stay in time.
+    """
+    BUFFER = 3
+    MAX = 8
+
+    def __init__(self, sender, fps):
+        self.sender = sender
+        self.period = 1.0 / float(fps)
+        self.q = collections.deque()
+        self.cv = threading.Condition()
+        self.repeats = self.dropped = 0
+        self._debt = 0
+        self._last = None
+        self._running = True
+        _fine_timer()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="ndi pacer")
+        self._thread.start()
+
+    def push(self, video, audio):
+        # the engine may reuse its frame buffers, so keep a copy of the picture
+        item = (np.array(video, copy=True), audio)
+        with self.cv:
+            self.q.append(item)
+            while len(self.q) > self.MAX:          # the engine ran far ahead (after a stall): keep in time
+                self.q.popleft()
+                self.dropped += 1
+            self.cv.notify()
+
+    def stop(self):
+        self._running = False
+        with self.cv:
+            self.cv.notify()
+        self._thread.join(timeout=1)
+
+    def _run(self):
+        while self._running:
+            with self.cv:                          # start (and restart after a long gap) with a full buffer
+                while self._running and len(self.q) < self.BUFFER:
+                    self.cv.wait(0.5)
+            due = time.perf_counter()
+            idle = 0
+            while self._running and idle < 25:
+                _wait_until(due)
+                due += self.period
+                with self.cv:
+                    item = self.q.popleft() if self.q else None
+                    if item is not None and self._debt and len(self.q) >= self.BUFFER:
+                        item = self.q.popleft()    # make up for a repeated frame
+                        self._debt -= 1
+                        self.dropped += 1
+                if item is None:
+                    if self._last is None:
+                        idle += 1
+                        continue
+                    idle += 1
+                    self.repeats += 1
+                    self._debt += 1
+                    item = (self._last[0], np.zeros_like(self._last[1]))
+                else:
+                    idle = 0
+                    self._last = item
+                try:
+                    self.sender.write_video_and_audio(item[0], item[1])
+                except Exception:
+                    pass
+                if time.perf_counter() - due > 1.0:  # the PC stalled for over a second: start over
+                    break
+            self._debt = 0
+
+
+def _wait_until(t):
+    """Sleep until perf_counter() reaches t; the last 2 ms spin, so the frame leaves on time."""
+    while True:
+        left = t - time.perf_counter()
+        if left <= 0:
+            return
+        if left > 0.002:
+            time.sleep(left - 0.0015)
+        else:
+            time.sleep(0)
+
+
+_timer_set = False
+
+
+def _fine_timer():
+    """Ask Windows for a 1 ms timer, so sleeps wake on time (no effect elsewhere)."""
+    global _timer_set
+    if _timer_set:
+        return
+    _timer_set = True
+    try:
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
