@@ -754,7 +754,8 @@ def native_preview_state():
     m = re.search(r"\bpreview=(\d+)", gpuengine.STATE.get("stats") or "")
     err = re.search(r"\bpreview_error=(\S+)", gpuengine.STATE.get("stats") or "")
     on = re.search(r"\bpreview=\d+on\b", gpuengine.STATE.get("stats") or "") is not None
-    return jsonify(shown=int(m.group(1)) if m else -1, on=on, error=err.group(1) if err else "")
+    return jsonify(shown=int(m.group(1)) if m else -1, on=on, error=err.group(1) if err else "",
+                   running=gpuengine.active() is not None)
 
 
 @app.get("/api/preview.jpg")
