@@ -74,7 +74,25 @@ def start(width, height, fps):
             else:
                 STATE["error"] = e.error
                 logging.warning("native GPU engine did not start: %s", e.error)
+                # don't leave the whole run on the CPU: keep trying (e.g. the GPU was still busy after a crash)
+                threading.Thread(target=_retry_start, args=(width, height, fps), daemon=True,
+                                 name="gpu engine start").start()
         return _engine
+
+
+def _retry_start(width, height, fps, tries=20, every=15):
+    global _engine
+    for i in range(tries):
+        time.sleep(every)
+        e = NativeEngine(width, height, fps)
+        if e.launch():
+            with _lock:
+                _engine = e
+            STATE["error"] = ""
+            logging.info("native GPU engine started on try %d", i + 2)
+            return
+        STATE["error"] = f"{e.error} (try {i + 2})"
+        logging.warning("native GPU engine did not start (try %d): %s", i + 2, e.error)
 
 
 def active():
