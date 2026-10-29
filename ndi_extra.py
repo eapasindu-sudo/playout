@@ -27,7 +27,7 @@ class ExtraOutput:
         n = int(SAMPLE_RATE / float(fps)) + 8
         # a picture that was skipped hands its sound on to the next one: room for 10 frames of it
         self._max = n * 10
-        self.out = NDIOutput(name, width, height, fps, max_samples=self._max)
+        self.out = NDIOutput(name, width, height, fps, max_samples=self._max, paced=True)   # same steady clock as the program
         self._q = FrameQueue(2)
         self._silence = np.zeros((CHANNELS, n), np.float32)
         self.sent = 0
