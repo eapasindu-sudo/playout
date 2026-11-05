@@ -117,7 +117,11 @@ class ClipPlayer:
         self.gain = float(gain or 1.0)                    # audio level (normalize + item volume)
         self.duration = max(0.0, (self.end or full) - self.start) if full or self.end else 0.0
         self.error = None
-        self._vq = queue.Queue(maxsize=max(3, int(self.VIDEO_BUFFER * 1920 * 1080 / max(1, width * height))))
+        # a CG player (process set) has no output size of its own (2 x 2): its pictures are CG sized, up to 1080p
+        # and more, so it holds VIDEO_BUFFER of them. (Sized by 2 x 2 it held millions: the decoder read the whole
+        # video into memory, 8 MB a frame, until Windows ran out.)
+        self._vq = queue.Queue(maxsize=self.VIDEO_BUFFER if process is not None else
+                               max(3, min(4 * self.VIDEO_BUFFER, int(self.VIDEO_BUFFER * 1920 * 1080 / max(1, width * height)))))
         self._audio = collections.deque()
         self._audio_len = 0
         self._alock = threading.Lock()
