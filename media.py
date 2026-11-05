@@ -357,6 +357,17 @@ class ClipPlayer:
 
     def close(self):
         self._stop.set()
+        self.process = None              # no cycle back to the CG layer: both can go at once
+        # give the decoded pictures back now, not when the last reference to this player goes
+        try:
+            while True:
+                self._vq.get_nowait()
+        except queue.Empty:
+            pass
+        with self._alock:
+            self._audio.clear()
+            self._audio_len = 0
+        self._current = self._pending = None
 
 
 def thumbnail(path, cache_dir, width=192):
