@@ -99,7 +99,14 @@ class Recorder:
     def start(self):
         if self._on:
             return self.info()
-        os.makedirs(self.folder, exist_ok=True)
+        try:
+            os.makedirs(self.folder, exist_ok=True)
+        except OSError as e:
+            drive = os.path.splitdrive(self.folder)[0]
+            self.error = (f"The recording folder {self.folder} is not there" +
+                          (f" (is drive {drive} plugged in?)" if drive and not os.path.exists(drive + os.sep) else "") +
+                          f": pick another folder in Settings > Recording. ({e.strerror or e})")
+            return self.info()
         self.file = self._new_name()
         self.part = 1
         self.error = ""

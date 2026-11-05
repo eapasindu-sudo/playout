@@ -2003,6 +2003,15 @@ def start_backend():
     elif crashed:
         engine.message = "Playout restarted after an unexpected stop" + \
             (" (the item on air was not put back: it stopped Playout more than once)" if "--no-resume" in sys.argv else "")
+    out = store.data.get("live_out") or {}
+    if crashed and "--no-resume" not in sys.argv and (out.get("streams") or out.get("rec")):
+        # the streams / recording that were on go on again, so a crash does not end the show for viewers
+        for slot in out.get("streams") or []:
+            if isinstance(slot, int) and 0 <= slot < len(streamer.dests) and streamer.dests[slot].url.strip():
+                streamer.set_enabled(slot, True)
+        if out.get("rec"):
+            recorder.start()
+        print(f"after an unexpected stop: streams {out.get('streams') or []} and recording {bool(out.get('rec'))} on again")
     threading.Thread(target=_air_saver, daemon=True, name="air state").start()
     threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
     threading.Thread(target=_squeeze_auto, daemon=True, name="squeeze timer").start()
@@ -2010,9 +2019,16 @@ def start_backend():
 
 def _air_saver():
     """Remembers what is on air (and since when), so a restart can carry on."""
-    last = None
+    last = lastout = None
     while True:
         time.sleep(1)
+        try:
+            out = {"streams": [d.slot for d in streamer.dests if d.enabled], "rec": bool(recorder.recording)}
+            if out != lastout:
+                store.set(live_out=out)
+                lastout = out
+        except Exception:
+            pass
         try:
             on = engine.on_air if engine.state == "PLAYING" else None
             if on != last:

@@ -179,6 +179,12 @@ class Health:
                                  f"{r['size_mb'] / 1024:.1f} GB" + (f", {r['dropped']} frames dropped" if r.get("dropped") else ""))
         elif r.get("error"):
             add("Recording", "bad", r["error"][:160])
+        else:
+            import os as _os
+            drive = _os.path.splitdrive(r.get("folder") or "")[0]
+            if drive and not _os.path.exists(drive + _os.sep):
+                add("Recording", "warn", f"Drive {drive} of the recording folder is not there: plug it in, or pick "
+                                         "another folder in Settings > Recording")
         s = self.sysmon.stats
         if s.get("cpu") is not None:
             cpu, gpu = s["cpu"], s.get("gpu")
