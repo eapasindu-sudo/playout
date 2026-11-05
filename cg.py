@@ -31,6 +31,28 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp"}
 VIDEO_EXT = {".mov", ".mp4", ".webm", ".avi", ".mkv", ".mxf"}
 CG_EXT = IMAGE_EXT | VIDEO_EXT
 
+# All looping video CGs together keep at most this many bytes of decoded frames in memory (one 1080p
+# frame is 8 MB). Each CG used to keep up to 400 MB of its own, so a few CGs plus a squeeze of the same
+# L ad filled an 8 GB PC.
+CACHE_BUDGET = 600 * 1024 * 1024
+_cache_lock = threading.Lock()
+_cache_used = 0
+
+
+def _cache_take(n):
+    global _cache_used
+    with _cache_lock:
+        if _cache_used + n > CACHE_BUDGET:
+            return False
+        _cache_used += n
+        return True
+
+
+def _cache_give(n):
+    global _cache_used
+    with _cache_lock:
+        _cache_used = max(0, _cache_used - n)
+
 
 def cg_kind(name):
     ext = os.path.splitext(name)[1].lower()
@@ -149,6 +171,7 @@ class CGLayer:
     """One CG on air: fades, delay / duration, and the picture with its effects (cgfx)."""
 
     CACHE_LIMIT = 400 * 1024 * 1024   # keep a looping video CG's keyed frames in memory up to this size
+                                      # (and within CACHE_BUDGET for all CGs together)
 
     def __init__(self, cfg, folder, fps, audio=False):
         self.cfg = dict(cfg)
@@ -228,6 +251,7 @@ class CGLayer:
             self.level = max(0, self.level - 1) if self.fade else 0
             if self.level <= 0:
                 self.state = "off"
+                self._release()              # off air: give its decoder and frames back (IN again makes a new one)
                 return None
         if self.state == "on":
             self.on_ticks += 1
@@ -256,7 +280,8 @@ class CGLayer:
                     self._player = None
                     self._replay = 0
                     return self._frame(n)
-                self._cache, self._cache_ok = [], False
+                self._drop_cache()
+                self._cache_ok = False
                 self._player = p = self._open_video()
             else:
                 self._player = None
@@ -271,19 +296,33 @@ class CGLayer:
         if pic is not None and pic is not self._last:
             self._last = pic
             if self._cache_ok:
-                self._cache_bytes += pic[0].nbytes
-                if self._cache_bytes > self.CACHE_LIMIT:
-                    self._cache, self._cache_ok = [], False
+                n = pic[0].nbytes
+                if self._cache_bytes + n > self.CACHE_LIMIT or not _cache_take(n):
+                    self._drop_cache()
+                    self._cache_ok = False
                 else:
+                    self._cache_bytes += n
                     self._cache.append(pic)
         elif pic is self._last and self._cache_ok and pic is not None:
             self._cache.append(pic)   # same picture held for another output frame
         return self._last
 
+    def _drop_cache(self):
+        _cache_give(self._cache_bytes)
+        self._cache, self._cache_bytes = [], 0
+
+    def _release(self):
+        self._close_video()
+
     def close(self):
+        self._close_video()
+
+    def _close_video(self):
         if self._player:
             self._player.close()
-        self._cache = []
+            self._player = None
+        self._replay = None
+        self._drop_cache()
 
 
 class WebLayer(CGLayer):
@@ -338,6 +377,9 @@ class WebLayer(CGLayer):
     def reload(self):
         if self.r:
             self.r.reload()
+
+    def _release(self):
+        pass                # the page stays loaded off air, so IN is instant
 
     def close(self):
         if self.r:
@@ -751,6 +793,21 @@ class CGManager:
         for img, x, y, opacity in layers:
             composite(out, img, x, y, opacity)
         return out.reshape(-1)
+
+    def drop_caches(self):
+        """Out of memory: let every CG give back its frames in memory (they decode from the file again)."""
+        with self._lock:
+            layers = list(self._manual_layers.values()) + list(self._card_layers)
+            if self._squeeze is not None:
+                layers.append(self._squeeze.overlay)
+        for layer in layers:
+            if not layer.__class__.__name__ == "CGLayer" or not layer._cache:
+                continue
+            layer._cache_ok = False
+            if layer._replay is not None:          # was looping from memory: decode the file again
+                layer._replay = None
+                layer._player = layer._open_video()
+            layer._drop_cache()
 
     def status(self):
         with self._lock:

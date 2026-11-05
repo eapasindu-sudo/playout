@@ -816,6 +816,17 @@ class Engine:
             t0 = time.perf_counter()
             try:
                 self._tick()
+            except MemoryError:
+                # the PC ran out of memory: free what can be freed and carry on, instead of crashing later
+                self.loop_errors += 1
+                self.message = "Out of memory: CG frames freed (close other programs, or add RAM)"
+                if self.loop_errors <= 20 or self.loop_errors % 500 == 0:
+                    logging.error("output loop: out of memory, freeing CG frames")
+                try:
+                    if self.cg is not None:
+                        self.cg.drop_caches()
+                except Exception:
+                    pass
             except Exception:
                 # never let one bad frame stop the output: log it, send black and carry on
                 self.loop_errors += 1
