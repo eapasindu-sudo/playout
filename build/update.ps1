@@ -23,6 +23,12 @@ Start-Sleep -Seconds 1
 $dir = $appDir.TrimEnd('\') + '\'
 $mine = { Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) -and $_.Id -ne $PID } }
 & $mine | Stop-Process -Force
+# a killed Playout can hold its files a few seconds more (antivirus scans them, Windows frees the DLLs late):
+# the installer gives up on a file it cannot replace, so wait until the main DLL can be opened for writing
+$dll = Join-Path $appDir '_internal\python312.dll'
+for ($i = 0; $i -lt 60 -and (Test-Path $dll); $i++) {
+  try { $fs = [IO.File]::Open($dll, 'Open', 'ReadWrite', 'None'); $fs.Close(); break } catch { Start-Sleep -Milliseconds 500 }
+}
 Start-Sleep -Seconds 1
 # 2. install
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -32,6 +38,13 @@ try {
   if ($admin) { $p = Start-Process -FilePath $setup -ArgumentList $sargs -Wait -PassThru -ErrorAction Stop }
   else { $p = Start-Process -FilePath $setup -ArgumentList $sargs -Verb RunAs -Wait -PassThru -ErrorAction Stop }
   $code = if ($p) { $p.ExitCode } else { 97 }
+  if ($code -eq 5) {            # a file was still locked and it backed out: wait and try once more
+    Start-Sleep -Seconds 10
+    & $mine | Stop-Process -Force
+    if ($admin) { $p = Start-Process -FilePath $setup -ArgumentList $sargs -Wait -PassThru -ErrorAction Stop }
+    else { $p = Start-Process -FilePath $setup -ArgumentList $sargs -Verb RunAs -Wait -PassThru -ErrorAction Stop }
+    $code = if ($p) { $p.ExitCode } else { 97 }
+  }
 } catch { $code = 97 }          # 97: the Windows admin question was answered No
 Set-Content -Path $resultFile -Value "$code $version" -Encoding UTF8
 # 3. start Playout again (the new one, or the old one if the install did not work), as the normal user

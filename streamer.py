@@ -192,7 +192,8 @@ class Destination:
             if not self._rate or now - self._rate[-1][0] >= 1:
                 self._rate.append((now, self.bytes))
                 del self._rate[:-6]
-            if self.status == "connecting" and now - self.started > 3:
+            # "starting" too: turned on again while its FFmpeg was still running (it then never says "connecting")
+            if self.status in ("connecting", "starting") and now - self.started > 3:
                 self.status = "live"
                 self.error = ""
 
