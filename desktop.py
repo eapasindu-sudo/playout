@@ -25,7 +25,13 @@ HOME = paths.user_home()
 if paths.FROZEN:
     # windowed exe has no console: send prints and errors to a log file
     os.makedirs(os.path.join(HOME, "logs"), exist_ok=True)
-    _log = open(os.path.join(HOME, "logs", "playout.log"), "a", buffering=1, encoding="utf-8")
+    _logpath = os.path.join(HOME, "logs", "playout.log")
+    try:
+        if os.path.getsize(_logpath) > 20 * 1024 * 1024:     # keep one old log, so it never grows without end
+            os.replace(_logpath, _logpath[:-4] + ".old.log")
+    except OSError:
+        pass
+    _log = open(_logpath, "a", buffering=1, encoding="utf-8")
     sys.stdout = sys.stderr = _log
     print(f"\n==== Playout start {time.strftime('%Y-%m-%d %H:%M:%S')} ====")
 

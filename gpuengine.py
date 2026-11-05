@@ -80,19 +80,21 @@ def start(width, height, fps):
         return _engine
 
 
-def _retry_start(width, height, fps, tries=20, every=15):
+def _retry_start(width, height, fps):
     global _engine
-    for i in range(tries):
-        time.sleep(every)
+    i = 0
+    while True:                         # never give up for the run: 15 s, 30 s, ... at most 2 min apart
+        time.sleep(min(15 * 2 ** min(i, 3), 120))
+        i += 1
         e = NativeEngine(width, height, fps)
         if e.launch():
             with _lock:
                 _engine = e
             STATE["error"] = ""
-            logging.info("native GPU engine started on try %d", i + 2)
+            logging.info("native GPU engine started on try %d", i + 1)
             return
-        STATE["error"] = f"{e.error} (try {i + 2})"
-        logging.warning("native GPU engine did not start (try %d): %s", i + 2, e.error)
+        STATE["error"] = f"{e.error} (try {i + 1})"
+        logging.warning("native GPU engine did not start (try %d): %s", i + 1, e.error)
 
 
 def active():
@@ -114,6 +116,7 @@ def stop():
 
 class NativeEngine:
     ACK_TIMEOUT = 0.25
+    STALL_SECS = 30         # no answer at all for this long: stuck. A busy PC can be slow for a few seconds
     IMAGE_CACHE = 48
 
     def __init__(self, width, height, fps):
@@ -139,6 +142,8 @@ class NativeEngine:
         self._cv = threading.Condition()
         self._k = 0
         self._timeouts = 0
+        self._last_ack = time.monotonic()
+        self._probe = 0.0
         self._images = {}               # id(numpy array) -> (array, native id), oldest first
         self._drop = []
         self.pages = {}                 # page id -> NativeWebRenderer
@@ -172,6 +177,7 @@ class NativeEngine:
                 raise RuntimeError(self.error or "pgpu.exe did not answer")
             self._images.clear()
             self._timeouts = 0
+            self._last_ack = time.monotonic()
             STATE.update(running=True, gpu=self.gpu, error="")
             logging.info("native GPU engine running on %s", self.gpu)
             return True
@@ -220,6 +226,7 @@ class NativeEngine:
         if word == "ack":
             k, _, flag = rest.partition(" ")
             with self._cv:
+                self._last_ack = time.monotonic()
                 self._ack = int(k)
                 self._ack_rb = flag == "rb"
                 self._cv.notify_all()
@@ -271,40 +278,40 @@ class NativeEngine:
         for c in list(self.clips.values()):
             c.error = c.error or "the GPU engine stopped"
             c.done.set()
-        was = self.ready
+        was = self.ready or getattr(proc, "_stalled", False)
         self.ready = False
         with self._cv:
             self._cv.notify_all()
-        if was and not self._closing and proc is self._proc:
+        if was and not self._closing and (proc is self._proc or self._proc is None):
             STATE["running"] = False
             try:
                 code = proc.wait(timeout=5)
             except Exception:
                 code = proc.poll()
-            logging.warning("native GPU engine stopped (exit code %s) %s", code, self._errtail())
+            why = "stopped answering, ended by Playout" if getattr(proc, "_stalled", False) else "ended by itself"
+            logging.warning("native GPU engine stopped: %s (exit code %s) %s", why, code, self._errtail())
             threading.Thread(target=self._restart, daemon=True, name="gpu engine restart").start()
 
     def _restart(self):
-        global _disabled
         if self._restarting:
             return
         self._restarting = True
         try:
-            now = time.monotonic()
-            self._stops = [t for t in self._stops if now - t < 120] + [now]
             STATE["restarts"] += 1
-            if len(self._stops) >= 3:
-                _disabled = True
-                STATE["error"] = "stopped 3 times in 2 minutes: Playout mixes and encodes the older way now"
-                logging.error("native GPU engine: %s", STATE["error"])
-                for p in list(self.pages.values()):
-                    p._engine_gone()
-                return
             self._kill()
-            time.sleep(1)
-            if self.launch():
-                for p in list(self.pages.values()):
-                    p._open()
+            tries = 0
+            while not self._closing:
+                now = time.monotonic()
+                self._stops = [t for t in self._stops if now - t < 120] + [now]
+                # stopping again and again: wait longer between starts (CPU mixing carries the show meanwhile)
+                time.sleep(1 if len(self._stops) < 3 else min(15 * 2 ** min(tries, 3), 120))
+                if self.launch():
+                    for p in list(self.pages.values()):
+                        p._open()
+                    return
+                tries += 1
+                STATE["error"] = f"{self.error} (restart try {tries})"
+                logging.warning("native GPU engine did not start again (try %d): %s", tries, self.error)
         finally:
             self._restarting = False
 
@@ -341,6 +348,11 @@ class NativeEngine:
         the engine is not there right now (the caller mixes on the CPU)."""
         if not self.ready:
             return None
+        if self._timeouts >= 8:     # not answering right now: mix on the CPU, and ask it about once a second only
+            now = time.monotonic()
+            if now - self._probe < 1:
+                return None
+            self._probe = now
         n = int(audio.shape[1]) if audio is not None else 0
         n = min(n, MAX_SAMPLES)
         np.copyto(self._base, np.asarray(base, np.uint8).reshape(-1))
@@ -378,8 +390,13 @@ class NativeEngine:
             got, rb = self._ack >= k, self._ack_rb
         if not got:
             self._timeouts += 1
-            if self._timeouts >= 8 and self.ready:       # 2 s without an answer: stuck, start it again
-                logging.warning("native GPU engine stopped answering: starting it again")
+            quiet = time.monotonic() - self._last_ack
+            if quiet >= self.STALL_SECS and self.ready:  # really stuck (not just a busy PC): start it again
+                logging.warning("native GPU engine gave no answer for %.0f s: starting it again", quiet)
+                STATE["running"] = False
+                p = self._proc
+                if p is not None:
+                    p._stalled = True           # the reader then restarts it once the process has ended
                 self._kill()
             return None
         self._timeouts = 0
