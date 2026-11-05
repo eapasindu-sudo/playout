@@ -198,6 +198,13 @@ class Health:
             if _d.STATE.get("missing"):
                 add("Graphics driver", "warn", "No graphics card driver: " + ", ".join(c["name"] for c in _d.STATE["cards"]) +
                     ". Settings > Output > Install graphics driver")
+            import gpuengine as _ge
+            if _ge.available() or _ge.STATE.get("error"):
+                if _ge.active() is not None:
+                    add("GPU engine", "ok", f"Mixing and CGs on the GPU ({_ge.STATE.get('gpu') or 'graphics card'})")
+                else:
+                    add("GPU engine", "bad", "Not running: mixing and CGs are on the CPU now, Playout keeps trying to start it" +
+                        (f" ({_ge.STATE['error'][:140]})" if _ge.STATE.get("error") else ""))
             import gpucg as _g
             if _g.STATE.get("gpu") is not None:
                 add("CG blending", "ok" if _g.STATE["gpu"] else "warn",
