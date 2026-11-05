@@ -321,6 +321,7 @@ class CGLayer:
         if self._player:
             self._player.close()
             self._player = None
+        self._fx = None                  # its FFmpeg filter graph (and threads) go too
         self._replay = None
         self._drop_cache()
 
