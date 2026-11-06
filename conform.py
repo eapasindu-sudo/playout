@@ -74,6 +74,29 @@ def convert(path, fps, width, height, ffmpeg):
     return target(path, fps)
 
 
+def _cuda_command(ffmpeg, src, tmp, fps, width, height):
+    """NVIDIA only: decode, resize and encode on the graphics card (about 7x faster for 4K). A clip with
+    another shape gets its bars added on the CPU after the resize, which is cheap at the program size."""
+    i = _info(src)
+    if gpu.resolve("auto") != "h264_nvenc" or not i or not i[1] or not i[2]:
+        return None
+    w, h = i[1], i[2]
+    same_shape = abs(w * height - h * width) <= max(w, h)
+    if same_shape:
+        vf = f"fps={fps},scale_cuda={width}:{height}:format=yuv420p"
+    else:
+        s = min(width / w, height / h)
+        sw, sh = max(2, int(w * s) // 2 * 2), max(2, int(h * s) // 2 * 2)
+        vf = (f"fps={fps},scale_cuda={sw}:{sh}:format=nv12,hwdownload,format=nv12,"
+              f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p")
+    gop = str(int(round(float(fps))))
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-progress", "pipe:1",
+            "-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", src, "-map", "0:v:0", "-map", "0:a?",
+            "-vf", vf, "-c:v", "h264_nvenc", "-preset", "p5", "-b:v", "20M", "-maxrate", "30M",
+            "-bufsize", "40M", "-g", gop, "-bf", "0", "-c:a", "aac", "-b:a", "256k", "-ar", "48000",
+            "-movflags", "+faststart", "-f", "mp4", tmp]
+
+
 def _command(ffmpeg, src, tmp, fps, width, height):
     enc = gpu.resolve("auto")
     vf = (f"fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease:flags=bicubic,"
@@ -115,10 +138,33 @@ def _convert(path, fps, width, height, ffmpeg, name):
             total = (c.duration or 0) / 1_000_000
     except Exception:
         pass
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     STATUS[name] = "converting 0%"
+    cuda = None
+    try:
+        cuda = _cuda_command(ffmpeg, path, tmp, fps, width, height)
+    except Exception:
+        cuda = None
+    if cuda:
+        try:
+            logging.info("clip converter: %s -> %s fps %dx%d on the GPU", name, fps, width, height)
+            _run(cuda, tmp, total, name)
+            os.replace(tmp, dst)
+            STATUS[name] = "ready"
+            logging.info("clip converter: %s ready", name)
+            return
+        except Exception as e:
+            logging.info("clip converter: GPU convert of %s failed (%s), using the CPU", name, e)
+            STATUS[name] = "converting 0%"
     logging.info("clip converter: %s -> %s fps %dx%d", name, fps, width, height)
-    p = subprocess.Popen(_command(ffmpeg, path, tmp, fps, width, height), stdout=subprocess.PIPE,
+    _run(_command(ffmpeg, path, tmp, fps, width, height), tmp, total, name)
+    os.replace(tmp, dst)
+    STATUS[name] = "ready"
+    logging.info("clip converter: %s ready", name)
+
+
+def _run(cmd, tmp, total, name):
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, creationflags=flags)
     try:
         import psutil
@@ -138,6 +184,3 @@ def _convert(path, fps, width, height, ffmpeg, name):
         except OSError:
             pass
         raise RuntimeError((err[-1] if err else f"exit code {p.returncode}"))
-    os.replace(tmp, dst)
-    STATUS[name] = "ready"
-    logging.info("clip converter: %s ready", name)
