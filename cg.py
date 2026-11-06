@@ -237,6 +237,8 @@ class CGLayer:
         self.ticks += 1
         self.audio = None
         if self.state == "off":
+            if self._player is not None or self._cache:
+                self._release()      # went off another way (its video ended, a timer took it out): free it too
             return None
         if self.state == "wait":
             if self.ticks >= self.delay_frames:
