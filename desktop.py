@@ -100,6 +100,22 @@ def _above_normal():
         pass
 
 
+def _shutdown_then_exit(server, code=0, limit=8.0):
+    """Close the engine, then end the process. If a part of the close hangs (NDI, the GPU engine, a
+    recording), end anyway after `limit` s, so no half-closed Playout keeps python312.dll and port 8080."""
+    t = threading.Timer(limit, lambda: (print(f"shutdown took over {limit:.0f}s, forcing exit", flush=True),
+                                        os._exit(code & 0x7FFFFFFF)))
+    t.daemon = True
+    t.start()
+    try:
+        if server is not None:
+            server.shutdown()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    os._exit(code & 0x7FFFFFFF)
+
+
 def main():
     if "--composer" in sys.argv:
         import composer
@@ -169,9 +185,7 @@ def main():
         loading.destroy()
 
     webview.start(boot)       # returns when every window is closed
-    if result["server"] is not None:
-        result["server"].shutdown()
-    return result["code"]
+    _shutdown_then_exit(result["server"], result["code"] or 0)
 
 
 def start_server(say=print):
@@ -196,15 +210,13 @@ def start_server(say=print):
 
     def install_update():
         """The update installer is running: close cleanly (exit 0, so the launcher does not restart us)."""
-        server.shutdown()
-        os._exit(0)
+        _shutdown_then_exit(server, 0)
 
     server.updater.on_install = install_update
 
     def restart():
         """Settings > Output format: close and let the launcher start Playout again."""
-        server.shutdown()
-        os._exit(EXIT_RESTART)
+        _shutdown_then_exit(server, EXIT_RESTART)
 
     if paths.FROZEN and "--app" in sys.argv:
         server.restart_hook = restart
