@@ -31,6 +31,11 @@ def install():
     h = _Ring(logging.INFO)
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(threadName)s: %(message)s"))
     root = logging.getLogger()
+    if not root.handlers:                    # also write them to the log file (desktop.py points stderr at it);
+        out = logging.StreamHandler()        # with only the in-memory handler nothing after start reached playout.log
+        out.setLevel(logging.INFO)
+        out.setFormatter(h.formatter)
+        root.addHandler(out)
     root.addHandler(h)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)     # not every page request
     if root.level > logging.INFO or root.level == logging.NOTSET:
