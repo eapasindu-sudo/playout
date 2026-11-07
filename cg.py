@@ -39,6 +39,29 @@ _cache_lock = threading.Lock()
 _cache_used = 0
 
 
+_gc_lock = threading.Lock()
+_gc_due = [False]
+
+
+def _collect_soon():
+    """PyAV filter graphs and decoders sit in reference cycles: they (with their FFmpeg threads and frame
+    memory) are only freed by Python's cycle collector, which rarely runs when most memory is native. Run it
+    a moment after a CG gives its video back, off the output thread."""
+    with _gc_lock:
+        if _gc_due[0]:
+            return
+        _gc_due[0] = True
+
+    def run():
+        import gc
+        with _gc_lock:
+            _gc_due[0] = False
+        gc.collect()
+    t = threading.Timer(1.5, run)
+    t.daemon = True
+    t.start()
+
+
 def _cache_take(n):
     global _cache_used
     with _cache_lock:
@@ -339,10 +362,13 @@ class CGLayer:
         self._close_video()
 
     def _close_video(self):
+        had = self._player is not None or self._fx is not None
         if self._player:
             self._player.close()
             self._player = None
         self._fx = None                  # its FFmpeg filter graph (and threads) go too
+        if had:
+            _collect_soon()
         self._replay = None
         self._drop_cache()
 
