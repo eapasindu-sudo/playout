@@ -264,6 +264,8 @@ class ClipPlayer:
     def _decode_audio(self):
         try:
             with av.open(self.path) as c:
+                if not c.streams.audio:
+                    return                     # no sound track (logo / L ad videos): silence, as before
                 aus = c.streams.audio[0]
                 vs = c.streams.video[0] if c.streams.video else None
                 # the in point is measured from the video's start, as the picture side does
