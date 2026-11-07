@@ -195,6 +195,7 @@ class CGLayer:
         self._fx = None
         self._cache, self._cache_bytes, self._cache_ok = [], 0, True
         self._replay = None      # index into _cache while replaying a looped CG from memory
+        self._full = False       # _cache holds the whole loop: kept off air, so the next IN plays it from memory
         if not os.path.isfile(self.path) or not self.kind:
             self.error = "file missing"
             self.state = "off"
@@ -226,7 +227,11 @@ class CGLayer:
 
     def take_in(self):
         if self.state in ("out", "off"):
-            if (self.kind == "video" and self._player is None and self._replay is None
+            if self.state == "off":
+                self.on_ticks = 0                          # a timer CG's seconds start again
+            if getattr(self, "_full", False) and self._cache and self._player is None:
+                self._replay = self._replay or 0           # play the loop again from memory
+            elif (self.kind == "video" and self._player is None and self._replay is None
                     and not self.error):
                 self._player = self._open_video()     # its decoder was given back when it went off air
             self.state = "in"
@@ -283,6 +288,7 @@ class CGLayer:
             if self.cfg.get("loop", True) and self.state != "off":
                 if self._cache_ok and self._cache:
                     self._player = None
+                    self._full = True
                     self._replay = 0
                     return self._frame(n)
                 self._drop_cache()
@@ -315,8 +321,18 @@ class CGLayer:
     def _drop_cache(self):
         _cache_give(self._cache_bytes)
         self._cache, self._cache_bytes = [], 0
+        self._full = False
 
     def _release(self):
+        if getattr(self, "_full", False) and self._cache:
+            # the whole loop is in memory (within the CG budget): keep only that, so a timer CG coming
+            # back IN costs no decoding (no CPU spike) and no new frames (memory stays flat)
+            if self._player:
+                self._player.close()
+                self._player = None
+            self._fx = None
+            self._replay = None
+            return
         self._close_video()
 
     def close(self):
@@ -509,7 +525,8 @@ class CGManager:
             if cfg is None:
                 return False
             layer = self._manual_layers.get(cid)
-            if layer and (layer.visible or getattr(layer, "warm", False) or isinstance(layer, WebLayer) and not layer.dead):
+            if layer and (layer.visible or getattr(layer, "warm", False) or getattr(layer, "_full", False)
+                          or isinstance(layer, WebLayer) and not layer.dead):
                 layer.warm = False
                 layer.take_in()
                 return True

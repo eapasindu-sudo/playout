@@ -33,6 +33,7 @@ class ExtraOutput:
         self.sent = 0
         self.error = ""
         self._running = True
+        self._watched, self._seen_t = True, 0.0
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"ndi {name}")
         self._thread.start()
 
@@ -46,6 +47,13 @@ class ExtraOutput:
                 video, audio, _frames = self._q.get(timeout=0.5)
             except Exception:
                 continue
+            now = time.monotonic()
+            if now - self._seen_t > 1.0:               # who is watching, checked about once a second
+                self._seen_t = now
+                c = self.out.connections()
+                self._watched = c is None or c > 0
+            if not self._watched:
+                continue        # nobody is receiving this output: skip the mixing and sending (CPU)
             try:
                 if self.compose is not None:
                     video = self.compose(video)
