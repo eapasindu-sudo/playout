@@ -1,4 +1,5 @@
 """NDI input (vMix program feed) and NDI output, built on cyndilib."""
+import logging
 import collections
 import threading
 import time
@@ -356,8 +357,11 @@ class _Pacer:
                     self._last = item
                 try:
                     self.sender.write_video_and_audio(item[0], item[1])
-                except Exception:
-                    pass
+                except Exception as e:
+                    now = time.monotonic()
+                    if now - getattr(self, "_err_t", 0.0) > 60:        # at most one line a minute
+                        self._err_t = now
+                        logging.warning("NDI send failed: %s", e)
                 if time.perf_counter() - due > 1.0:  # the PC stalled for over a second: start over
                     break
             self._debt = 0

@@ -2108,8 +2108,18 @@ def _squeeze_auto():
 
 def _watchdog():
     """If the output loop freezes, quit so the Playout launcher restarts it (and it resumes)."""
+    last_note = time.monotonic()
     while True:
         time.sleep(2)
+        if time.monotonic() - last_note >= 600:     # a line every 10 min, so the log shows Playout was alive
+            last_note = time.monotonic()
+            try:
+                st = sysmon.stats
+                logging.info("running: %s, CPU %s%%, RAM %s%%, streams %s, recording %s", engine.state,
+                             st.get("cpu"), st.get("ram"), [d.slot for d in streamer.dests if d.enabled],
+                             bool(recorder.recording))
+            except Exception:
+                pass
         if engine._running and time.monotonic() - engine.heartbeat > 15:
             print(f"watchdog: output loop stuck for {time.monotonic() - engine.heartbeat:.0f}s, restarting", flush=True)
             import faulthandler
