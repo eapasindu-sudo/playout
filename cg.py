@@ -226,6 +226,9 @@ class CGLayer:
 
     def take_in(self):
         if self.state in ("out", "off"):
+            if (self.kind == "video" and self._player is None and self._replay is None
+                    and not self.error):
+                self._player = self._open_video()     # its decoder was given back when it went off air
             self.state = "in"
 
     @property
@@ -237,7 +240,7 @@ class CGLayer:
         self.ticks += 1
         self.audio = None
         if self.state == "off":
-            if self._player is not None or self._cache:
+            if (self._player is not None or self._cache) and not getattr(self, "warm", False):
                 self._release()      # went off another way (its video ended, a timer took it out): free it too
             return None
         if self.state == "wait":
