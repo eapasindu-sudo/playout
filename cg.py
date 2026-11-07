@@ -23,7 +23,7 @@ from PIL import Image
 
 import gpucg
 
-from cgfx import FxGraph, render_still
+from cgfx import FxGraph, cpu_key, render_still
 from textcg import TextLayer
 from media import ClipPlayer, open_video, probe
 
@@ -154,6 +154,18 @@ def _inplace_works():
 _INPLACE = _inplace_works()   # a Pillow that copies on paste: blend a copy and write it back
 
 
+def _gpu_keys():
+    """Chroma keys are done by the GPU engine while it is running (config.json "cg_gpu_key": false turns it off)."""
+    try:
+        import gpuengine
+        return bool(gpuengine.STATE.get("running")) and GPU_KEY
+    except Exception:
+        return False
+
+
+GPU_KEY = True
+
+
 def composite(dst, src, x, y, opacity=255):
     """Alpha-blend src (h,w,4 BGRA) onto dst (H,W,4 BGRA) at x,y, in place, region only.
     See-through margins of the CG are skipped, and the blend runs in C on the picture itself."""
@@ -234,7 +246,7 @@ class CGLayer:
 
     def _process(self, frame):
         if self._fx is None:
-            self._fx = FxGraph(self.cfg, frame.width, frame.height, frame.format.name)
+            self._fx = FxGraph(self.cfg, frame.width, frame.height, frame.format.name, gpu_key=_gpu_keys())
         img, off = self._fx.process(frame)
         return (img, off) if img is not None else None
 
@@ -830,6 +842,7 @@ class CGManager:
             src, copy = compose(np.asarray(src).reshape(self.height, self.width, 4), ov, ox, oy, box, keyed, op), False
             layers = layers[1 + sq["over"]:]
         layers = [L for L in layers if not isinstance(L[0], gpuengine.WebTex)]
+        layers = [(cpu_key(L[0]),) + tuple(L[1:]) if getattr(L[0], "gpu_key", None) else L for L in layers]
         if not layers:
             return np.asarray(src).reshape(-1)
         gl = gpucg.compositor()

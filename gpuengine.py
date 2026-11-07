@@ -33,6 +33,14 @@ HEADER = 256
 MAX_SAMPLES = 8192
 CLIP_SLOTS = 4                  # clip pictures decoded ahead in pgpu (keep with pgpu.cc)
 CLIP_PIXELS = 4096              # where the clip pictures start in a clip's shared memory
+def _keyed(layer, img):
+    """A CG picture with its chroma key still to do: the engine keys it as it draws it."""
+    k = getattr(img, "gpu_key", None)
+    if k is not None:
+        layer["key"] = [round(float(v), 5) for v in k]
+    return layer
+
+
 STATE = {"running": False, "gpu": "", "error": "", "restarts": 0, "stats": ""}   # health / diagnostics
 
 _engine = None
@@ -366,7 +374,7 @@ class NativeEngine:
             for img, x, y, op in jobs[0]["under"]:
                 nid, used = self._image(img, up, used)
                 if nid is not None:
-                    under.append({"img": nid, "x": int(x), "y": int(y), "o": int(op)})
+                    under.append(_keyed({"img": nid, "x": int(x), "y": int(y), "o": int(op)}, img))
             jobs = jobs[1:]
         for img, x, y, op in jobs:
             if isinstance(img, WebTex):
@@ -374,7 +382,7 @@ class NativeEngine:
                 continue
             nid, used = self._image(img, up, used)
             if nid is not None:
-                layers.append({"img": nid, "x": int(x), "y": int(y), "o": int(op)})
+                layers.append(_keyed({"img": nid, "x": int(x), "y": int(y), "o": int(op)}, img))
         if self._drop:
             self._send({"op": "drop", "ids": self._drop})
             self._drop = []
