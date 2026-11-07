@@ -63,9 +63,8 @@ def _hex(c):
 class FxGraph:
     """FFmpeg filter graph for one CG; push decoded frames, get BGRA numpy images back."""
 
-    def __init__(self, cfg, src_w, src_h, src_format, gpu_key=False):
+    def __init__(self, cfg, src_w, src_h, src_format):
         self.cfg = cfg
-        self.gpu_key = None      # chroma key done by the GPU engine when it draws the CG: (r, g, b, sim, blend, spill, blue)
         (x1, y1, x2, y2), (w, h), self.offset = geometry(cfg, src_w, src_h)
         self.size = (w, h)
         self.rotate = _f(cfg.get("rotate"), 0) % 360
@@ -78,13 +77,7 @@ class FxGraph:
             add("crop", f"w={x2 - x1}:h={y2 - y1}:x={x1}:y={y1}")
         add("scale", f"w={w}:h={h}:flags=bicubic")
         key = cfg.get("key") or "none"
-        if key == "chroma" and gpu_key:
-            r, g_, b = _rgb(cfg.get("key_color"))
-            self.gpu_key = (r, g_, b, 0.01 + 0.5 * _f(cfg.get("key_similarity"), 25) / 100,
-                            0.3 * _f(cfg.get("key_blend"), 15) / 100, _f(cfg.get("key_spill"), 0) / 100,
-                            1.0 if _is_blue(cfg.get("key_color")) else 0.0)
-            self.trim = False
-        elif key == "chroma":
+        if key == "chroma":
             sim = 0.01 + 0.5 * _f(cfg.get("key_similarity"), 25) / 100
             blend = 0.3 * _f(cfg.get("key_blend"), 15) / 100
             add("format", "yuva420p")
@@ -133,48 +126,7 @@ class FxGraph:
             cols = np.flatnonzero(a[rows[0]:rows[-1] + 1].any(axis=0))
             img = img[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
             dx, dy = dx + int(cols[0]), dy + int(rows[0])
-        img = np.ascontiguousarray(img)
-        if self.gpu_key is not None:
-            img = img.view(KeyedImage)
-            img.gpu_key = self.gpu_key
-        return img, (dx, dy)
-
-
-class KeyedImage(np.ndarray):
-    """A CG picture whose chroma key is still to be done: the GPU engine keys it as it draws it (.gpu_key)."""
-    gpu_key = None
-
-
-def cpu_key(img):
-    """The same chroma key on the CPU (only when the GPU engine is not drawing this frame)."""
-    k = getattr(img, "gpu_key", None)
-    if k is None:
-        return img
-    r, g, b, sim, blend, spill, blue = k
-    f = np.asarray(img, np.float32) / 255.0
-    B, G, R = f[..., 0], f[..., 1], f[..., 2]
-    du = (-0.1146 * R - 0.3854 * G + 0.5 * B) - (-0.1146 * r - 0.3854 * g + 0.5 * b)
-    dv = (0.5 * R - 0.4542 * G - 0.0458 * B) - (0.5 * r - 0.4542 * g - 0.0458 * b)
-    d = np.sqrt(du * du + dv * dv) / 1.41421356
-    a = np.clip((d - sim) / blend, 0, 1) if blend > 1e-4 else (d > sim).astype(np.float32)
-    out = np.array(img, np.uint8)
-    if spill > 0:
-        if blue:
-            m = np.maximum(R, G)
-            out[..., 0] = (np.where(B > m, B + (m - B) * spill, B) * 255).astype(np.uint8)
-        else:
-            m = np.maximum(R, B)
-            out[..., 1] = (np.where(G > m, G + (m - G) * spill, G) * 255).astype(np.uint8)
-    out[..., 3] = (f[..., 3] * a * 255).astype(np.uint8)
-    return out
-
-
-def _rgb(c):
-    c = (c or "#00ff00").lstrip("#")
-    try:
-        return int(c[0:2], 16) / 255.0, int(c[2:4], 16) / 255.0, int(c[4:6], 16) / 255.0
-    except ValueError:
-        return 0.0, 1.0, 0.0
+        return np.ascontiguousarray(img), (dx, dy)
 
 
 def _is_blue(c):
