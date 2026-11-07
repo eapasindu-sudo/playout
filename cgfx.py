@@ -60,6 +60,14 @@ def _hex(c):
     return "0x" + (c if len(c) == 6 else "00ff00")
 
 
+def gpu_key_params(cfg):
+    """The chroma key as the GPU engine does it: (r, g, b, similarity, blend, spill, blue)."""
+    r, g, b = _rgb(cfg.get("key_color"))
+    return (r, g, b, 0.01 + 0.5 * _f(cfg.get("key_similarity"), 25) / 100,
+            0.3 * _f(cfg.get("key_blend"), 15) / 100, _f(cfg.get("key_spill"), 0) / 100,
+            1.0 if _is_blue(cfg.get("key_color")) else 0.0)
+
+
 class FxGraph:
     """FFmpeg filter graph for one CG; push decoded frames, get BGRA numpy images back."""
 
@@ -79,10 +87,7 @@ class FxGraph:
         add("scale", f"w={w}:h={h}:flags=bicubic")
         key = cfg.get("key") or "none"
         if key == "chroma" and gpu_key:
-            r, g_, b = _rgb(cfg.get("key_color"))
-            self.gpu_key = (r, g_, b, 0.01 + 0.5 * _f(cfg.get("key_similarity"), 25) / 100,
-                            0.3 * _f(cfg.get("key_blend"), 15) / 100, _f(cfg.get("key_spill"), 0) / 100,
-                            1.0 if _is_blue(cfg.get("key_color")) else 0.0)
+            self.gpu_key = gpu_key_params(cfg)
             self.trim = False
         elif key == "chroma":
             sim = 0.01 + 0.5 * _f(cfg.get("key_similarity"), 25) / 100
