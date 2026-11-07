@@ -23,7 +23,7 @@ from PIL import Image
 
 import gpucg
 
-from cgfx import FxGraph, cpu_key, render_still
+from cgfx import FxGraph, KeyedImage, cpu_key, geometry, gpu_key_params, render_still
 from textcg import TextLayer
 from media import ClipPlayer, open_video, probe
 
@@ -164,6 +164,7 @@ def _gpu_keys():
 
 
 GPU_KEY = True
+GPU_DECODE = True    # CG videos decoded by the GPU engine (config.json "cg_gpu_decode": false turns it off)
 
 
 def composite(dst, src, x, y, opacity=255):
@@ -250,9 +251,62 @@ class CGLayer:
         img, off = self._fx.process(frame)
         return (img, off) if img is not None else None
 
+    def _native_size(self):
+        """(w, h, (dx, dy)) when the GPU engine can decode this CG itself (d3d11va, BGRA at the CG size on the
+        graphics card): engine running, no crop or rotate, chroma key or none, and a video with no alpha of its own."""
+        if not _gpu_keys() or not GPU_DECODE:
+            return None
+        cfg = self.cfg
+        key = cfg.get("key") or "none"
+        if key not in ("none", "chroma") or len(cfg.get("crop") or []) == 4:
+            return None
+        try:
+            if float(cfg.get("rotate") or 0) % 360:
+                return None
+        except (TypeError, ValueError):
+            return None
+        if getattr(self, "_native_geom", None) is None:
+            self._native_geom = False
+            try:
+                import av
+                with av.open(self.path) as c:
+                    vs = c.streams.video[0]
+                    fmt = vs.codec_context.pix_fmt or ""
+                    if "a" in fmt.replace("gray", "") or vs.codec_context.name in ("qtrle", "png", "prores_ks"):
+                        return None    # its own alpha: kept on the FFmpeg path
+                    sw, sh = vs.codec_context.width, vs.codec_context.height
+                _, (w, h), off = geometry(cfg, sw, sh)
+                if w * h <= 3840 * 2160:
+                    self._native_geom = (w, h, off)
+            except Exception:
+                return None
+        return self._native_geom or None
+
     def _open_video(self):
+        nat = self._native_size()
+        if nat is not None:
+            w, h, off = nat
+            k = gpu_key_params(self.cfg) if (self.cfg.get("key") or "none") == "chroma" else None
+            self._native = (w, h, off, k)
+            self._raw = None
+            return ClipPlayer(self.path, w, h, Fraction_from(self.fps))
+        self._native = None
         # decodes ahead on its own thread; the key / crop / rotate runs there too
         return ClipPlayer(self.path, 2, 2, Fraction_from(self.fps), process=self._process)
+
+    def _wrap(self, pic):
+        """A picture from the GPU engine's decoder, as a CG picture (keyed there when it is drawn)."""
+        if pic is None or self._native is None:
+            return pic
+        if pic is self._raw:
+            return self._last
+        w, h, off, k = self._native
+        img = pic.reshape(h, w, 4)
+        if k is not None:
+            img = img.view(KeyedImage)
+            img.gpu_key = k
+        self._raw = pic
+        return (img, off)
 
     def take_out(self):
         if self.state in ("wait",):
@@ -337,6 +391,8 @@ class CGLayer:
         if not p.ready():
             return self._last
         pic, audio = p.next_frame(n)
+        if getattr(self, "_native", None) is not None:
+            pic = self._wrap(pic)
         if self.want_audio:
             self.audio = audio
         if pic is not None and pic is not self._last:
