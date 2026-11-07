@@ -2004,7 +2004,12 @@ def start_backend():
         engine.message = "Playout restarted after an unexpected stop" + \
             (" (the item on air was not put back: it stopped Playout more than once)" if "--no-resume" in sys.argv else "")
     out = store.data.get("live_out") or {}
-    if crashed and "--no-resume" not in sys.argv and (out.get("streams") or out.get("rec")):
+    gone = time.time() - float(out.get("at") or 0)
+    if crashed and gone > LIVE_RESUME_SECS and (out.get("streams") or out.get("rec")):
+        # off for long (PC shut down / power cut): do not go live again on its own, the show is over
+        print(f"after an unexpected stop: off for {gone:.0f}s, streams / recording left off")
+        engine.message = "Playout restarted after a long stop: streaming and recording were left off"
+    elif crashed and "--no-resume" not in sys.argv and (out.get("streams") or out.get("rec")):
         # the streams / recording that were on go on again, so a crash does not end the show for viewers
         for slot in out.get("streams") or []:
             if isinstance(slot, int) and 0 <= slot < len(streamer.dests) and streamer.dests[slot].url.strip():
@@ -2017,16 +2022,21 @@ def start_backend():
     threading.Thread(target=_squeeze_auto, daemon=True, name="squeeze timer").start()
 
 
+LIVE_RESUME_SECS = 300      # streams / recording go on again only after a restart within this time
+
+
 def _air_saver():
     """Remembers what is on air (and since when), so a restart can carry on."""
     last = lastout = None
+    stamp = 0.0
     while True:
         time.sleep(1)
         try:
             out = {"streams": [d.slot for d in streamer.dests if d.enabled], "rec": bool(recorder.recording)}
-            if out != lastout:
-                store.set(live_out=out)
-                lastout = out
+            now = time.time()
+            if out != lastout or ((out["streams"] or out["rec"]) and now - stamp > 30):
+                store.set(live_out=dict(out, at=now))      # "at": when it was last seen live
+                lastout, stamp = out, now
         except Exception:
             pass
         try:
