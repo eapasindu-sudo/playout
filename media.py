@@ -202,6 +202,10 @@ class ClipPlayer:
                     raise RuntimeError("no video stream")
                 vs.thread_type = "AUTO"
                 hw = bool(getattr(vs.codec_context, "is_hwaccel", False))
+                if self.process is not None and not hw:
+                    # a CG (logo, L ad...) is small and plays next to the program clip, the stream and the
+                    # recording: 2 decoder threads, not one per core for each CG (4-core PCs ran out of CPU)
+                    vs.codec_context.thread_count = 2
                 DECODE["codec"] = vs.codec_context.name
                 checked = False
                 self._has_audio = aus is not None

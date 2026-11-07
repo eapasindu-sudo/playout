@@ -23,11 +23,13 @@ def frames(layer, n):
 
 def main():
     d = tempfile.mkdtemp()
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:r=25:d=2",
-                    "-pix_fmt", "yuv420p", os.path.join(d, "t.mp4")], check=True)
+    for name, secs in (("t.mp4", 2), ("s.mp4", 1)):
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        f"testsrc=s=320x180:r=25:d={secs}", "-pix_fmt", "yuv420p", os.path.join(d, name)], check=True)
     m = cg.CGManager(d, 1920, 1080, 25)
     m.manual = [{"id": "w", "file": "t.mp4", "kind": "video", "loop": True},
-                {"id": "t", "file": "t.mp4", "kind": "video", "loop": True, "duration": 1}]
+                {"id": "t", "file": "t.mp4", "kind": "video", "loop": True, "duration": 1},
+                {"id": "s", "file": "s.mp4", "kind": "video", "loop": True, "duration": 2}]
     m._warm_all()
     time.sleep(3)
     w = m._manual_layers["w"]
@@ -53,7 +55,29 @@ def main():
         assert layer._player is None and not layer._cache, f"timer play {i}: decoder / frames kept"
     assert cg._cache_used == 0, f"{cg._cache_used} bytes of CG frames still held"
     assert threading.active_count() <= threads0 + 2, "decoder threads pile up"
-    print("OK: CGs show on IN, timer plays give everything back (20 plays)")
+
+    # a short loop that plays through whole: kept in memory off air, later plays decode nothing
+    held = None
+    for i in range(10):
+        m.take_in("s")
+        layer = m._manual_layers["s"]
+        decoding = 0
+        shown = 0
+        for _ in range(80):
+            if layer.tick():
+                shown += 1
+            if layer._player is not None:
+                decoding += 1
+            time.sleep(0.04)
+        assert shown >= 45, f"short loop play {i}: showed {shown} frames"
+        assert layer.state == "off" and layer._player is None, f"short loop play {i}: decoder kept"
+        if i == 0:
+            held = cg._cache_used
+            assert held > 0, "short loop not kept in memory"
+        else:
+            assert decoding == 0, f"short loop play {i}: decoded again"
+            assert cg._cache_used == held, f"short loop play {i}: memory {cg._cache_used} != {held}"
+    print("OK: CGs show on IN, timer plays give everything back (20 plays), short loops replay from memory")
 
 
 if __name__ == "__main__":
