@@ -420,7 +420,7 @@ bool PickDevice() {
 
 // ---------------------------------------------------------------- the mixer
 const char* kShader = R"(
-cbuffer P : register(b0) { float4 rect; float4 uv; float4 prm; };
+cbuffer P : register(b0) { float4 rect; float4 uv; float4 prm; float4 key; float4 kp; };
 Texture2D tex : register(t0);
 SamplerState smp : register(s0);
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
@@ -433,6 +433,17 @@ V vs(uint id : SV_VertexID) {
 }
 float4 ps(V i) : SV_Target {
   float4 c = tex.Sample(smp, i.uv);
+  if (key.w > 0.5) {                   // chroma key (same maths as FFmpeg's chromakey + despill)
+    float2 cu = float2(-0.1146 * c.r - 0.3854 * c.g + 0.5 * c.b, 0.5 * c.r - 0.4542 * c.g - 0.0458 * c.b);
+    float2 ku = float2(-0.1146 * key.r - 0.3854 * key.g + 0.5 * key.b, 0.5 * key.r - 0.4542 * key.g - 0.0458 * key.b);
+    float d = length(cu - ku) / 1.41421356;
+    float a = kp.y > 0.0001 ? saturate((d - kp.x) / kp.y) : (d > kp.x ? 1.0 : 0.0);
+    if (kp.z > 0) {
+      if (kp.w > 0.5) { float m = max(c.r, c.g); if (c.b > m) c.b = lerp(c.b, m, kp.z); }
+      else { float m = max(c.r, c.b); if (c.g > m) c.g = lerp(c.g, m, kp.z); }
+    }
+    c.a *= a;
+  }
   if (prm.y < 0.5) c.rgb *= c.a;       // straight alpha (CG pictures) -> premultiplied
   if (prm.z > 0.5) return float4(saturate(c.rgb + prm.w), 1);   // plain copy (scaling, layouts), brightness
   return c * prm.x;                    // fade
@@ -443,6 +454,8 @@ struct Params {
   float rect[4];
   float uv[4];
   float prm[4];
+  float key[4];   // r, g, b (0..1), on
+  float kp[4];    // similarity, blend, spill, blue screen
 };
 
 class Mixer {
@@ -543,8 +556,19 @@ class Mixer {
 
   // draws src (its part u0..u1, v0..v1) at x, y (w x h pixels) over the target
   void Draw(Tex& src, float x, float y, float w, float h, float opacity, bool premultiplied, bool scale,
-            bool plain_copy = false, float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1, float bright = 0) {
-    Params p;
+            bool plain_copy = false, float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1, float bright = 0,
+            const float* chroma = nullptr) {
+    Params p = {};
+    if (chroma) {
+      p.key[0] = chroma[0];
+      p.key[1] = chroma[1];
+      p.key[2] = chroma[2];
+      p.key[3] = 1;
+      p.kp[0] = chroma[3];
+      p.kp[1] = chroma[4];
+      p.kp[2] = chroma[5];
+      p.kp[3] = chroma[6];
+    }
     p.rect[0] = x / tw_ * 2 - 1;
     p.rect[1] = 1 - y / th_ * 2;
     p.rect[2] = (x + w) / tw_ * 2 - 1;
@@ -2110,7 +2134,17 @@ void Frame(const Json& j) {
         if (it == g_images.end())
           continue;
         Tex& t = it->second;
-        g_mixer.Draw(t, x, y, static_cast<float>(t.w), static_cast<float>(t.h), op, false, false);
+        float chroma[7];
+        const float* ck = nullptr;
+        if (const Json* k = L.Get("key")) {
+          if (k->arr.size() >= 7) {
+            for (int ci = 0; ci < 7; ++ci)
+              chroma[ci] = static_cast<float>(k->arr[ci].num);
+            ck = chroma;
+          }
+        }
+        g_mixer.Draw(t, x, y, static_cast<float>(t.w), static_cast<float>(t.h), op, false, false, false,
+                     0, 0, 1, 1, 0, ck);
       }
     }
     if (squeezed && under_n > 0 && todo.size() == under_n)

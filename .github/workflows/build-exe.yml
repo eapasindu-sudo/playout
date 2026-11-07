@@ -45,9 +45,12 @@ jobs:
       - name: Built-in browser for web overlays (cefcg.exe + Chromium Embedded)
         shell: pwsh
         run: |
-          # the newest stable CEF "minimal" build for 64-bit Windows
+          # CEF is pinned: the GPU engine (pgpu.exe) is tested with this version on the Live PC. A newer CEF
+          # (from 1.0.155) stopped pgpu.exe starting on an RTX 3050; change it only after a pgpu start test there.
+          $cefPin = '150.0.23+g4ccc4ca+chromium-150.0.7871.287'
           $idx = Invoke-RestMethod https://cef-builds.spotifycdn.com/index.json
-          $v = $idx.windows64.versions | Where-Object channel -eq 'stable' | Select-Object -First 1
+          $v = $idx.windows64.versions | Where-Object cef_version -eq $cefPin | Select-Object -First 1
+          if (-not $v) { throw "CEF $cefPin is not in the CEF build index any more" }
           $f = $v.files | Where-Object type -eq 'minimal' | Select-Object -First 1
           "CEF $($v.cef_version) ($($f.name))"
           Invoke-WebRequest "https://cef-builds.spotifycdn.com/$($f.name)" -OutFile "$env:RUNNER_TEMP\cef.tar.bz2"
