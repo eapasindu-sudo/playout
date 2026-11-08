@@ -252,6 +252,7 @@ class NDIOutput:
         af.set_max_num_samples(max_samples or int(SAMPLE_RATE / float(fps)) + 8)
         self.sender.set_audio_frame(af)
         self.sender.open()
+        logging.info("NDI output on: %s (%dx%d)", name, width, height)
         if paced:
             self._pacer = _Pacer(self.sender, fps)
 
