@@ -1116,7 +1116,7 @@ async function poll() {
   if (S.live_source !== shownSource) fillSources();
   showMaster();
   meters(S.meters);
-  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for, atem_input}) => ({id, type, name, file, duration, fixed, source: source || '', atem_input: atem_input || 0, cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for, atem_input, loop}) => ({id, loop: !!loop, type, name, file, duration, fixed, source: source || '', atem_input: atem_input || 0, cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
   $('foWarn').classList.toggle('show', !!S.failover?.active);
   if (S.failover?.active) { tally.textContent = 'FILLER'; tally.className = 'tally pause'; }
@@ -1173,7 +1173,7 @@ function renderPlaylist() {
       <div style="min-width:0">
         <div style="display:flex; gap:8px; align-items:center; min-width:0">
           <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}" ${catColor(it)}>${it.type === 'live' ? 'LIVE' : catShort(it)}</span>
-          <span class="name">${esc(it.name)}</span>
+          <span class="name">${it.loop ? '&#10227; ' : ''}${esc(it.name)}</span>
         </div>
         <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.squeeze ? ` <span class="badge" style="background:#15803d" title="Squeeze Feed: ${esc(it.squeeze)}">SQUEEZE</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}${it.type === 'clip' && CHECK[it.file] ? ` <span class="badge" style="background:#b45309; cursor:help" title="${esc(CHECK[it.file].join('\n'))}">&#9888; CHECK</span>` : ''}</div>
         <div class="metrics">
@@ -1191,7 +1191,7 @@ function renderPlaylist() {
         <button class="sm" onclick="move(${i}, -1)">&#9650; Up</button>
         <button class="sm" onclick="move(${i}, 1)">&#9660; Down</button>
         <button class="sm" onclick="dup(${i})">Copy</button>
-        ${it.type === 'clip' ? `<button class="sm" onclick="loopClip(${i})" title="Play this clip again: copies go right under it">Loop</button>` : ''}
+        ${it.type === 'clip' ? `<button class="sm${it.loop ? ' on' : ''}" onclick="loopClip(${i})" title="Loop: this clip plays again and again until Next or another item is taken">&#10227; Loop</button>` : ''}
         <button class="sm" onclick="del(${i})">Delete</button>
         <div class="status" data-f="status"></div>
       </div>
@@ -1222,12 +1222,7 @@ function insertAt(items, where) {
 }
 function move(i, d) { const j = i + d; if (j < 0 || j >= PL.length) return; [PL[i], PL[j]] = [PL[j], PL[i]]; savePlaylist(); }
 async function del(i) { if (PL[i].id === S.on_air?.id && !await ask('This item is on air. Delete it anyway?')) return; PL.splice(i, 1); savePlaylist(); }
-function loopClip(i) {
-  const n = parseInt(window.prompt(`Loop "${PL[i].name}": how many more times should it play?`, '1'), 10);
-  if (!(n > 0)) return;
-  const copies = Array.from({length: Math.min(n, 50)}, () => { const c = {...PL[i]}; delete c.id; return c; });
-  PL.splice(i + 1, 0, ...copies); savePlaylist();
-}
+function loopClip(i) { PL[i].loop = !PL[i].loop; savePlaylist(); }
 function dup(i) { const c = {...PL[i]}; delete c.id; PL.splice(i + 1, 0, c); savePlaylist(); }
 async function clearPlaylist() { if (await ask('Clear the whole playlist? (On-air item keeps playing)')) { PL = []; savePlaylist(); } }
 

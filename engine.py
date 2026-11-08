@@ -718,6 +718,9 @@ class Engine:
         nxt = self._next_id() if self.on_air else None
         item = self._item(nxt)
         want = nxt if item and item["type"] == "clip" and nxt != self.on_air else None
+        cur = self._item(self.on_air) if self.on_air else None
+        if cur is not None and cur.get("type") == "clip" and cur.get("loop"):
+            want, item = cur["id"], cur       # a looped clip: its next play opened ahead, so it starts again at once
         if self.preload and self.preload[0] != want:
             self.preload[1].close()
             self.preload = None
@@ -750,6 +753,11 @@ class Engine:
         self.item_started = None
 
     def _item_done(self, depth=0):
+        cur = self._item(self.on_air)
+        if cur is not None and cur.get("type") == "clip" and cur.get("loop"):
+            self._finish("played")              # each play counts (as-run / ad report)
+            self._start(cur["id"], depth)       # a looped clip plays again until Next / another item is taken
+            return
         nxt = self._next_id()
         self._finish("played")
         if nxt and self.auto:
@@ -1081,7 +1089,7 @@ class Engine:
             left = item["duration"] - self.item_ticks / fps
         else:
             return
-        if left * fps <= self._cut_frames() and self._next_id():
+        if left * fps <= self._cut_frames() and self._next_id() and not (self._item(self.on_air) or {}).get("loop"):
             self._stinger_item = self.on_air
             self._fire_stinger()
 
