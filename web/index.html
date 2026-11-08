@@ -1191,6 +1191,7 @@ function renderPlaylist() {
         <button class="sm" onclick="move(${i}, -1)">&#9650; Up</button>
         <button class="sm" onclick="move(${i}, 1)">&#9660; Down</button>
         <button class="sm" onclick="dup(${i})">Copy</button>
+        ${it.type === 'clip' ? `<button class="sm" onclick="loopClip(${i})" title="Play this clip again: copies go right under it">Loop</button>` : ''}
         <button class="sm" onclick="del(${i})">Delete</button>
         <div class="status" data-f="status"></div>
       </div>
@@ -1221,6 +1222,12 @@ function insertAt(items, where) {
 }
 function move(i, d) { const j = i + d; if (j < 0 || j >= PL.length) return; [PL[i], PL[j]] = [PL[j], PL[i]]; savePlaylist(); }
 async function del(i) { if (PL[i].id === S.on_air?.id && !await ask('This item is on air. Delete it anyway?')) return; PL.splice(i, 1); savePlaylist(); }
+function loopClip(i) {
+  const n = parseInt(window.prompt(`Loop "${PL[i].name}": how many more times should it play?`, '1'), 10);
+  if (!(n > 0)) return;
+  const copies = Array.from({length: Math.min(n, 50)}, () => { const c = {...PL[i]}; delete c.id; return c; });
+  PL.splice(i + 1, 0, ...copies); savePlaylist();
+}
 function dup(i) { const c = {...PL[i]}; delete c.id; PL.splice(i + 1, 0, c); savePlaylist(); }
 async function clearPlaylist() { if (await ask('Clear the whole playlist? (On-air item keeps playing)')) { PL = []; savePlaylist(); } }
 
