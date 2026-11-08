@@ -339,25 +339,30 @@ class _Pacer:
             while self._running and idle < 25:
                 _wait_until(due)
                 due += self.period
+                skipped = None
                 with self.cv:
                     item = self.q.popleft() if self.q else None
                     if item is not None and self._debt and len(self.q) >= self.BUFFER:
-                        item = self.q.popleft()    # make up for a repeated frame
+                        skipped = item             # make up for a repeated frame: its picture is skipped,
+                        item = self.q.popleft()    # its sound still goes out (no gap, no click)
                         self._debt -= 1
                         self.dropped += 1
-                if item is None:
-                    if self._last is None:
-                        idle += 1
-                        continue
-                    idle += 1
-                    self.repeats += 1
-                    self._debt += 1
-                    item = (self._last[0], np.zeros_like(self._last[1]))
-                else:
-                    idle = 0
-                    self._last = item
                 try:
-                    self.sender.write_video_and_audio(item[0], item[1])
+                    if item is None:
+                        idle += 1
+                        if self._last is None:
+                            continue
+                        self.repeats += 1
+                        self._debt += 1
+                        # the picture again, and no sound: the sound of the late frame follows it unbroken
+                        # (silence put in here was heard as crackling in vMix)
+                        self.sender.write_video_async(self._last[0])
+                    else:
+                        idle = 0
+                        self._last = item
+                        if skipped is not None:
+                            self.sender.write_audio(skipped[1])
+                        self.sender.write_video_and_audio(item[0], item[1])
                 except Exception as e:
                     now = time.monotonic()
                     if now - getattr(self, "_err_t", 0.0) > 60:        # at most one line a minute
