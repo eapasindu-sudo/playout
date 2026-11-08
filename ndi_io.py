@@ -321,19 +321,24 @@ class NDIOutput:
         af = AudioSendFrame()
         af.sample_rate = SAMPLE_RATE
         af.num_channels = CHANNELS
-        af.set_max_num_samples(max_samples or int(SAMPLE_RATE / float(fps)) + 8)
+        # Every sound frame sent is exactly BLOCK samples. cyndilib lays a shorter frame out packed but tells NDI
+        # the channels are max_num_samples apart, so with a larger maximum (1920 + 8 before) the right channel
+        # came out 8 samples off with 8 stale ones each frame: a click 25 times a second (crackling in vMix).
+        self.block = int(round(SAMPLE_RATE / float(fps)))
+        af.set_max_num_samples(self.block)
         self.sender.set_audio_frame(af)
         self.sender.open()
+        self.out = _BlockSender(self.sender, self.block)
         logging.info("NDI output on: %s (%dx%d)", name, width, height)
         if paced:
-            self._pacer = _Pacer(self.sender, fps)
+            self._pacer = _Pacer(self.out, fps)
 
     def send(self, video, audio):
         audio = np.ascontiguousarray(audio, dtype=np.float32)   # NDI takes float32 only (mixing can give float64)
         if self._pacer is not None:
             self._pacer.push(video, audio)
         else:
-            self.sender.write_video_and_audio(video, audio)
+            self.out.write_video_and_audio(video, audio)
 
     def stats(self):
         """Pacer counts (None when not paced): repeats = frames sent again because none was ready."""
@@ -359,6 +364,39 @@ class NDIOutput:
         if self._pacer is not None:
             self._pacer.stop()
         self.sender.close()
+
+
+class _BlockSender:
+    """Sends sound in frames of exactly `block` samples (the rest waits for the next frame)."""
+
+    def __init__(self, sender, block):
+        self.sender = sender
+        self.block = block
+        self._carry = None
+
+    def _blocks(self, audio):
+        a = audio if self._carry is None else np.concatenate([self._carry, audio], axis=1)
+        n = a.shape[1] // self.block
+        out = [np.ascontiguousarray(a[:, i * self.block:(i + 1) * self.block], dtype=np.float32) for i in range(n)]
+        rest = a[:, n * self.block:]
+        self._carry = rest.copy() if rest.shape[1] else None
+        return out
+
+    def write_audio(self, audio):
+        for b in self._blocks(audio):
+            self.sender.write_audio(b)
+
+    def write_video_async(self, video):
+        self.sender.write_video_async(video)
+
+    def write_video_and_audio(self, video, audio):
+        blocks = self._blocks(audio)
+        if len(blocks) == 1:
+            self.sender.write_video_and_audio(video, blocks[0])
+            return
+        for b in blocks:
+            self.sender.write_audio(b)
+        self.sender.write_video_async(video)
 
 
 class _Pacer:
