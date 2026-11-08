@@ -2108,7 +2108,7 @@ def _squeeze_auto():
 
 def _watchdog():
     """If the output loop freezes, quit so the Playout launcher restarts it (and it resumes)."""
-    last_note = time.monotonic()
+    last_note = last_ndi = time.monotonic()
     while True:
         time.sleep(2)
         if time.monotonic() - last_note >= 600:     # a line every 10 min, so the log shows Playout was alive
@@ -2120,6 +2120,12 @@ def _watchdog():
                              bool(recorder.recording))
             except Exception:
                 pass
+        if time.monotonic() - last_ndi >= 60:
+            last_ndi = time.monotonic()
+            try:
+                engine.check_ndi_announce()
+            except Exception:
+                logging.exception("NDI output check")
         if engine._running and time.monotonic() - engine.heartbeat > 15:
             print(f"watchdog: output loop stuck for {time.monotonic() - engine.heartbeat:.0f}s, restarting", flush=True)
             import faulthandler
