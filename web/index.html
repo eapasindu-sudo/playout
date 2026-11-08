@@ -1078,35 +1078,40 @@ function parseDur(s) {
 const durText = d => d ? `${String(Math.floor(d/60)).padStart(2,'0')}:${String(Math.round(d%60)).padStart(2,'0')}` : '';
 
 // ---------------------------------------------------------------- polling
+// the window redraws only what changed: setting the same text again still costs a layout
+const _shown = {};
+function txt(id, v) { v = String(v); if (_shown['t' + id] !== v) { _shown['t' + id] = v; $(id).textContent = v; } }
+function htm(id, v) { v = String(v); if (_shown['h' + id] !== v) { _shown['h' + id] = v; $(id).innerHTML = v; } }
+function sty(id, k, v) { v = String(v); if (_shown[k + id] !== v) { _shown[k + id] = v; $(id).style[k] = v; } }
 async function poll() {
-  try { S = await api('/api/state'); } catch (e) { $('clock').textContent = 'OFFLINE'; return; }
+  try { S = await api('/api/state'); } catch (e) { txt('clock', 'OFFLINE'); return; }
   const now = new Date(S.now * 1000);
-  $('clock').textContent = now.toTimeString().slice(0, 8);
-  $('date').textContent = now.toLocaleDateString(undefined, {weekday:'short', day:'numeric', month:'short', year:'numeric'});
-  $('fmt').innerHTML = `${esc(S.format)}<br>NDI out: ${S.ndi_out ? esc(S.output) : 'off'}`;
+  txt('clock', now.toTimeString().slice(0, 8));
+  txt('date', now.toLocaleDateString(undefined, {weekday:'short', day:'numeric', month:'short', year:'numeric'}));
+  htm('fmt', `${esc(S.format)}<br>NDI out: ${S.ndi_out ? esc(S.output) : 'off'}`);
   const it = S.on_air;
   const isClip = it && it.type === 'clip';
-  $('oaTitle').textContent = it ? it.name : S.idle === 'bars' ? 'COLOUR BARS' : 'LIVE';
+  txt('oaTitle', it ? it.name : S.idle === 'bars' ? 'COLOUR BARS' : 'LIVE');
   $('oaTitle').className = 'title' + (isClip ? '' : ' live');
-  $('oaSub').textContent = isClip ? `media\\${it.file}` : srcStatus(it && it.source);
+  txt('oaSub', isClip ? `media\\${it.file}` : srcStatus(it && it.source));
   setThumb($('oaThumb'), it);
   const tally = $('tally');
   if (S.state === 'PAUSED') { tally.textContent = 'PAUSED'; tally.className = 'tally pause'; }
   else if (isClip) { tally.textContent = 'ON-AIR'; tally.className = 'tally air'; }
   else if (!it && S.idle === 'bars') { tally.textContent = 'BARS'; tally.className = 'tally pause'; }
   else { tally.textContent = 'LIVE'; tally.className = 'tally live'; }
-  $('cType').textContent = isClip ? 'CLIP' : (!it && S.idle === 'bars') ? 'BARS' : 'LIVE';
+  txt('cType', isClip ? 'CLIP' : (!it && S.idle === 'bars') ? 'BARS' : 'LIVE');
   if (S.stinger && JSON.stringify(S.stinger) !== JSON.stringify(STG)) { STG = S.stinger; showStinger(); }
-  $('cDur').textContent = it ? (it.duration ? tc(it.duration) : 'until Next') : '--:--:--.--';
-  $('cPos').textContent = it ? tc(S.position) : '--:--:--.--';
-  $('cRem').textContent = it && it.duration ? tc(S.remaining) : '--:--:--.--';
-  $('cPl').textContent = S.playlist_remaining != null ? tc(S.playlist_remaining) : '--:--:--.--';
-  $('cMode').textContent = S.auto ? 'Automatic' : 'Manual';
+  txt('cDur', it ? (it.duration ? tc(it.duration) : 'until Next') : '--:--:--.--');
+  txt('cPos', it ? tc(S.position) : '--:--:--.--');
+  txt('cRem', it && it.duration ? tc(S.remaining) : '--:--:--.--');
+  txt('cPl', S.playlist_remaining != null ? tc(S.playlist_remaining) : '--:--:--.--');
+  txt('cMode', S.auto ? 'Automatic' : 'Manual');
   $('bAuto').classList.toggle('on', S.auto); $('bMan').classList.toggle('on', !S.auto); $('bLoop').classList.toggle('on', S.loop);
-  $('msg').textContent = S.message || '';
-  $('pvProg').style.width = it && it.duration ? Math.min(100, 100 * S.position / it.duration) + '%' : '0';
+  txt('msg', S.message || '');
+  sty('pvProg', 'width', it && it.duration ? Math.min(100, 100 * S.position / it.duration) + '%' : '0');
   const tag = $('pvTag'); tag.textContent = isClip ? 'ON-AIR' : 'LIVE'; tag.style.background = isClip ? 'var(--red)' : 'var(--green)';
-  $('liveInfo').textContent = S.live_source ? (S.live_connected ? 'Live input connected' : 'Live input NOT connected: ' + (S.live_source.startsWith('dev:') ? 'check the USB cable / device' : 'check vMix NDI output is on')) : 'Pick the vMix NDI output or the Blackmagic USB above';
+  txt('liveInfo', S.live_source ? (S.live_connected ? 'Live input connected' : 'Live input NOT connected: ' + (S.live_source.startsWith('dev:') ? 'check the USB cable / device' : 'check vMix NDI output is on')) : 'Pick the vMix NDI output or the Blackmagic USB above');
   $('srcDot').className = 'dot ' + (S.live_source ? (S.live_connected ? 'ok' : 'bad') : '');
   if (S.live_source !== shownSource) fillSources();
   showMaster();
@@ -2172,14 +2177,16 @@ async function pollCG() {
   for (const c of cgManual) {
     const el = $('mc_' + c.id); if (!el) continue;
     const st = r.manual_on[c.id] || '';
-    el.className = 'cgrow ' + st;
+    if (el.className !== 'cgrow ' + st) el.className = 'cgrow ' + st;
     const live = st === 'on' || st === 'in';
-    el.querySelector('[data-f=st]').textContent = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
+    const stEl = el.querySelector('[data-f=st]');
+    const stTxt = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
       (c.live_only ? ' - live only' : '') + (c.auto_hour ? ` - auto ${c.auto_hour}x an hour${c.auto_live ? ' on live' : ''}` : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
+    if (stEl.textContent !== stTxt) stEl.textContent = stTxt;
     el.querySelector('.in').classList.toggle('red', live);
   }
   const card = r.card || [];
-  $('cgCard').textContent = card.length ? `Live card CG: ${card.filter(c => c.state === 'on').length}/${card.length} on` : '';
+  txt('cgCard', card.length ? `Live card CG: ${card.filter(c => c.state === 'on').length}/${card.length} on` : '');
 }
 function renderManual() {
   $('cgList').innerHTML = cgManual.map(c => `<div class="cgrow" id="mc_${c.id}">
@@ -2763,16 +2770,16 @@ const nativePv = {on: false, last: '', failed: false, since: 0, shown: -1};
   }
   next();
 })();
-poll(); setInterval(poll, 200);
+poll(); setInterval(() => { if (!document.hidden || Date.now() % 2000 < 200) poll(); }, 200);   // minimized: about every 2 s
 pollStream(); setInterval(pollStream, 1000);
 refreshSources(); setInterval(refreshSources, 5000); refreshDevices(); setInterval(refreshDevices, 5000);
 pollSys(); setInterval(pollSys, 2000);
 pollRec(); setInterval(() => pollRec(), 1000);
 pollAO(); setInterval(() => pollAO(), 5000);
-pollCG(); setInterval(pollCG, 500);
+pollCG(); setInterval(() => { if (!document.hidden) pollCG(); }, 500);
 pollUpdate(); setInterval(() => pollUpdate(), 3000);
-pollExtra(); setInterval(pollExtra, 2000);
-pollAtem(); setInterval(pollAtem, 700);
+pollExtra(); setInterval(() => { if (!document.hidden) pollExtra(); }, 2000);
+pollAtem(); setInterval(() => { if (!document.hidden) pollAtem(); }, 700);
 api('/api/settings').then(r => { NORM = r.audio; }).catch(() => {});
 </script>
 </body>
