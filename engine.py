@@ -272,6 +272,40 @@ class Engine:
                 threading.Timer(0.5, lambda: [o.close() for o in old]).start()
             return self.ndi_outputs()
 
+    def check_ndi_announce(self):
+        """The program NDI output must be on the network list. If it is missing there (receivers like vMix
+        cannot find it) while nothing is watching it, start it again under the same name; the LED / Clean outputs
+        that are listed show the network itself works."""
+        out = self.output
+        if out is None or (out.connections() or 0) > 0:
+            self._ndi_missing = 0
+            return
+        try:
+            names = self.finder.names()
+        except Exception:
+            return
+        suffix = f"({self.output_name})"
+        if any(n.endswith(suffix) for n in names):
+            self._ndi_missing = 0
+            return
+        self._ndi_missing = getattr(self, "_ndi_missing", 0) + 1
+        if self._ndi_missing < 2:                  # missing on two checks in a row (a new sender takes a moment)
+            return
+        self._ndi_missing = 0
+        self._ndi_restarts = getattr(self, "_ndi_restarts", 0) + 1
+        if self._ndi_restarts > 3:                 # it did not help: leave it (and the log) alone
+            return
+        logging.warning("NDI output %s is not on the network list (seen: %s): starting it again",
+                        self.output_name, ", ".join(names) or "none")
+        with self._lock:
+            old, self.output = self.output, None
+            try:
+                self.output = NDIOutput(self.output_name, self.width, self.height, self.fps, paced=True)
+            except Exception as e:
+                logging.warning("NDI output %s: %s", self.output_name, e)
+        if old is not None:
+            threading.Timer(0.5, old.close).start()
+
     def ndi_outputs(self):
         prog = None
         if self.output is not None:
