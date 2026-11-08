@@ -75,6 +75,12 @@ class LiveInput:
         self.dropped = 0
         self._stat_t = 0.0
         self._stat_total = None
+        self._abuf = None                # live sound waiting to go out (CHANNELS, samples)
+        self._prime = self.PRIME
+        self._primed = False
+        self._lvl = None
+        self.underruns = 0
+        self._under_t = 0.0
 
     def set_source(self, name):
         with self._lock:
@@ -134,7 +140,7 @@ class LiveInput:
             try:
                 fs = r.frame_sync
                 fs.capture_video()
-                fs.capture_audio(n_samples)
+                audio = self._take_audio(fs, n_samples)
                 self._stats(r)
                 video = None
                 w, h = self.video.get_resolution()
@@ -146,10 +152,66 @@ class LiveInput:
                     if not self.keep_alpha and self.fmt.get("alpha"):
                         video = video.copy()
                         video[3::4] = 255           # a source with alpha goes on air full screen, opaque
-                audio = fit_audio(pick_pair(self.audio.get_array(), self.audio_pair), n_samples)
                 return video, audio
             except Exception:
                 return None, None
+
+    # NDI hands over only the sound that has arrived, and vMix sends it in bursts: taking exactly one frame's
+    # worth each frame left 0.1 s gaps every 0.3 s (heard as crackling on the stream). The sound now goes
+    # through a small buffer: it starts once PRIME seconds are in, each frame takes exactly its samples, and
+    # the buffer grows a little after each time it runs dry, up to PRIME_MAX.
+    PRIME = 0.08
+    PRIME_MAX = 0.4
+
+    def _take_audio(self, fs, n):
+        rate = SAMPLE_RATE
+        avail = fs.audio_samples_available()
+        if avail > 0:
+            fs.capture_audio(avail)
+            a = _stereo(pick_pair(self.audio.get_array(), self.audio_pair))
+            if a is not None and a.shape[1]:
+                self._abuf = a if self._abuf is None else np.concatenate([self._abuf, a], axis=1)
+        buf = self._abuf
+        have = 0 if buf is None else buf.shape[1]
+        prime = int(self._prime * rate)
+        if not self._primed:
+            if have < n + prime:
+                return np.zeros((CHANNELS, n), np.float32)
+            self._primed = True
+        if have > n + prime + int(0.25 * rate):        # the source runs ahead of our clock: catch up
+            buf = buf[:, have - (n + prime):]
+            have = buf.shape[1]
+        if have < n:                                    # ran dry: wait for a bigger buffer
+            self.underruns += 1
+            self._prime = min(self.PRIME_MAX, self._prime + 0.04)
+            self._primed = False
+            now = time.monotonic()
+            if now - self._under_t > 60:
+                self._under_t = now
+                logging.info("live input %s: sound ran dry (%d times), buffer now %.0f ms",
+                             self.source_name, self.underruns, self._prime * 1000)
+            out = np.zeros((CHANNELS, n), np.float32)
+            if have:
+                out[:, :have] = buf
+            self._abuf = None
+            return out
+        # keep the buffer near its level by playing it 0.5 % slower or faster (not heard), so a source clock
+        # a little slower or faster than ours never runs it dry or makes it grow
+        self._lvl = have if self._lvl is None else 0.97 * self._lvl + 0.03 * have
+        target = n + prime + int(0.04 * rate)
+        m = n
+        if self._lvl < target * 0.85:
+            m = n - n // 200
+        elif self._lvl > target * 1.25:
+            m = n + n // 200
+        m = min(m, have)
+        if m == n:
+            out = buf[:, :n]
+        else:
+            x = np.linspace(0, m - 1, n)
+            out = np.vstack([np.interp(x, np.arange(m), buf[c, :m]) for c in range(buf.shape[0])])
+        self._abuf = buf[:, m:]
+        return np.ascontiguousarray(out, dtype=np.float32)
 
     def set_tally(self, program, preview):
         """Red / green tally light on the source (cameras and vMix inputs that show NDI tally).
@@ -217,6 +279,16 @@ def pick_pair(a, pair):
     if not pair or a is None or a.ndim != 2 or a.shape[0] <= 2 * pair:
         return a
     return a[2 * pair:2 * pair + 2]
+
+
+def _stereo(a):
+    if a is None or a.ndim != 2 or a.shape[0] == 0:
+        return None
+    if a.shape[0] == 1:
+        a = np.vstack([a, a])
+    elif a.shape[0] > CHANNELS:
+        a = a[:CHANNELS]
+    return np.array(a, dtype=np.float32)    # a copy: the NDI buffer is reused on the next capture
 
 
 def fit_audio(a, n_samples):
