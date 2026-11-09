@@ -206,7 +206,7 @@ def sec():
 
 
 OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png")
-LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/screens", "/api/fullscreen", "/api/preview.jpg",
+LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/native_output", "/api/screens", "/api/fullscreen", "/api/preview.jpg",
               "/atem", "/api/atem", "/api/atem/open")   # + the ATEM & Cameras window   # + CG Composer   # full screen output window
 ADMIN_ONLY = ("/api/restart", "/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
               "/api/sdi", "/api/alerts", "/api/backup", "/api/ndi/output", "/api/atem/settings")
@@ -747,6 +747,24 @@ def native_preview():
     return jsonify(native=True)
 
 
+@app.post("/api/native_output")
+def native_output():
+    """The full screen output window drawn by the GPU engine straight from the graphics card (no JPEGs, which
+    took a lot of CPU at full size). Body: x, y, w, h of the picture in window pixels, on. native: false when it cannot."""
+    b = request.get_json(silent=True) or {}
+    nat = gpuengine.active()
+    if nat is None or sys.platform != "win32" or str(cfg.get("native_output", "auto")).lower() == "off":
+        return jsonify(native=False)
+    import ctypes
+    h = ctypes.windll.user32.FindWindowW(None, "Endora Playout output") or 0
+    if not h:
+        return jsonify(native=False)
+    nat.preview(h, b.get("x") or 0, b.get("y") or 0, b.get("w") or 0, b.get("h") or 0, bool(b.get("on")), slot=1)
+    import re
+    m = re.search(r"\boutput=(\d+)", gpuengine.STATE.get("stats") or "")
+    return jsonify(native=True, shown=int(m.group(1)) if m else -1)
+
+
 @app.get("/api/native_preview")
 def native_preview_state():
     """How many pictures the GPU engine has drawn into the preview box (the control screen checks it is drawing)."""
@@ -822,6 +840,12 @@ def fullscreen():
     global fullscreen_on
     if fullscreen_hook is None:
         return jsonify(ok=False, error="browser")
+    nat = gpuengine.active()
+    if nat is not None:
+        try:
+            nat.preview(0, 0, 0, 0, 0, False, slot=1)   # the GPU picture lets go of the old output window first
+        except Exception:
+            pass
     try:
         fullscreen_hook(bool(body.get("on")), body.get("screen"))
         fullscreen_on = bool(body.get("on"))

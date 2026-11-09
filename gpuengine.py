@@ -450,9 +450,10 @@ class NativeEngine:
         self._send({"op": "web_close", "id": pid})
 
     # ---- the control screen's preview, drawn by the GPU ------------------
-    def preview(self, hwnd, x, y, w, h, on):
+    def preview(self, hwnd, x, y, w, h, on, slot=0):
+        """slot 0: the control screen's preview box; slot 1: the full screen program output window."""
         return self._send({"op": "preview", "hwnd": int(hwnd), "x": int(x), "y": int(y), "w": int(w), "h": int(h),
-                           "on": 1 if on else 0})
+                           "on": 1 if on else 0, "slot": int(slot)})
 
     # ---- clips (decoded on the GPU) -------------------------------------
     def clip_open(self, path, w, h, start, end, frame_dur):

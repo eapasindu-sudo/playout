@@ -1820,19 +1820,24 @@ struct PreviewWant {
   int x = 0, y = 0, w = 0, h = 0;
   bool on = false;
 };
+// slot 0: the control screen's preview box; slot 1: the full screen program output on another display
+struct PvSlot {
+  PreviewWant want;
+  HWND hwnd = nullptr;                 // the preview thread makes and moves it
+  std::atomic<HWND> ready{nullptr};
+  std::atomic<int> w{0}, h{0};
+  ComPtr<IDXGISwapChain> chain;        // render thread
+  int cw = 0, ch = 0;
+  std::atomic<int64_t> shown{0};       // pictures presented (diagnostics)
+  std::string err;                     // the last step that failed (render thread)
+  HWND chain_hwnd = nullptr;
+  bool up = false;                     // preview thread: the window is meant to be showing
+};
+constexpr int kPvSlots = 2;
 std::mutex g_pv_lock;
-PreviewWant g_pv_want;
-HWND g_pv_hwnd = nullptr;          // UI thread makes and moves it
-std::atomic<HWND> g_pv_ready{nullptr};
-std::atomic<int> g_pv_w{0}, g_pv_h{0};
-ComPtr<IDXGISwapChain> g_pv_chain;    // render thread
-int g_pv_cw = 0, g_pv_ch = 0;
-std::atomic<int64_t> g_pv_shown{0};   // pictures presented (diagnostics)
-std::string g_pv_err;                  // the last step that failed (render thread)
-HWND g_pv_chain_hwnd = nullptr;
+PvSlot g_pv[kPvSlots];
 
-void PreviewApply();
-bool g_pv_up = false;   // preview thread: the window is meant to be showing
+void PreviewApply(int i);
 
 LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_NCHITTEST)
@@ -1841,10 +1846,12 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 1;
   if (msg == WM_MOUSEACTIVATE)
     return MA_NOACTIVATE;
-  if (msg == WM_SHOWWINDOW && wp && lp == SW_PARENTOPENING && !g_pv_up)
+  const int slot = static_cast<int>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (msg == WM_SHOWWINDOW && wp && lp == SW_PARENTOPENING && slot >= 0 && slot < kPvSlots && !g_pv[slot].up)
     return 0;   // Playout's window restored: shown again only when we want it (else a frozen picture)
   if (msg == WM_TIMER) {
-    PreviewApply();
+    if (slot >= 0 && slot < kPvSlots)
+      PreviewApply(slot);
     return 0;
   }
   return ::DefWindowProcW(hwnd, msg, wp, lp);
@@ -1859,21 +1866,22 @@ std::atomic<bool> g_pv_thread_up{false};
 // The window is a borderless popup owned by Playout's window, not a child: the control screen (WebView2) draws
 // with DirectComposition above any child window of its own, which hid the GPU picture behind the last JPEG
 // picture. An owned popup always sits above its owner, hides with it, and follows the box when the window moves.
-void PreviewApply() {
+void PreviewApply(int i) {
+  PvSlot& s = g_pv[i];
   PreviewWant w;
   {
     std::lock_guard<std::mutex> l(g_pv_lock);
-    w = g_pv_want;
+    w = s.want;
   }
-  if (g_pv_hwnd && (!w.parent || ::GetWindow(g_pv_hwnd, GW_OWNER) != ::GetAncestor(w.parent, GA_ROOT) || !::IsWindow(w.parent))) {
+  if (s.hwnd && (!w.parent || ::GetWindow(s.hwnd, GW_OWNER) != ::GetAncestor(w.parent, GA_ROOT) || !::IsWindow(w.parent))) {
     // Playout's window changed (rare): leave the old one hidden; the render thread lets go of it by itself
-    g_pv_ready = nullptr;
-    ::ShowWindow(g_pv_hwnd, SW_HIDE);
-    g_pv_hwnd = nullptr;
+    s.ready = nullptr;
+    ::ShowWindow(s.hwnd, SW_HIDE);
+    s.hwnd = nullptr;
   }
   if (!w.parent || !::IsWindow(w.parent))
     return;
-  if (!g_pv_hwnd) {
+  if (!s.hwnd) {
     static bool registered = false;
     if (!registered) {
       WNDCLASSW wc = {};
@@ -1884,45 +1892,46 @@ void PreviewApply() {
       ::RegisterClassW(&wc);
       registered = true;
     }
-    g_pv_hwnd = ::CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT, L"PlayoutGpuPreview", L"",
+    s.hwnd = ::CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT, L"PlayoutGpuPreview", L"",
                                   WS_POPUP | WS_DISABLED, 0, 0, 16, 9, w.parent, nullptr,
                                   ::GetModuleHandleW(nullptr), nullptr);
-    if (!g_pv_hwnd)
+    if (!s.hwnd)
       return;
-    ::SetTimer(g_pv_hwnd, 1, 100, nullptr);   // follows Playout's window when it moves
-    g_pv_up = false;
+    ::SetWindowLongPtrW(s.hwnd, GWLP_USERDATA, i);
+    ::SetTimer(s.hwnd, 1, 100, nullptr);   // follows Playout's window when it moves
+    s.up = false;
   }
   const bool show = w.on && w.w > 8 && w.h > 8 && !::IsIconic(w.parent);
   POINT at = {w.x, w.y};
   ::ClientToScreen(w.parent, &at);
   RECT now = {};
-  ::GetWindowRect(g_pv_hwnd, &now);
-  // g_pv_up is what we asked for, not IsWindowVisible: Windows hides an owned popup with a minimised owner and
+  ::GetWindowRect(s.hwnd, &now);
+  // s.up is what we asked for, not IsWindowVisible: Windows hides an owned popup with a minimised owner and
   // shows it again on restore by itself, which brought back a frozen picture after we had turned it off
-  if (show && g_pv_up && now.left == at.x && now.top == at.y && now.right - now.left == w.w && now.bottom - now.top == w.h)
+  if (show && s.up && now.left == at.x && now.top == at.y && now.right - now.left == w.w && now.bottom - now.top == w.h)
     return;   // nothing changed (the timer)
-  if (!show && !g_pv_up) {
-    if (::IsWindowVisible(g_pv_hwnd))
-      ::ShowWindow(g_pv_hwnd, SW_HIDE);   // shown again by Windows on its own: hide it once more
+  if (!show && !s.up) {
+    if (::IsWindowVisible(s.hwnd))
+      ::ShowWindow(s.hwnd, SW_HIDE);   // shown again by Windows on its own: hide it once more
     return;
   }
-  g_pv_up = show;
+  s.up = show;
   if (!show) {
-    g_pv_ready = nullptr;
-    ::ShowWindow(g_pv_hwnd, SW_HIDE);   // hidden by us: not shown again by Windows on restore
+    s.ready = nullptr;
+    ::ShowWindow(s.hwnd, SW_HIDE);   // hidden by us: not shown again by Windows on restore
     return;
   }
   if (show) {
-    g_pv_w = w.w;
-    g_pv_h = w.h;
+    s.w = w.w;
+    s.h = w.h;
   } else {
-    g_pv_ready = nullptr;
+    s.ready = nullptr;
   }
-  ::SetWindowPos(g_pv_hwnd, nullptr, at.x, at.y, show ? w.w : 1, show ? w.h : 1,
+  ::SetWindowPos(s.hwnd, nullptr, at.x, at.y, show ? w.w : 1, show ? w.h : 1,
                  SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS |
                      (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   if (show)
-    g_pv_ready = g_pv_hwnd;
+    s.ready = s.hwnd;
 }
 
 void PreviewThread() {
@@ -1935,7 +1944,8 @@ void PreviewThread() {
   g_pv_thread_up = true;
   while (::GetMessageW(&m, nullptr, 0, 0) > 0) {
     if (m.hwnd == nullptr && m.message == WM_APP) {
-      PreviewApply();
+      for (int i = 0; i < kPvSlots; ++i)
+        PreviewApply(i);
       continue;
     }
     ::TranslateMessage(&m);
@@ -1952,19 +1962,20 @@ void PreviewChanged() {
 }
 
 // render thread, GPU lock held: the mixed picture into the preview window
-void PresentPreview() {
-  HWND hwnd = g_pv_ready.load();
-  if (!hwnd) {
+void PresentPreview(int i) {
+  PvSlot& s = g_pv[i];
+  HWND hwnd = s.ready.load();
+  if (!hwnd || !::IsWindow(hwnd)) {   // (the full screen window's owner can close before we hear of it)
     return;
   }
-  const int w = g_pv_w, h = g_pv_h;
-  if (!g_pv_chain || g_pv_chain_hwnd != hwnd) {
-    g_pv_chain.Reset();
+  const int w = s.w, h = s.h;
+  if (!s.chain || s.chain_hwnd != hwnd) {
+    s.chain.Reset();
     ComPtr<IDXGIDevice> dxgi;
     ComPtr<IDXGIAdapter> adapter;
     ComPtr<IDXGIFactory> factory;
     if (FAILED(g_dev.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) {
-      g_pv_err = "factory";
+      s.err = "factory";
       return;
     }
     DXGI_SWAP_CHAIN_DESC d = {};
@@ -1977,27 +1988,27 @@ void PresentPreview() {
     d.OutputWindow = hwnd;
     d.Windowed = TRUE;
     d.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-    HRESULT hr = factory->CreateSwapChain(g_dev.Get(), &d, &g_pv_chain);
+    HRESULT hr = factory->CreateSwapChain(g_dev.Get(), &d, &s.chain);
     if (FAILED(hr)) {
-      g_pv_err = "swapchain-" + std::to_string(static_cast<unsigned>(hr));
+      s.err = "swapchain-" + std::to_string(static_cast<unsigned>(hr));
       return;
     }
     factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
-    g_pv_chain_hwnd = hwnd;
-    g_pv_cw = w;
-    g_pv_ch = h;
-  } else if (g_pv_cw != w || g_pv_ch != h) {
-    if (FAILED(g_pv_chain->ResizeBuffers(1, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 0))) {
-      g_pv_err = "resize";
-      g_pv_chain.Reset();
+    s.chain_hwnd = hwnd;
+    s.cw = w;
+    s.ch = h;
+  } else if (s.cw != w || s.ch != h) {
+    if (FAILED(s.chain->ResizeBuffers(1, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 0))) {
+      s.err = "resize";
+      s.chain.Reset();
       return;
     }
-    g_pv_cw = w;
-    g_pv_ch = h;
+    s.cw = w;
+    s.ch = h;
   }
   ComPtr<ID3D11Texture2D> back;
-  if (FAILED(g_pv_chain->GetBuffer(0, IID_PPV_ARGS(&back)))) {
-    g_pv_err = "buffer";
+  if (FAILED(s.chain->GetBuffer(0, IID_PPV_ARGS(&back)))) {
+    s.err = "buffer";
     return;
   }
   Tex t;
@@ -2005,19 +2016,19 @@ void PresentPreview() {
   t.w = w;
   t.h = h;
   if (FAILED(g_dev->CreateRenderTargetView(back.Get(), nullptr, &t.rtv))) {
-    g_pv_err = "target";
+    s.err = "target";
     return;
   }
   g_mixer.Begin(t);
   g_mixer.Draw(g_mixer.Program(), 0, 0, static_cast<float>(w), static_cast<float>(h), 1, true, true, true);
   g_mixer.End();
-  const HRESULT hr = g_pv_chain->Present(0, 0);
+  const HRESULT hr = s.chain->Present(0, 0);
   if (FAILED(hr)) {
-    g_pv_err = "present-" + std::to_string(static_cast<unsigned>(hr));
-    g_pv_chain.Reset();   // made again on the next picture
+    s.err = "present-" + std::to_string(static_cast<unsigned>(hr));
+    s.chain.Reset();   // made again on the next picture
     return;
   }
-  ++g_pv_shown;
+  ++s.shown;
 }
 
 // ---------------------------------------------------------------- the render thread
@@ -2162,7 +2173,8 @@ void Frame(const Json& j) {
     const EncConfig& c = kv.second->config();
     kv.second->Submit(g_mixer.Layout(c.w, c.h, c.layout, c.pos), sound.data(), n);
   }
-  PresentPreview();
+  for (int i = 0; i < kPvSlots; ++i)
+    PresentPreview(i);
   const bool rb = j.N("rb", 1) != 0 && g_mixer.Readback(g_mem + ReadbackOff());
   ++g_frames;
   Say("ack " + std::to_string(k) + (rb ? " rb" : ""));
@@ -2204,11 +2216,14 @@ void RenderThread() {
           s += " web" + std::to_string(kv.first) + "=" + std::to_string(kv.second->frames()) +
                (kv.second->gpu() ? "g" : "c");
       }
-      s += " preview=" + std::to_string(g_pv_shown.load()) + (g_pv_ready.load() ? "on" : "off");
+      s += " preview=" + std::to_string(g_pv[0].shown.load()) + (g_pv[0].ready.load() ? "on" : "off");
+      s += " output=" + std::to_string(g_pv[1].shown.load()) + (g_pv[1].ready.load() ? "on" : "off");
       {
         std::lock_guard<std::recursive_mutex> l(g_gpu);
-        if (!g_pv_err.empty())
-          s += " preview_error=" + g_pv_err;
+        if (!g_pv[0].err.empty())
+          s += " preview_error=" + g_pv[0].err;
+        if (!g_pv[1].err.empty())
+          s += " output_error=" + g_pv[1].err;
       }
       Say(s);
     }
@@ -2306,6 +2321,8 @@ void ReadCommands() {
       if (op == "preview") {
         {
           std::lock_guard<std::mutex> l(g_pv_lock);
+          const int slot = j.N("slot", 0) == 1 ? 1 : 0;
+          PreviewWant& g_pv_want = g_pv[slot].want;
           g_pv_want.parent = reinterpret_cast<HWND>(static_cast<intptr_t>(j.N("hwnd")));
           g_pv_want.x = static_cast<int>(j.N("x"));
           g_pv_want.y = static_cast<int>(j.N("y"));
