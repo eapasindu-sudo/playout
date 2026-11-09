@@ -14,9 +14,24 @@
 // Program output for a second display. Esc closes it.
 const w = new URLSearchParams(location.search).get('w') || '';
 const o = document.getElementById('o');
-const load = () => { o.src = '/api/output.mjpg?w=' + w + '&t=' + Date.now(); };
+let native = false;
+const load = () => { if (!native) o.src = '/api/output.mjpg?w=' + w + '&t=' + Date.now(); };
 o.onerror = () => setTimeout(load, 1000);
-load();
+// The GPU engine draws the program into this window itself (no JPEGs: those took a lot of CPU at full size).
+// The 16:9 picture box is sent in real pixels; asked again every 2 s (the engine restarting, a display change).
+async function askNative() {
+  const r = devicePixelRatio || 1, W = innerWidth, H = innerHeight;
+  const bw = Math.min(W, H * 16 / 9), bh = bw * 9 / 16;
+  const box = {x: Math.round((W - bw) / 2 * r), y: Math.round((H - bh) / 2 * r), w: Math.round(bw * r), h: Math.round(bh * r), on: true};
+  let res = null;
+  try { res = await (await fetch('/api/native_output', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(box)})).json(); } catch (e) {}
+  const now = !!(res && res.native);
+  if (now && !native) { native = true; o.removeAttribute('src'); }
+  else if (!now && native) { native = false; load(); }
+}
+askNative().then(() => { if (!native) load(); });
+setInterval(askNative, 2000);
+addEventListener('resize', askNative);
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') fetch('/api/fullscreen', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{"on":false}'});
 });
