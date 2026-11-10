@@ -44,6 +44,7 @@ from PIL import Image
 _procs = set()
 LIVE = weakref.WeakSet()       # pages open now (diagnostics file)
 BROWSER = None          # config "web_browser" (app.py sets it)
+CEF_CRASHY = set()     # links that keep stopping the built-in browser: drawn in Edge / Chrome for this run
 ENGINE = None           # config "web_engine": "edge" = always Edge / Chrome, not the built-in browser
 CEF_EXE = "cefcg.exe"
 
@@ -160,9 +161,10 @@ def WebRenderer(url, width, height, zoom=100, rate=10, css=""):
     """A web page drawn for a CG: on the GPU in Playout's native engine (pgpu.exe), else the built-in browser
     when Playout has it, else Edge / Chrome."""
     import gpuengine
-    if str(ENGINE or "").lower() != "edge" and gpuengine.available():
+    edge = str(ENGINE or "").lower() == "edge" or url in CEF_CRASHY
+    if not edge and gpuengine.available() and url not in gpuengine.CRASHY:
         return gpuengine.NativeWebRenderer(url, width, height, zoom, rate, css)
-    if str(ENGINE or "").lower() != "edge" and cef_exe():
+    if not edge and cef_exe():
         return CefRenderer(url, width, height, zoom, rate, css)
     return EdgeRenderer(url, width, height, zoom, rate, css)
 
@@ -301,6 +303,7 @@ class CefRenderer:
     def _run(self):
         import mmap
         quick_fails = 0
+        stops = []
         while self._running:
             name = f"Local\\playout-cefcg-{os.getpid()}-{next(_shm_ids)}"
             mm = arr = None
@@ -366,6 +369,16 @@ class CefRenderer:
             if restart:
                 quick_fails = 0
                 continue
+            # the page keeps stopping the built-in browser (a Chromium CHECK on that page): Edge / Chrome,
+            # a different Chromium, draws it instead
+            now = time.monotonic()
+            stops = [t for t in stops if now - t < 300] + [now]
+            if len(stops) >= 3:
+                CEF_CRASHY.add(self.url)
+                logging.info("web CG: the built-in browser stopped %d times on %s, using Edge / Chrome for it",
+                             len(stops), self.url)
+                self._use_edge()
+                return
             # stopped at once without drawing anything: twice in a row = this PC cannot run it, use Edge / Chrome
             quick = self.frames == frames_before and time.monotonic() - started < 15
             quick_fails = quick_fails + 1 if quick else 0
