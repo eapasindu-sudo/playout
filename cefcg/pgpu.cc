@@ -2391,9 +2391,9 @@ void Frame(const Json& j) {
   }
   const bool uv = j.N("uyvy_out") != 0 && g_mixer.ReadbackUyvy(g_mem + UyvyOff());
   bool sm = false;
-  if (const Json* small = j.Get("small"))
-    if (small->arr.size() == 2)
-      sm = g_mixer.ReadbackSmall(static_cast<int>(small->arr[0].num), static_cast<int>(small->arr[1].num),
+  if (const Json* pv = j.Get("small"))   // (not "small": a macro in the Windows headers)
+    if (pv->arr.size() == 2)
+      sm = g_mixer.ReadbackSmall(static_cast<int>(pv->arr[0].num), static_cast<int>(pv->arr[1].num),
                                  g_mem + SmallOff());
   ++g_frames;
   Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : "") + (no_uyvy ? " nouyvy" : "") +
