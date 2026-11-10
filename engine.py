@@ -1025,7 +1025,8 @@ class Engine:
             # mixed (and encoded for the stream / recording) on the GPU; the mixed picture comes back for NDI
             mixed = None
             try:
-                mixed = nat.frame(video, audio, layers or [])
+                hide = (getattr(self.cg, "led_hide", ()) if self.cg is not None else ()) if "led" in self.extra else None
+                mixed = nat.frame(video, audio, layers or [], led_hide=hide)
             except Exception as e:
                 self.message = f"GPU engine error: {e}"
             if mixed is not None:
@@ -1046,8 +1047,12 @@ class Engine:
         if "clean" in ex:
             ex["clean"].push(self.clean_frame, audio)
         if "led" in ex:
-            hide = getattr(self.cg, "led_hide", ()) if self.cg is not None else ()
-            ex["led"].push((led_src, [L for L in (layers or []) if isinstance(L, dict) or id(L[0]) not in hide]), audio)
+            gled = nat.last_led if nat is not None else None
+            if gled is not None:                # mixed on the GPU too: nothing left to do on the CPU
+                ex["led"].push((gled, []), audio)
+            else:
+                hide = getattr(self.cg, "led_hide", ()) if self.cg is not None else ()
+                ex["led"].push((led_src, [L for L in (layers or []) if isinstance(L, dict) or id(L[0]) not in hide]), audio)
         if "preview" in ex:
             try:
                 ex["preview"].push(self._preview_frame(n, live_v), audio)

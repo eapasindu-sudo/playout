@@ -68,7 +68,7 @@ const uint32_t kMagic = 0x55504750;  // "PGPU"
 const size_t kHeader = 256;
 const int kMaxSamples = 8192;        // sound samples per channel in one frame, at most
 // 0 magic, 4 width, 8 height, then from kHeader: base picture (w*h*4), sound (2 * kMaxSamples float32, one
-// channel after the other), read-back picture (w*h*4), upload area (2 * w*h*4)
+// channel after the other), read-back picture (w*h*4), upload area (2 * w*h*4), LED picture (w*h*4)
 size_t BaseOff() { return kHeader; }
 
 struct Options {
@@ -83,7 +83,8 @@ size_t AudioOff() { return BaseOff() + PicBytes(); }
 size_t ReadbackOff() { return AudioOff() + 2 * kMaxSamples * sizeof(float); }
 size_t UploadOff() { return ReadbackOff() + PicBytes(); }
 size_t UploadBytes() { return 2 * PicBytes(); }
-size_t ShmBytes() { return UploadOff() + UploadBytes(); }
+size_t LedOff() { return UploadOff() + UploadBytes(); }   // the LED picture (program + CGs, no score overlay)
+size_t ShmBytes() { return LedOff() + PicBytes(); }
 
 std::mutex g_say_lock;
 void Say(const std::string& line) {
@@ -532,9 +533,17 @@ class Mixer {
     return &base_;
   }
 
-  void Black() {
+  void Black() { Black(pgm_); }
+  void Black(Tex& t) {
     const float black[4] = {0, 0, 0, 1};
-    g_ctx->ClearRenderTargetView(pgm_.rtv.Get(), black);
+    g_ctx->ClearRenderTargetView(t.rtv.Get(), black);
+  }
+
+  // the LED output's own picture (same size as the program)
+  Tex* Led() {
+    if (!led_.tex && !MakeTex(led_, pgm_.w, pgm_.h, true))
+      return nullptr;
+    return &led_;
   }
 
   void Begin(Tex& target) {
@@ -643,8 +652,9 @@ class Mixer {
     return &t;
   }
 
-  bool Readback(uint8_t* dst) {
-    g_ctx->CopyResource(staging_.Get(), pgm_.tex.Get());
+  bool Readback(uint8_t* dst) { return Readback(pgm_, dst); }
+  bool Readback(Tex& src, uint8_t* dst) {
+    g_ctx->CopyResource(staging_.Get(), src.tex.Get());
     D3D11_MAPPED_SUBRESOURCE m;
     if (FAILED(g_ctx->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &m)))
       return false;
@@ -663,7 +673,7 @@ class Mixer {
   ComPtr<ID3D11SamplerState> point_, linear_;
   ComPtr<ID3D11RasterizerState> rs_;
   ComPtr<ID3D11Texture2D> staging_;
-  Tex pgm_, base_;
+  Tex pgm_, base_, led_;
   std::map<int64_t, Tex> sized_;
   float tw_ = 1, th_ = 1;
 };
@@ -2099,13 +2109,8 @@ void Frame(const Json& j) {
   }
   const Json* box = j.Get("box");
   Tex* squeezed = nullptr;
-  if (box && box->arr.size() == 4) {
+  if (box && box->arr.size() == 4)
     squeezed = g_mixer.BaseTex(g_mem + BaseOff());
-    g_mixer.Black();
-  } else {
-    g_mixer.Base(g_mem + BaseOff());
-  }
-  g_mixer.Begin(g_mixer.Program());
   std::vector<const Json*> todo;
   if (const Json* under = j.Get("under"))
     for (const auto& L : under->arr)
@@ -2114,15 +2119,25 @@ void Frame(const Json& j) {
   if (const Json* layers = j.Get("layers"))
     for (const auto& L : layers->arr)
       todo.push_back(&L);
-  if (squeezed && under_n == 0)
-    g_mixer.Draw(*squeezed, static_cast<float>(box->arr[0].num), static_cast<float>(box->arr[1].num),
-                 static_cast<float>(box->arr[2].num), static_cast<float>(box->arr[3].num), 1, true, true, true);
-  {
+  // the program (and, for the LED output, the same without the layers marked noled) over target
+  auto compose = [&](Tex& target, bool led) {
+    if (squeezed)
+      g_mixer.Black(target);
+    else
+      g_ctx->UpdateSubresource(target.tex.Get(), 0, nullptr, g_mem + BaseOff(), target.w * 4, 0);
+    g_mixer.Begin(target);
+    auto draw_squeezed = [&] {
+      g_mixer.Draw(*squeezed, static_cast<float>(box->arr[0].num), static_cast<float>(box->arr[1].num),
+                   static_cast<float>(box->arr[2].num), static_cast<float>(box->arr[3].num), 1, true, true, true);
+    };
+    if (squeezed && under_n == 0)
+      draw_squeezed();
     for (size_t li = 0; li < todo.size(); ++li) {
       const Json& L = *todo[li];
       if (squeezed && under_n > 0 && li == under_n)   // the program over the pictures under it
-        g_mixer.Draw(*squeezed, static_cast<float>(box->arr[0].num), static_cast<float>(box->arr[1].num),
-                     static_cast<float>(box->arr[2].num), static_cast<float>(box->arr[3].num), 1, true, true, true);
+        draw_squeezed();
+      if (led && L.N("noled") != 0)
+        continue;
       const float x = static_cast<float>(L.N("x")), y = static_cast<float>(L.N("y"));
       const float op = static_cast<float>(L.N("o", 255)) / 255.f;
       if (L.Get("web")) {
@@ -2159,10 +2174,10 @@ void Frame(const Json& j) {
       }
     }
     if (squeezed && under_n > 0 && todo.size() == under_n)
-      g_mixer.Draw(*squeezed, static_cast<float>(box->arr[0].num), static_cast<float>(box->arr[1].num),
-                   static_cast<float>(box->arr[2].num), static_cast<float>(box->arr[3].num), 1, true, true, true);
-  }
-  g_mixer.End();
+      draw_squeezed();
+    g_mixer.End();
+  };
+  compose(g_mixer.Program(), false);
   const float* audio = reinterpret_cast<const float*>(g_mem + AudioOff());
   std::vector<float> sound(2 * static_cast<size_t>(n));
   if (n) {
@@ -2176,8 +2191,15 @@ void Frame(const Json& j) {
   for (int i = 0; i < kPvSlots; ++i)
     PresentPreview(i);
   const bool rb = j.N("rb", 1) != 0 && g_mixer.Readback(g_mem + ReadbackOff());
+  bool led = false;   // after the encoders were handed the program: the LED picture
+  if (j.N("led") != 0) {
+    if (Tex* t = g_mixer.Led()) {
+      compose(*t, true);
+      led = g_mixer.Readback(*t, g_mem + LedOff());
+    }
+  }
   ++g_frames;
-  Say("ack " + std::to_string(k) + (rb ? " rb" : ""));
+  Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : ""));
 }
 
 void Command(const Json& j);
