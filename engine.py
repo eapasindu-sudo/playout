@@ -164,7 +164,10 @@ class Engine:
         self.live = MainInput(self.finder, self.width, self.height, self.fps)
         self.master = MasterAudio()          # program sound: auto level + limiter
         self.output_name = cfg.get("output_name", "ENDORA PLAYOUT FINAL")
-        self.output = NDIOutput(self.output_name, self.width, self.height, self.fps, paced=True)   # None = NDI output off
+        # the program goes out as UYVY when the GPU engine converts it (the NDI library otherwise does it on the CPU)
+        self._out_uyvy = gpuengine.exe() is not None and str(gpuengine.MODE).lower() != "off"
+        self._uv_miss = 0
+        self.output = self._new_output()   # None = NDI output off
         self.extra = {}              # "clean" / "preview": ExtraOutput (NDI Sources panel)
         self.ndi_key = {"source": "", "on": False}   # an NDI source with alpha keyed over the program
         self.key_input = None
@@ -256,7 +259,7 @@ class Engine:
                 old.append(self.output)
                 self.output = None
             if want and self.output is None:
-                self.output = NDIOutput(self.output_name, self.width, self.height, self.fps, paced=True)
+                self.output = self._new_output()
             extra = dict(self.extra)
             for kind, on in (("clean", clean), ("preview", preview), ("led", led)):
                 cur = extra.get(kind)
@@ -301,7 +304,27 @@ class Engine:
         with self._lock:
             old, self.output = self.output, None
             try:
-                self.output = NDIOutput(self.output_name, self.width, self.height, self.fps, paced=True)
+                self.output = self._new_output()
+            except Exception as e:
+                logging.warning("NDI output %s: %s", self.output_name, e)
+        if old is not None:
+            threading.Timer(0.5, old.close).start()
+
+    def _new_output(self):
+        return NDIOutput(self.output_name, self.width, self.height, self.fps, paced=True, uyvy=self._out_uyvy)
+
+    def _uyvy_missing(self):
+        """The program output sends UYVY but the GPU engine has not made it for 30 s (not running): send BGRA
+        again for the rest of the run (converting every frame here costs more than the NDI library does)."""
+        self._uv_miss += 1
+        if self._uv_miss < 30 * float(self.fps):
+            return
+        logging.warning("NDI output: no UYVY from the GPU engine, sending BGRA again")
+        self._out_uyvy = False
+        with self._lock:
+            old, self.output = self.output, None
+            try:
+                self.output = self._new_output()
             except Exception as e:
                 logging.warning("NDI output %s: %s", self.output_name, e)
         if old is not None:
@@ -1041,12 +1064,16 @@ class Engine:
             self.message = f"Audio limiter error: {e}"
         peak = np.abs(audio).max(axis=1) if audio.size else np.zeros(CHANNELS)
         self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
+        uv = mixed = None
         if nat is not None:
             # mixed (and encoded for the stream / recording) on the GPU; the mixed picture comes back for NDI
             mixed = None
             try:
                 hide = (getattr(self.cg, "led_hide", ()) if self.cg is not None else ()) if "led" in self.extra else None
-                mixed = nat.frame(video, audio, layers or [], led_hide=hide)
+                out = self.output
+                mixed = nat.frame(video, audio, layers or [], led_hide=hide,
+                                  uyvy_out=out is not None and out.uyvy)
+                uv = nat.last_uyvy
             except Exception as e:
                 self.message = f"GPU engine error: {e}"
             if mixed is not None:
@@ -1060,8 +1087,13 @@ class Engine:
             video = np.asarray(video).reshape(-1)
         self.last_frame = video
         try:
-            if self.output is not None:
-                self.output.send(video, audio)   # NDIOutput's pacer sends it on an exact frame clock
+            out = self.output
+            if out is not None:
+                if out.uyvy and uv is None:
+                    self._uyvy_missing()
+                else:
+                    self._uv_miss = 0
+                out.send(video, audio, uyvy=uv, owned=mixed is not None)   # the pacer sends it on an exact frame clock
         except Exception:
             pass
         ex = self.extra
