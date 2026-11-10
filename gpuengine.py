@@ -137,7 +137,9 @@ class NativeEngine:
         self.readback_off = self.audio_off + 2 * MAX_SAMPLES * 4
         self.upload_off = self.readback_off + self.pic
         self.upload_size = 2 * self.pic
-        self.size = self.upload_off + self.upload_size
+        self.led_off = self.upload_off + self.upload_size     # the LED picture (program + CGs, no score overlay)
+        self.size = self.led_off + self.pic
+        self.last_led = None
         self.ready = False
         self.error = ""
         self.gpu = ""
@@ -147,6 +149,7 @@ class NativeEngine:
         self._wlock = threading.Lock()
         self._ack = -1
         self._ack_rb = False
+        self._ack_led = False
         self._cv = threading.Condition()
         self._k = 0
         self._timeouts = 0
@@ -173,6 +176,7 @@ class NativeEngine:
                 self._audio = np.frombuffer(self._mm, np.float32, 2 * MAX_SAMPLES, self.audio_off).reshape(2, MAX_SAMPLES)
                 self._rb = np.frombuffer(self._mm, np.uint8, self.pic, self.readback_off)
                 self._up = np.frombuffer(self._mm, np.uint8, self.upload_size, self.upload_off)
+                self._led = np.frombuffer(self._mm, np.uint8, self.pic, self.led_off)
             self._dir = tempfile.mkdtemp(prefix="playout-pgpu-")
             args = [exe(), f"--pg-shm={self._mm_name}", f"--pg-width={self.width}", f"--pg-height={self.height}",
                     f"--pg-fps-num={self.fps_num}", f"--pg-fps-den={self.fps_den}",
@@ -232,11 +236,12 @@ class NativeEngine:
             return
         word, _, rest = line.partition(" ")
         if word == "ack":
-            k, _, flag = rest.partition(" ")
+            k, *flags = rest.split()
             with self._cv:
                 self._last_ack = time.monotonic()
                 self._ack = int(k)
-                self._ack_rb = flag == "rb"
+                self._ack_rb = "rb" in flags
+                self._ack_led = "led" in flags
                 self._cv.notify_all()
         elif word == "ready":
             self.gpu = rest
@@ -350,10 +355,13 @@ class NativeEngine:
                 return False
 
     # ---- the program frame ---------------------------------------------
-    def frame(self, base, audio, jobs, readback=True):
+    def frame(self, base, audio, jobs, readback=True, led_hide=None):
         """base: the program picture (flat or (h, w, 4) BGRA); audio: (2, n) float32; jobs: [(image or WebTex,
         x, y, opacity 0-255)] bottom first. Returns the mixed picture (h * w * 4, a new array) or None when
-        the engine is not there right now (the caller mixes on the CPU)."""
+        the engine is not there right now (the caller mixes on the CPU).
+        led_hide: ids of the images / WebTex left off the LED output's picture; afterwards last_led is that
+        picture (the program itself when nothing is left off), or None (the caller makes it on the CPU)."""
+        self.last_led = None
         if not self.ready:
             return None
         if self._timeouts >= 8:     # not answering right now: mix on the CPU, and ask it about once a second only
@@ -376,13 +384,26 @@ class NativeEngine:
                 if nid is not None:
                     under.append(_keyed({"img": nid, "x": int(x), "y": int(y), "o": int(op)}, img))
             jobs = jobs[1:]
+        hidden = False
         for img, x, y, op in jobs:
             if isinstance(img, WebTex):
-                layers.append({"web": img.page, "x": int(x), "y": int(y), "o": int(op), "z": round(float(img.zoom), 4)})
-                continue
-            nid, used = self._image(img, up, used)
-            if nid is not None:
-                layers.append(_keyed({"img": nid, "x": int(x), "y": int(y), "o": int(op)}, img))
+                L = {"web": img.page, "x": int(x), "y": int(y), "o": int(op), "z": round(float(img.zoom), 4)}
+            else:
+                nid, used = self._image(img, up, used)
+                if nid is None:
+                    continue
+                L = _keyed({"img": nid, "x": int(x), "y": int(y), "o": int(op)}, img)
+            if led_hide and id(img) in led_hide:
+                L["noled"] = 1
+                hidden = True
+            layers.append(L)
+            for piece, px, c0, c1 in (getattr(img, "parts", None) or ()):   # a ticker: its text strip over the bar
+                pid, used = self._image(piece, up, used)
+                if pid is not None:
+                    P = {"img": pid, "x": int(x) + int(px), "y": int(y), "o": int(op), "c0": int(c0), "c1": int(c1)}
+                    if "noled" in L:
+                        P["noled"] = 1
+                    layers.append(P)
         if self._drop:
             self._send({"op": "drop", "ids": self._drop})
             self._drop = []
@@ -391,11 +412,13 @@ class NativeEngine:
         cmd = {"op": "frame", "k": k, "n": n, "up": up, "layers": layers, "rb": 1 if readback else 0}
         if box is not None:
             cmd["box"], cmd["under"] = box, under
+        if hidden and readback:
+            cmd["led"] = 1
         if not self._send(cmd):
             return None
         with self._cv:
             self._cv.wait_for(lambda: self._ack >= k or not self.ready, self.ACK_TIMEOUT)
-            got, rb = self._ack >= k, self._ack_rb
+            got, rb, led = self._ack >= k, self._ack_rb, self._ack_led
         if not got:
             self._timeouts += 1
             quiet = time.monotonic() - self._last_ack
@@ -410,7 +433,12 @@ class NativeEngine:
         self._timeouts = 0
         if not readback or not rb:
             return None
-        return self._rb.copy()
+        out = self._rb.copy()
+        if not hidden:
+            self.last_led = out
+        elif led:
+            self.last_led = self._led.copy()
+        return out
 
     def _image(self, img, up, used):
         key = id(img)
