@@ -99,17 +99,26 @@ class Recorder:
     def start(self):
         if self._on:
             return self.info()
+        note = ""
         try:
             os.makedirs(self.folder, exist_ok=True)
         except OSError as e:
             drive = os.path.splitdrive(self.folder)[0]
-            self.error = (f"The recording folder {self.folder} is not there" +
-                          (f" (is drive {drive} plugged in?)" if drive and not os.path.exists(drive + os.sep) else "") +
-                          f": pick another folder in Settings > Recording. ({e.strerror or e})")
-            return self.info()
+            why = (f"The recording folder {self.folder} is not there" +
+                   (f" (is drive {drive} plugged in?)" if drive and not os.path.exists(drive + os.sep) else ""))
+            # never lose the show: record into the PC's own Videos folder this time, and say so
+            spare = os.path.join(os.path.expanduser("~"), "Videos", "Playout")
+            try:
+                os.makedirs(spare, exist_ok=True)
+            except OSError:
+                self.error = f"{why}: pick another folder in Settings > Recording. ({e.strerror or e})"
+                return self.info()
+            logging.warning("%s: recording into %s instead", why, spare)
+            self.folder = spare
+            note = f"{why}, so this recording goes to {spare}. Pick the folder again in Settings > Recording."
         self.file = self._new_name()
         self.part = 1
-        self.error = ""
+        self.error = note
         self.dropped = self.frames = 0
         self._q = FrameQueue(max(8, int(float(self.engine.fps))))   # 1 s of frames at most (RAM)
         self._on = True
