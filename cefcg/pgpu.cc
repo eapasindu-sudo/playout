@@ -87,7 +87,9 @@ size_t LedOff() { return UploadOff() + UploadBytes(); }   // the LED picture (pr
 size_t UyvyOff() { return LedOff() + PicBytes(); }       // the program as UYVY for the NDI output (w*h*2)
 size_t SmallOff() { return UyvyOff() + PicBytes() / 2; }   // a small program picture for the previews
 const size_t kSmallBytes = 960 * 540 * 4;
-size_t ShmBytes() { return SmallOff() + kSmallBytes; }
+size_t CleanUyvyOff() { return SmallOff() + kSmallBytes; }      // the program before CGs as UYVY (Clean NDI)
+size_t LedUyvyOff() { return CleanUyvyOff() + PicBytes() / 2; }  // the LED picture as UYVY (LED NDI)
+size_t ShmBytes() { return LedUyvyOff() + PicBytes() / 2; }
 
 std::mutex g_say_lock;
 void Say(const std::string& line) {
@@ -664,8 +666,11 @@ class Mixer {
   }
 
   // the program as UYVY into dst (w * h * 2 bytes) for the NDI output; false when this GPU can't
-  bool ReadbackUyvy(uint8_t* dst) {
-    if (!ps_touyvy_ || (pgm_.w & 1))
+  bool ReadbackUyvy(uint8_t* dst) { return ReadbackUyvy(pgm_, dst); }
+
+  // src (program size) as UYVY into dst: the Clean / LED NDI outputs too
+  bool ReadbackUyvy(Tex& src, uint8_t* dst) {
+    if (!ps_touyvy_ || (pgm_.w & 1) || !src.srv || src.w != pgm_.w || src.h != pgm_.h)
       return false;
     const int hw = pgm_.w / 2;
     if (!uyvy_out_.tex && !MakeTex(uyvy_out_, hw, pgm_.h, true))
@@ -691,7 +696,7 @@ class Mixer {
     p.rect[3] = -1;
     p.uv[2] = p.uv[3] = 1;
     g_ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &p, 0, 0);
-    ID3D11ShaderResourceView* srv = pgm_.srv.Get();
+    ID3D11ShaderResourceView* srv = src.srv.Get();
     g_ctx->PSSetShaderResources(0, 1, &srv);
     float f[4] = {0, 0, 0, 0};
     g_ctx->OMSetBlendState(copy_.Get(), f, 0xffffffff);
@@ -933,6 +938,8 @@ class Page : public CefClient, public CefRenderHandler, public CefLifeSpanHandle
     browser_ = browser;
     if (closing_)
       browser->GetHost()->CloseBrowser(true);
+    else if (hidden_)
+      browser->GetHost()->SetWindowlessFrameRate(1);   // opened off air (loaded ahead for IN)
   }
 
   void OnBeforeClose(CefRefPtr<CefBrowser>) override { browser_ = nullptr; }
@@ -961,6 +968,9 @@ class Page : public CefClient, public CefRenderHandler, public CefLifeSpanHandle
     hidden_ = !on;
     // the page keeps running off air, as in cefcg: a hidden page (document.hidden, no animation frames) can
     // leave parts undrawn when it comes back, e.g. a score bar that slides in on an animation frame
+    // but off air it draws only once a second (it was drawing at the full rate while nobody saw it: CPU and GPU)
+    if (browser_)
+      browser_->GetHost()->SetWindowlessFrameRate(on ? fps_ : 1);
     if (browser_ && on)
       browser_->GetHost()->Invalidate(PET_VIEW);
   }
@@ -2382,14 +2392,21 @@ void Frame(const Json& j) {
   for (int i = 0; i < kPvSlots; ++i)
     PresentPreview(i);
   const bool rb = j.N("rb", 1) != 0 && g_mixer.Readback(g_mem + ReadbackOff());
-  bool led = false;   // after the encoders were handed the program: the LED picture
+  bool led = false, lu = false;   // after the encoders were handed the program: the LED picture
   if (j.N("led") != 0) {
     if (Tex* t = g_mixer.Led()) {
       compose(*t, true);
-      led = g_mixer.Readback(*t, g_mem + LedOff());
+      lu = j.N("led_uyvy") != 0 && g_mixer.ReadbackUyvy(*t, g_mem + LedUyvyOff());   // LED NDI as UYVY
+      if (!lu)
+        led = g_mixer.Readback(*t, g_mem + LedOff());
     }
   }
   const bool uv = j.N("uyvy_out") != 0 && g_mixer.ReadbackUyvy(g_mem + UyvyOff());
+  bool cu = false;   // the program before CGs as UYVY for the Clean NDI output
+  if (j.N("clean_uyvy") != 0 && !no_uyvy) {
+    Tex* c = live ? live : g_mixer.BaseTex(g_mem + BaseOff());
+    cu = c && g_mixer.ReadbackUyvy(*c, g_mem + CleanUyvyOff());
+  }
   bool sm = false;
   if (const Json* pv = j.Get("small"))   // (not "small": a macro in the Windows headers)
     if (pv->arr.size() == 2)
@@ -2397,7 +2414,7 @@ void Frame(const Json& j) {
                                  g_mem + SmallOff());
   ++g_frames;
   Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : "") + (no_uyvy ? " nouyvy" : "") +
-      (uv ? " uv" : "") + (sm ? " sm" : ""));
+      (uv ? " uv" : "") + (sm ? " sm" : "") + (lu ? " lu" : "") + (cu ? " cu" : ""));
 }
 
 void Command(const Json& j);
