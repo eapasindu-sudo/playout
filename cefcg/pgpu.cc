@@ -85,7 +85,9 @@ size_t UploadOff() { return ReadbackOff() + PicBytes(); }
 size_t UploadBytes() { return 2 * PicBytes(); }
 size_t LedOff() { return UploadOff() + UploadBytes(); }   // the LED picture (program + CGs, no score overlay)
 size_t UyvyOff() { return LedOff() + PicBytes(); }       // the program as UYVY for the NDI output (w*h*2)
-size_t ShmBytes() { return UyvyOff() + PicBytes() / 2; }
+size_t SmallOff() { return UyvyOff() + PicBytes() / 2; }   // a small program picture for the previews
+const size_t kSmallBytes = 960 * 540 * 4;
+size_t ShmBytes() { return SmallOff() + kSmallBytes; }
 
 std::mutex g_say_lock;
 void Say(const std::string& line) {
@@ -628,6 +630,39 @@ class Mixer {
     return &live_;
   }
 
+  // the program scaled down to w x h (BGRA) into dst, for the phone remote / web previews (their JPEGs)
+  bool ReadbackSmall(int w, int h, uint8_t* dst) {
+    if (w < 16 || h < 16 || static_cast<size_t>(w) * h * 4 > kSmallBytes)
+      return false;
+    Tex* t = Sized(w, h);
+    if (!t)
+      return false;
+    if (!sstaging_ || sw_ != w || sh_ != h) {
+      sstaging_.Reset();
+      D3D11_TEXTURE2D_DESC sd = {};
+      sd.Width = w;
+      sd.Height = h;
+      sd.MipLevels = sd.ArraySize = 1;
+      sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      sd.SampleDesc.Count = 1;
+      sd.Usage = D3D11_USAGE_STAGING;
+      sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+      if (FAILED(g_dev->CreateTexture2D(&sd, nullptr, &sstaging_)))
+        return false;
+      sw_ = w;
+      sh_ = h;
+    }
+    g_ctx->CopyResource(sstaging_.Get(), t->tex.Get());
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(g_ctx->Map(sstaging_.Get(), 0, D3D11_MAP_READ, 0, &m)))
+      return false;
+    const size_t row = static_cast<size_t>(w) * 4;
+    for (int y = 0; y < h; ++y)
+      std::memcpy(dst + y * row, static_cast<const uint8_t*>(m.pData) + static_cast<size_t>(y) * m.RowPitch, row);
+    g_ctx->Unmap(sstaging_.Get(), 0);
+    return true;
+  }
+
   // the program as UYVY into dst (w * h * 2 bytes) for the NDI output; false when this GPU can't
   bool ReadbackUyvy(uint8_t* dst) {
     if (!ps_touyvy_ || (pgm_.w & 1))
@@ -808,7 +843,8 @@ class Mixer {
   ComPtr<ID3D11BlendState> over_, copy_;
   ComPtr<ID3D11SamplerState> point_, linear_;
   ComPtr<ID3D11RasterizerState> rs_;
-  ComPtr<ID3D11Texture2D> staging_, ustaging_;
+  ComPtr<ID3D11Texture2D> staging_, ustaging_, sstaging_;
+  int sw_ = 0, sh_ = 0;
   Tex pgm_, base_, led_, uyvy_, live_, live_src_, uyvy_out_;
   std::map<int64_t, Tex> sized_;
   float tw_ = 1, th_ = 1;
@@ -2354,9 +2390,14 @@ void Frame(const Json& j) {
     }
   }
   const bool uv = j.N("uyvy_out") != 0 && g_mixer.ReadbackUyvy(g_mem + UyvyOff());
+  bool sm = false;
+  if (const Json* small = j.Get("small"))
+    if (small->arr.size() == 2)
+      sm = g_mixer.ReadbackSmall(static_cast<int>(small->arr[0].num), static_cast<int>(small->arr[1].num),
+                                 g_mem + SmallOff());
   ++g_frames;
   Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : "") + (no_uyvy ? " nouyvy" : "") +
-      (uv ? " uv" : ""));
+      (uv ? " uv" : "") + (sm ? " sm" : ""));
 }
 
 void Command(const Json& j);

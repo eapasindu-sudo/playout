@@ -707,15 +707,22 @@ def _jpeg(width=640, quality=75):
     """The program picture as a small JPEG. Made once per new frame and shared by every
     preview window (desktop app, remotes), so more viewers cost nothing extra."""
     frame = engine.last_frame
+    h = int(width * engine.height / engine.width)
+    nat = gpuengine.active()
+    if nat is not None and width <= 960:
+        nat.small_want = (width, h, time.monotonic())   # the GPU engine scales the program down for us
     with _pv_lock:
         hit = _pv_cache.get((width, quality))
         if hit and hit[0] is frame:
             return hit[1]
-        img = Image.frombuffer("RGB", (engine.width, engine.height), frame, "raw", "BGRX", 0, 1)
-        f = engine.width // width
-        if f >= 2:
-            img = img.reduce(f)             # fast box shrink first
-        h = int(width * engine.height / engine.width)
+        sm = nat.last_small if nat is not None else None
+        if sm is not None and sm[0] == width and sm[1] == h:
+            img = Image.frombuffer("RGB", (width, h), sm[2], "raw", "BGRX", 0, 1)
+        else:
+            img = Image.frombuffer("RGB", (engine.width, engine.height), frame, "raw", "BGRX", 0, 1)
+            f = engine.width // width
+            if f >= 2:
+                img = img.reduce(f)             # fast box shrink first
         if img.size != (width, h):
             img = img.resize((width, h), Image.BILINEAR)
         buf = io.BytesIO()
