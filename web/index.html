@@ -2092,7 +2092,7 @@ function openHealth() { $('hlFrame').src = '/health'; dHealth.showModal(); }
 async function openRemote() {
   const r = await api('/api/remote_info');
   $('rmBody').innerHTML = !r.enabled ? '<p>Phone remote is turned off. Turn it on in <b>Settings &gt; Passwords</b>.</p>' :
-    `<p>On a phone or tablet on the <b>same network / Wi-Fi</b>, scan the code or open:</p>` +
+    `<p>On a phone or tablet on the <b>same network / Wi-Fi</b>, scan the code or open it. To keep it as an app: <b>Add to Home Screen</b> (iPhone: Share button; Android: Chrome menu). The app works whenever the phone is on this Wi-Fi.</p>` +
     r.urls.map(u => `<div style="display:flex; gap:14px; align-items:center; margin:10px 0"><img class="qr" src="/api/qr.png?t=${encodeURIComponent(u)}" alt="QR"><div><div class="mono" style="font-size:16px; user-select:text">${esc(u)}</div>
       <div class="hint" style="margin-top:6px">Full control screen: ${esc(u.replace('/remote', '/'))}</div></div></div>`).join('') +
     (r.urls.length ? '' : '<p class="hint">No network address found. Is this PC on a network?</p>') +
