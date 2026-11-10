@@ -423,6 +423,7 @@
           <button class="lockable" onclick="addManualCG()">+ Add CG</button>
           <button class="lockable" onclick="openTextCG()" title="Ticker, name / title lower third, clock, countdown, text">+ Text CG</button>
           <button class="lockable" onclick="openWebCG()" title="Paste a scoreboard / overlay link (cricket score, any browser-source overlay)">+ Scoreboard link</button>
+          <button class="lockable" id="vmBtn" onclick="openVmix()" title="Scoreboard OUT while vMix plays a replay, back IN after it">vMix replay</button>
           <span style="flex:1"></span>
           <button class="red" onclick="api('/api/cg/all_out', {}).then(pollCG)" title="Take every CG off air">ALL OUT</button>
         </div>
@@ -640,6 +641,21 @@
   <header>Full screen output: pick the display <button class="sm" onclick="dFull.close()">Close</button></header>
   <div class="body"><div id="fullList" style="display:flex; flex-direction:column; gap:8px"></div>
     <div class="hint" style="margin-top:8px">Esc on that display (or Exit Full Screen here) closes it. Playout remembers the display.</div></div>
+</dialog>
+
+<!-- vMix replay: CGs out while vMix plays a replay -->
+<dialog id="dVmix" style="width:min(560px, 94vw)">
+  <header>vMix replay: scoreboard auto hide <button class="sm" onclick="closeVmix()">Close</button></header>
+  <div class="body form">
+    <span>Auto hide</span><label><input type="checkbox" id="vmOn"> On: when vMix puts a replay on air, the CGs go OUT; when vMix is back on a camera they go IN again</label>
+    <span>vMix PC</span><span style="display:flex; gap:6px; align-items:center"><input id="vmHost" placeholder="127.0.0.1" style="flex:1"> port <input class="num" id="vmPort" type="number" min="1" max="65535"></span>
+    <span>Which CGs</span><select id="vmHide"><option value="score">Scoreboard links only</option><option value="all">Every manual CG on air</option></select>
+    <span>Replay inputs</span><input id="vmIn" placeholder="blank: vMix's Replay inputs">
+    <span>Back in after</span><span><input class="num" id="vmBack" type="number" min="0" max="10" step="0.1"> seconds on another input</span>
+    <span></span><span class="hint">127.0.0.1 when vMix runs on this PC; else the vMix PC's IP. Port 8099 is vMix's TCP API (on by default). Replay inputs: input numbers or titles, comma separated. A CG taken IN or OUT by hand during a replay stays that way. vMix scripts / Stream Deck can also call /trigger/replay/on and /trigger/replay/off.</span>
+    <span>Now</span><span class="hint" id="vmSt"></span>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveVmix()">Save</button></div>
 </dialog>
 
 <!-- Stream quality -->
@@ -2188,7 +2204,7 @@ async function pollCG() {
     el.querySelector('.in').classList.toggle('red', live);
   }
   const card = r.card || [];
-  txt('cgCard', card.length ? `Live card CG: ${card.filter(c => c.state === 'on').length}/${card.length} on` : '');
+  txt('cgCard', (r.held ? `vMix replay: ${r.held.length} CG(s) out, back IN after it   ` : '') + (card.length ? `Live card CG: ${card.filter(c => c.state === 'on').length}/${card.length} on` : ''));
 }
 function renderManual() {
   $('cgList').innerHTML = cgManual.map(c => `<div class="cgrow" id="mc_${c.id}">
@@ -2543,6 +2559,32 @@ function fillAtemSel(sel, v) {
     + (v && !src.some(x => x.id === v) ? `<option value="${v}">ATEM input ${v}</option>` : '');
   sel.value = String(v || 0);
 }
+
+// ---------------------------------------------------------------- vMix replay (scoreboard auto hide)
+let VM = {}, vmTimer = null;
+async function pollVmix() {
+  try { VM = await api('/api/vmix'); } catch (e) { return; }
+  const b = $('vmBtn');
+  b.classList.toggle('red', !!VM.replay_on); b.classList.toggle('blue', !!VM.enabled && !VM.replay_on);
+  b.textContent = VM.replay_on ? 'vMix REPLAY: CGs out' : 'vMix replay';
+  const reps = (VM.replay_inputs || []).map(x => `${x.number}: ${x.title}`).join(', ');
+  txt('vmSt', !VM.enabled ? 'Off' : !VM.linked ? (VM.error || 'connecting...')
+    : `Connected (vMix ${VM.version || ''}). On air: ${VM.program ? VM.program + ': ' + VM.program_title : '-'}. Replay inputs: ${reps || 'none found: add a Replay input in vMix, or type the inputs above'}.` + (VM.last ? ' Last: ' + VM.last : ''));
+}
+async function openVmix() {
+  await pollVmix();
+  $('vmOn').checked = !!VM.enabled; $('vmHost').value = VM.host || '127.0.0.1'; $('vmPort').value = VM.port || 8099;
+  $('vmHide').value = VM.hide || 'score'; $('vmIn').value = VM.inputs || ''; $('vmBack').value = VM.back_delay ?? 0.5;
+  dVmix.showModal(); clearInterval(vmTimer); vmTimer = setInterval(pollVmix, 1000);
+}
+function closeVmix() { clearInterval(vmTimer); dVmix.close(); }
+async function saveVmix() {
+  const r = await api('/api/vmix/settings', {enabled: $('vmOn').checked, host: $('vmHost').value, port: +$('vmPort').value || 8099,
+    hide: $('vmHide').value, inputs: $('vmIn').value, back_delay: +$('vmBack').value}).catch(() => null);
+  if (!r || r.error) { say((r && r.error) || 'Could not save (admin only)'); return; }
+  $('msg').textContent = 'vMix replay settings saved'; pollVmix();
+}
+pollVmix(); setInterval(pollVmix, 2000);
 
 // ---------------------------------------------------------------- NDI panel
 let NDI = {}, ndiTimer = null;
