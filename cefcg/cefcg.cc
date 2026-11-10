@@ -185,6 +185,7 @@ class App : public CefApp {
     cl->AppendSwitch("disable-renderer-backgrounding");
     cl->AppendSwitch("disable-extensions");
     cl->AppendSwitch("no-first-run");
+    cl->AppendSwitch("disable-gpu-process-crash-limit");   // a page crashing the GPU process: carry on
   }
 
  private:

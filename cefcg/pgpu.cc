@@ -2593,6 +2593,9 @@ class App : public CefApp {
     cl->AppendSwitch("disable-extensions");
     cl->AppendSwitch("no-first-run");
     cl->AppendSwitch("disable-backgrounding-occluded-windows");
+    // a web page that keeps crashing Chromium's GPU process must not end the whole engine ("GPU process
+    // isn't usable. Goodbye.")
+    cl->AppendSwitch("disable-gpu-process-crash-limit");
     cl->AppendSwitchWithValue("disable-features", "OptimizationGuideModelDownloading,OptimizationHints,OnDeviceModelPerformanceParams");
   }
 
@@ -2669,8 +2672,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   settings.no_sandbox = true;
   settings.windowless_rendering_enabled = true;
   settings.log_severity = LOGSEVERITY_DISABLE;
-  if (!g_opt.cache.empty())
+  if (!g_opt.cache.empty()) {
     CefString(&settings.root_cache_path) = g_opt.cache;
+    // Chromium's errors (why a web page took the engine down) next to the cache, for Playout's log
+    settings.log_severity = LOGSEVERITY_ERROR;
+    CefString(&settings.log_file) = g_opt.cache + "-errors.log";
+  }
   if (!CefInitialize(main_args, settings, app, nullptr)) {
     Say("error the built-in browser did not start");
     return 4;
