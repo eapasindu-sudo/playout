@@ -46,6 +46,7 @@ STATE = {"running": False, "gpu": "", "error": "", "restarts": 0, "stats": ""}  
 
 _engine = None
 _disabled = False
+CRASHY = set()          # web CG links that made pgpu stop: drawn in the built-in browser (cefcg) for this run
 _lock = threading.Lock()
 _ids = itertools.count(1)
 
@@ -338,6 +339,17 @@ class NativeEngine:
                 now = time.monotonic()
                 self._stops = [t for t in self._stops if now - t < 120] + [now]
                 # stopping again and again: wait longer between starts (CPU mixing carries the show meanwhile)
+                pages = list(self.pages.values())
+                if pages and len(self._stops) >= 2:
+                    # stopped again with web pages open: a page is the likely cause (a Chromium CHECK on the
+                    # scoreboard page ended the whole engine every few seconds). Pages go to the built-in
+                    # browser, its own process, so one bad page can only stop itself
+                    for pg in pages:
+                        CRASHY.add(pg.url)
+                        self.pages.pop(pg.id, None)
+                        pg._engine_gone()
+                    logging.warning("native GPU engine stopped %d times with web CGs open: they are drawn in the "
+                                    "built-in browser from now on: %s", len(self._stops), ", ".join(p.url for p in pages))
                 time.sleep(1 if len(self._stops) < 3 else min(15 * 2 ** min(tries, 3), 120))
                 if self.launch():
                     for p in list(self.pages.values()):
@@ -657,7 +669,7 @@ class NativeWebRenderer:
         import webcg
         if self._fallback is None:
             self._fallback = webcg.CefRenderer(self.url, self.width, self.height, self.zoom * 100, self.rate, self.css) \
-                if webcg.cef_exe() else webcg.EdgeRenderer(self.url, self.width, self.height, self.zoom * 100, self.rate, self.css)
+                if webcg.cef_exe() and self.url not in webcg.CEF_CRASHY else webcg.EdgeRenderer(self.url, self.width, self.height, self.zoom * 100, self.rate, self.css)
             self._fallback.active = self._active
             webcg.LIVE.discard(self)
 
