@@ -47,6 +47,7 @@ from updater import Updater
 from version import VERSION
 from alerts import Alerts, Watcher
 from atem_link import AtemLink
+from vmix_link import VmixLink
 from backup import Backup
 from booking import Bookings, invoice_pdf
 from sdi import SdiOutput, list_devices as sdi_devices
@@ -135,6 +136,7 @@ usb.on_added = _usb_added
 import capture as capture_mod
 capture_mod.FORMATS.update(store.data.get("usb_format") or {})   # picture formats picked per USB device
 cgm = CGManager(cfg["cg_dir"], engine.width, engine.height, engine.fps)
+vmix = VmixLink(cgm)
 engine.cg = cgm
 sysmon = SystemMonitor()
 audio_out = AudioOut()
@@ -208,7 +210,7 @@ def sec():
 OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png")
 LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/native_output", "/api/screens", "/api/fullscreen", "/api/preview.jpg",
               "/atem", "/api/atem", "/api/atem/open")   # + the ATEM & Cameras window   # + CG Composer   # full screen output window
-ADMIN_ONLY = ("/api/restart", "/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
+ADMIN_ONLY = ("/api/vmix/settings", "/api/restart", "/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
               "/api/sdi", "/api/alerts", "/api/backup", "/api/ndi/output", "/api/atem/settings")
 
 
@@ -1535,6 +1537,26 @@ def stream_all(action):
     return jsonify(streamer.info())
 
 
+# ---- vMix link: scoreboard OUT while vMix plays a replay (vmix_link.py) ----
+@app.get("/api/vmix")
+def vmix_info():
+    return jsonify(vmix.info())
+
+
+@app.post("/api/vmix/settings")
+def vmix_settings():
+    st = vmix.configure(request.get_json(silent=True) or {})
+    store.set(vmix=st)
+    return jsonify(vmix.info())
+
+
+@app.get("/trigger/replay/<any('on', 'off'):state>")
+def trigger_replay(state):
+    """vMix script / Stream Deck: CGs OUT for a replay (on), back IN (off)."""
+    vmix.trigger(state == "on")
+    return "OK"
+
+
 # ---- simple GET triggers for vMix scripts / Stream Deck / Companion ----
 @app.get("/trigger/<action>")
 def trigger(action):
@@ -1990,6 +2012,8 @@ def start_backend():
     at = store.data.get("atem") or {}
     atem.configure(at.get("auto"), at.get("start_with_playout"))
     atem.start()
+    vmix.configure(store.data.get("vmix") or {})
+    vmix.start()
     streamer.load(store.data.get("stream_destinations"))
     if not store.data.get("gpu_auto"):
         # from 1.0.24 streaming and recording use the graphics card by default (CPU only if there is none)
@@ -2125,7 +2149,8 @@ def _squeeze_auto():
                     last.pop(cid, None)
                     continue
                 last.setdefault(cid, now)
-                if now - last[cid] < 3600.0 / n or not playing or (c.get("auto_live") and not live) or cid in on:
+                if now - last[cid] < 3600.0 / n or not playing or (c.get("auto_live") and not live) or cid in on \
+                        or cgm.holding:                # not during a vMix replay
                     continue
                 r = cgm.take_in(cid)
                 last[cid] = now
@@ -2179,6 +2204,7 @@ def shutdown():
     scheduler.stop()
     streamer.stop_all()
     atem.stop()
+    vmix.stop()
     engine.shutdown()
 
 

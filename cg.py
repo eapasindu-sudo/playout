@@ -519,6 +519,7 @@ class CGManager:
         self._manual_layers = {}      # id -> CGLayer
         self._warming = set()         # manual CG ids being loaded ahead
         self._manual_sq = {}          # manual CG id -> name of the squeeze it put on air (an L-ad)
+        self._held = None             # ids of manual CGs taken OUT for a vMix replay (back IN after it), or None
         self._card_layers = []        # CGLayer for the on-air live card
         self._card_id = None
         self._stinger = None          # CGLayer of a stinger transition in progress (drawn on top)
@@ -625,6 +626,9 @@ class CGManager:
         return None
 
     def take_in(self, cid):
+        held = self._held
+        if held is not None:
+            held.discard(cid)           # the operator's IN during a replay stays
         with self._lock:
             cfg = next((c for c in self.manual if c["id"] == cid), None)
         if cfg is None:
@@ -658,6 +662,9 @@ class CGManager:
             return True
 
     def take_out(self, cid):
+        held = self._held
+        if held is not None:
+            held.discard(cid)           # taken OUT by hand (or its timer) during a replay: stays out after it
         name = self._manual_sq.pop(cid, None)
         if name is not None:
             st = self.squeeze_state
@@ -669,6 +676,7 @@ class CGManager:
                 layer.take_out()
 
     def all_out(self):
+        self._held = None
         with self._lock:
             for layer in self._manual_layers.values():
                 layer.take_out()
@@ -679,6 +687,31 @@ class CGManager:
             for layer in self._comments:
                 layer.take_out()
             self.comment_id = None
+
+    # vMix replay (vmix_link.py): the CGs on air go OUT while vMix plays a replay, back IN after it
+    def hold(self, on, scoreboards_only=True):
+        """on: take the manual CGs on air OUT (only scoreboard links if scoreboards_only) and keep them;
+        off: those that were not touched since go IN again. Returns how many."""
+        if on:
+            if self._held is not None:
+                return 0
+            with self._lock:
+                ids = [cid for cid, l in self._manual_layers.items() if l.state in ("in", "on")
+                       and cid not in self._manual_sq and (not scoreboards_only or isinstance(l, WebLayer))]
+                for cid in ids:
+                    self._manual_layers[cid].take_out()
+                self._held = set(ids)
+            return len(ids)
+        held, self._held = self._held, None
+        n = 0
+        for cid in held or ():
+            if self.take_in(cid) is True:
+                n += 1
+        return n
+
+    @property
+    def holding(self):
+        return self._held is not None
 
     # live card CGs
     def start_card(self, item_id, cfgs):
@@ -967,7 +1000,7 @@ class CGManager:
                     del self._manual_sq[cid]          # went OUT (its time, Squeeze Feed, ALL OUT)
             errors = {cid: l.error for cid, l in self._manual_layers.items() if isinstance(l, WebLayer) and l.error}
             card = [{"file": l.cfg.get("file") or l.cfg.get("name"), "state": l.state} for l in self._card_layers]
-            return {"manual_on": on, "manual_errors": errors, "card": card, "card_id": self._card_id, "squeeze": self.squeeze_state}
+            return {"manual_on": on, "manual_errors": errors, "held": sorted(self._held) if self._held is not None else None, "card": card, "card_id": self._card_id, "squeeze": self.squeeze_state}
 
 
 def _is_scoreboard(cfg):
