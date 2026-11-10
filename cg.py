@@ -518,6 +518,7 @@ class CGManager:
         self.manual = []              # list of cfg dicts (saved)
         self._manual_layers = {}      # id -> CGLayer
         self._warming = set()         # manual CG ids being loaded ahead
+        self._manual_sq = {}          # manual CG id -> name of the squeeze it put on air (an L-ad)
         self._card_layers = []        # CGLayer for the on-air live card
         self._card_id = None
         self._stinger = None          # CGLayer of a stinger transition in progress (drawn on top)
@@ -613,7 +614,29 @@ class CGManager:
                 return True
         return False
 
+    def _squeeze_for(self, cfg):
+        """A manual CG that is an L-ad saved to Squeeze Feed (the same video): that squeeze, else None."""
+        if cfg.get("kind") in ("text", "web") or not cfg.get("file"):
+            return None
+        from cgedit import list_presets
+        for p in list_presets(self.folder):
+            if p.get("file") == cfg["file"] and (p.get("cfg") or {}).get("squeeze"):
+                return self.squeeze_preset(p["name"])
+        return None
+
     def take_in(self, cid):
+        with self._lock:
+            cfg = next((c for c in self.manual if c["id"] == cid), None)
+        if cfg is None:
+            return False
+        sq = self._squeeze_for(cfg)
+        if sq is not None:          # an L-ad: the program squeezes into it, the same as from Squeeze Feed
+            err = self.squeeze_in(sq)
+            if err:
+                return err
+            with self._lock:
+                self._manual_sq[cid] = sq["name"]
+            return True
         with self._lock:
             cfg = next((c for c in self.manual if c["id"] == cid), None)
             if cfg is None:
@@ -635,6 +658,11 @@ class CGManager:
             return True
 
     def take_out(self, cid):
+        name = self._manual_sq.pop(cid, None)
+        if name is not None:
+            st = self.squeeze_state
+            if st is not None and st["name"] == name:
+                self.squeeze_out()
         with self._lock:
             layer = self._manual_layers.get(cid)
             if layer:
@@ -931,6 +959,12 @@ class CGManager:
     def status(self):
         with self._lock:
             on = {cid: l.state for cid, l in self._manual_layers.items() if l.visible or l.state == "wait"}
+            sq = self.squeeze_state
+            for cid, name in list(self._manual_sq.items()):
+                if sq is not None and sq["name"] == name:
+                    on[cid] = sq["state"]
+                else:
+                    del self._manual_sq[cid]          # went OUT (its time, Squeeze Feed, ALL OUT)
             errors = {cid: l.error for cid, l in self._manual_layers.items() if isinstance(l, WebLayer) and l.error}
             card = [{"file": l.cfg.get("file") or l.cfg.get("name"), "state": l.state} for l in self._card_layers]
             return {"manual_on": on, "manual_errors": errors, "card": card, "card_id": self._card_id, "squeeze": self.squeeze_state}

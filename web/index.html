@@ -2201,14 +2201,27 @@ function renderManual() {
       <button class="sm lockable" onclick="tmOpen('${c.id}')" title="Play it by itself every so often">Timer</button><button class="sm lockable" onclick="editManualCG('${c.id}')">Edit</button><button class="sm lockable" onclick="delManualCG('${c.id}')">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No manual CGs. Press <b>+ Add CG</b>. They go on air with IN, even while a commercial plays.</div>';
 }
-let tmId = null;
+let tmId = null, tmSqI = null;
 function tmOpen(id) {
-  const c = cgManual.find(x => x.id === id); if (!c) return; tmId = id;
-  $('tmTitle').textContent = c.name || c.file || 'CG';
+  const c = cgManual.find(x => x.id === id); if (!c) return; tmId = id; tmSqI = null;
+  $('tmTitle').textContent = c.name || c.file || 'CG'; $('tmSecs').min = 1;
   $('tmHour').value = c.auto_hour || 0; $('tmSecs').value = c.auto_secs || 10; $('tmLive').checked = !!c.auto_live;
   dTm.showModal();
 }
-function tmSave() {
+function sqTm(i) {      // Squeeze Feed: the same timer (0 seconds = until the overlay video ends)
+  const q = sqItems[i]; if (!q) return; tmSqI = i; tmId = null;
+  $('tmTitle').textContent = q.name; $('tmSecs').min = 0;
+  $('tmHour').value = q.cfg.auto_hour || 0; $('tmSecs').value = q.cfg.auto_secs || 0; $('tmLive').checked = !!q.cfg.auto_live;
+  dTm.showModal();
+}
+async function tmSave() {
+  if (tmSqI !== null) {
+    const q = sqItems[tmSqI];
+    const r = await api('/api/squeeze/save', {preset: q.preset, auto_hour: Math.max(0, Math.min(60, +$('tmHour').value || 0)),
+      auto_secs: Math.max(0, Math.min(3600, +$('tmSecs').value || 0)), auto_live: $('tmLive').checked});
+    if (r.error) say(r.error);
+    dTm.close(); loadSqueeze(); return;
+  }
   const c = cgManual.find(x => x.id === tmId);
   if (c) Object.assign(c, {auto_hour: Math.max(0, Math.min(60, +$('tmHour').value || 0)),
     auto_secs: Math.max(1, Math.min(3600, +$('tmSecs').value || 10)), auto_live: $('tmLive').checked});
@@ -2223,7 +2236,7 @@ async function loadSqueeze() {
     <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(q.file)}">
     <div style="min-width:0"><div class="nm">${esc(q.name)}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="sqTake(${i}, 'in')">IN</button><button class="sm" onclick="sqTake(${i}, 'out')">OUT</button>
-      <button class="sm lockable" onclick="sqOpen(${i})">Position</button><button class="sm lockable" onclick="sqDelete(${i})">Delete</button></div></div>`).join('')
+      <button class="sm lockable" onclick="sqTm(${i})" title="Squeeze by itself every so often">Timer</button><button class="sm lockable" onclick="sqOpen(${i})">Position</button><button class="sm lockable" onclick="sqDelete(${i})">Delete</button></div></div>`).join('')
     || '<div class="empty" style="padding:20px">No squeeze feeds yet. In CG Composer open the L-ad video (with the green area), key the green and press <b>Save to Squeeze Feed</b>.</div>';
   sqShown = ''; sqState(cgStatus.squeeze);
 }
