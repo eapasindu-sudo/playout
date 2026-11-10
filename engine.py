@@ -34,7 +34,7 @@ from audiofx import MasterAudio
 from media import ClipPlayer, probe
 from capture import CaptureInput, UrlInput, make_bars
 from ndi_extra import ExtraOutput, still_frame
-from ndi_io import CHANNELS, SAMPLE_RATE, LiveInput, NDIOutput, SourceFinder
+from ndi_io import CHANNELS, SAMPLE_RATE, LiveInput, NDIOutput, SourceFinder, Uyvy, to_bgra
 
 FADE = 480  # 10 ms audio fade at every cut, avoids clicks
 
@@ -51,6 +51,7 @@ class MainInput:
 
     def __init__(self, finder, width, height, fps):
         self.ndi = LiveInput(finder, width, height)
+        self.ndi.uyvy = True        # vMix pictures come as UYVY: the GPU engine converts them (to_bgra otherwise)
         self.width, self.height, self.fps = width, height, fps
         self.dev = None
         self.source_name = None
@@ -84,8 +85,8 @@ class MainInput:
             return getattr(dev, name)
         raise AttributeError(name)
 
-    def grab(self, n, want_video=True):
-        return self.dev.grab(n, want_video) if self.dev is not None else self.ndi.grab(n, want_video)
+    def grab(self, n, want_video=True, raw=False):
+        return self.dev.grab(n, want_video) if self.dev is not None else self.ndi.grab(n, want_video, raw)
 
     def close(self):
         if self.dev is not None:
@@ -188,7 +189,7 @@ class Engine:
         self.item_started = None     # wall clock when the item went to air
         self.item_ticks = 0          # frames the on-air item has run
         self.last_frame = self.black
-        self.clean_frame = self.black
+        self._clean = self.black
         self.last_clip_frame = None
         self.last_source = None
         self.meters = [-90.0, -90.0]
@@ -389,6 +390,18 @@ class Engine:
         if self.key_input is not None:
             self.key_input.set_tally(bool(self.ndi_key.get("on")), False)
 
+    @property
+    def clean_frame(self):
+        """The program before CGs (BGRA; a UYVY live picture is converted the first time it is asked for)."""
+        v = self._clean
+        if isinstance(v, Uyvy):
+            v = self._clean = to_bgra(v, self.width, self.height)
+        return v
+
+    @clean_frame.setter
+    def clean_frame(self, v):
+        self._clean = v
+
     def _preview_frame(self, n, live_v):
         """What the Preview output shows: the next item."""
         item = self._item(self._preview_next)
@@ -400,7 +413,7 @@ class Engine:
             if on.get("type") == "live" and (on.get("source") or "") == key:
                 return self.clean_frame                      # the same source is on air already
             if not key or key == self.live.source_name:
-                return live_v if live_v is not None else self.black
+                return to_bgra(live_v, self.width, self.height) if live_v is not None else self.black
             if key == "bars":
                 return self.bars
             inp = self.inputs.get(key)
@@ -896,7 +909,9 @@ class Engine:
         n = self._samples_for(self._k)
         self._k += 1
         self._fo_checked = False
-        live_v, live_a = self.live.grab(n, self._main_wanted)   # always pulled, keeps the input in sync
+        nat = gpuengine.active()
+        # always pulled (keeps the input in sync); raw: a UYVY picture the GPU engine converts itself
+        live_v, live_a = self.live.grab(n, self._main_wanted, raw=nat is not None and nat.uyvy_ok)
         video = audio = None
         source = "LIVE"
         pend = self._pending
@@ -976,15 +991,20 @@ class Engine:
         elif not self._fo_checked:
             self._failover(True, n)       # live not on air: nothing to cover
         self._main_wanted = source in ("LIVE", "FILLER")
+        if isinstance(video, Uyvy) and nat is None:
+            video = to_bgra(video, self.width, self.height)
         self.clean_frame = video          # program before CGs (squeeze preview)
         # the GPU engine (gpuengine.py) mixes the CGs itself: here only the list of what goes over the program
-        nat = gpuengine.active()
         layers = None
         led_src = video
         if self.cg is not None:
             try:
                 if nat is not None or "led" in self.extra:
-                    video, layers = self.cg.render(video, source.startswith("LIVE"), n, collect=True)
+                    uy = video if isinstance(video, Uyvy) else None
+                    video, layers = self.cg.render(self.black if uy is not None else video,
+                                                   source.startswith("LIVE"), n, collect=True)
+                    if uy is not None:
+                        video = uy                # (only the GPU engine reads the program here)
                     led_src = video
                     if nat is None:
                         video = self.cg.composite(video, layers)
@@ -1034,6 +1054,7 @@ class Engine:
                 self.gpu_frames += 1
             else:
                 self.gpu_misses += 1
+                video = to_bgra(video, self.width, self.height)
                 if layers and self.cg is not None:
                     video = self.cg.composite(np.asarray(video).reshape(self.height, self.width, 4), layers)
             video = np.asarray(video).reshape(-1)
@@ -1052,6 +1073,7 @@ class Engine:
                 ex["led"].push((gled, []), audio)
             else:
                 hide = getattr(self.cg, "led_hide", ()) if self.cg is not None else ()
+                led_src = to_bgra(led_src, self.width, self.height)
                 ex["led"].push((led_src, [L for L in (layers or []) if isinstance(L, dict) or id(L[0]) not in hide]), audio)
         if "preview" in ex:
             try:

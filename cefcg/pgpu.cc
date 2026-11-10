@@ -449,6 +449,16 @@ float4 ps(V i) : SV_Target {
   if (prm.z > 0.5) return float4(saturate(c.rgb + prm.w), 1);   // plain copy (scaling, layouts), brightness
   return c * prm.x;                    // fade
 }
+// a live picture in UYVY 4:2:2 (tex: RGBA = U Y0 V Y1, half the width), drawn 1:1; prm.x: BT.709 (else 601)
+float4 ps_uyvy(V i) : SV_Target {
+  int2 p = int2(i.pos.xy);
+  float4 q = tex.Load(int3(p.x >> 1, p.y, 0));
+  float y = 1.164 * (((p.x & 1) != 0 ? q.a : q.g) - 0.0627451);
+  float u = q.r - 0.5, v = q.b - 0.5;
+  float3 rgb = prm.x > 0.5 ? float3(y + 1.793 * v, y - 0.213 * u - 0.533 * v, y + 2.112 * u)
+                           : float3(y + 1.596 * v, y - 0.392 * u - 0.813 * v, y + 2.017 * u);
+  return float4(saturate(rgb), 1);
+}
 )";
 
 struct Params {
@@ -469,6 +479,12 @@ class Mixer {
     if (FAILED(g_dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs_)) ||
         FAILED(g_dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &ps_)))
       return false;
+    {   // the live UYVY picture's colour convert (without it Playout converts live pictures itself)
+      ComPtr<ID3DBlob> pub, perr;
+      if (FAILED(D3DCompile(kShader, std::strlen(kShader), "mix", nullptr, nullptr, "ps_uyvy", "ps_4_0", 0, 0, &pub, &perr)) ||
+          FAILED(g_dev->CreatePixelShader(pub->GetBufferPointer(), pub->GetBufferSize(), nullptr, &ps_uyvy_)))
+        ps_uyvy_.Reset();
+    }
     D3D11_BUFFER_DESC bd = {};
     bd.ByteWidth = sizeof(Params);
     bd.Usage = D3D11_USAGE_DEFAULT;
@@ -537,6 +553,62 @@ class Mixer {
   void Black(Tex& t) {
     const float black[4] = {0, 0, 0, 1};
     g_ctx->ClearRenderTargetView(t.rtv.Get(), black);
+  }
+
+  // the live picture sent as UYVY (sw x sh, in shared memory at data): converted, and scaled to the program
+  // size when it is another size. nullptr when this GPU can't (Playout then sends BGRA).
+  Tex* FromUyvy(const uint8_t* data, int sw, int sh, bool bt709) {
+    if (!ps_uyvy_ || sw < 2 || sh < 1 || (sw & 1))
+      return nullptr;
+    if (!uyvy_.tex || uyvy_.w != sw / 2 || uyvy_.h != sh) {
+      D3D11_TEXTURE2D_DESC d = {};
+      d.Width = sw / 2;
+      d.Height = sh;
+      d.MipLevels = d.ArraySize = 1;
+      d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+      d.SampleDesc.Count = 1;
+      d.Usage = D3D11_USAGE_DEFAULT;
+      d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      uyvy_ = Tex();
+      if (FAILED(g_dev->CreateTexture2D(&d, nullptr, &uyvy_.tex)) ||
+          FAILED(g_dev->CreateShaderResourceView(uyvy_.tex.Get(), nullptr, &uyvy_.srv))) {
+        uyvy_ = Tex();
+        return nullptr;
+      }
+      uyvy_.w = sw / 2;
+      uyvy_.h = sh;
+    }
+    g_ctx->UpdateSubresource(uyvy_.tex.Get(), 0, nullptr, data, sw * 2, 0);
+    const bool same = sw == pgm_.w && sh == pgm_.h;
+    Tex& rgb = same ? live_ : live_src_;
+    if ((!rgb.tex || rgb.w != sw || rgb.h != sh) && !MakeTex(rgb, sw, sh, true))
+      return nullptr;
+    Begin(rgb);
+    g_ctx->PSSetShader(ps_uyvy_.Get(), nullptr, 0);
+    Params p = {};
+    p.rect[0] = -1;
+    p.rect[1] = 1;
+    p.rect[2] = 1;
+    p.rect[3] = -1;
+    p.uv[2] = p.uv[3] = 1;
+    p.prm[0] = bt709 ? 1.f : 0.f;
+    g_ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &p, 0, 0);
+    ID3D11ShaderResourceView* srv = uyvy_.srv.Get();
+    g_ctx->PSSetShaderResources(0, 1, &srv);
+    float f[4] = {0, 0, 0, 0};
+    g_ctx->OMSetBlendState(copy_.Get(), f, 0xffffffff);
+    g_ctx->Draw(4, 0);
+    ID3D11ShaderResourceView* none = nullptr;
+    g_ctx->PSSetShaderResources(0, 1, &none);
+    End();
+    if (same)
+      return &live_;
+    if (!live_.tex && !MakeTex(live_, pgm_.w, pgm_.h, true))
+      return nullptr;
+    Begin(live_);
+    Draw(live_src_, 0, 0, static_cast<float>(pgm_.w), static_cast<float>(pgm_.h), 1, true, true, true);
+    End();
+    return &live_;
   }
 
   // the LED output's own picture (same size as the program)
@@ -667,13 +739,13 @@ class Mixer {
 
  private:
   ComPtr<ID3D11VertexShader> vs_;
-  ComPtr<ID3D11PixelShader> ps_;
+  ComPtr<ID3D11PixelShader> ps_, ps_uyvy_;
   ComPtr<ID3D11Buffer> cb_;
   ComPtr<ID3D11BlendState> over_, copy_;
   ComPtr<ID3D11SamplerState> point_, linear_;
   ComPtr<ID3D11RasterizerState> rs_;
   ComPtr<ID3D11Texture2D> staging_;
-  Tex pgm_, base_, led_;
+  Tex pgm_, base_, led_, uyvy_, live_, live_src_;
   std::map<int64_t, Tex> sized_;
   float tw_ = 1, th_ = 1;
 };
@@ -2107,10 +2179,20 @@ void Frame(const Json& j) {
         g_images[static_cast<int64_t>(u.N("id"))] = t;
     }
   }
+  // the base picture: BGRA, or the live input's own UYVY (converted here)
+  Tex* live = nullptr;
+  bool no_uyvy = false;
+  if (const Json* u = j.Get("uyvy")) {
+    const int sw = u->arr.size() >= 3 ? static_cast<int>(u->arr[0].num) : 0;
+    const int sh = u->arr.size() >= 3 ? static_cast<int>(u->arr[1].num) : 0;
+    if (sw > 0 && sh > 0 && static_cast<size_t>(sw) * sh * 2 <= PicBytes())
+      live = g_mixer.FromUyvy(g_mem + BaseOff(), sw, sh, u->arr[2].num != 0);
+    no_uyvy = live == nullptr;
+  }
   const Json* box = j.Get("box");
   Tex* squeezed = nullptr;
   if (box && box->arr.size() == 4)
-    squeezed = g_mixer.BaseTex(g_mem + BaseOff());
+    squeezed = live ? live : g_mixer.BaseTex(g_mem + BaseOff());
   std::vector<const Json*> todo;
   if (const Json* under = j.Get("under"))
     for (const auto& L : under->arr)
@@ -2121,8 +2203,10 @@ void Frame(const Json& j) {
       todo.push_back(&L);
   // the program (and, for the LED output, the same without the layers marked noled) over target
   auto compose = [&](Tex& target, bool led) {
-    if (squeezed)
+    if (squeezed || no_uyvy)
       g_mixer.Black(target);
+    else if (live)
+      g_ctx->CopyResource(target.tex.Get(), live->tex.Get());
     else
       g_ctx->UpdateSubresource(target.tex.Get(), 0, nullptr, g_mem + BaseOff(), target.w * 4, 0);
     g_mixer.Begin(target);
@@ -2206,7 +2290,7 @@ void Frame(const Json& j) {
     }
   }
   ++g_frames;
-  Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : ""));
+  Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : "") + (no_uyvy ? " nouyvy" : ""));
 }
 
 void Command(const Json& j);
