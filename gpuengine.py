@@ -233,13 +233,18 @@ class NativeEngine:
             return subprocess.DEVNULL
 
     def _errtail(self):
-        try:
-            with open(self._errpath, "rb") as f:
-                f.seek(0, 2)
-                f.seek(max(0, f.tell() - 600))
-                return f.read().decode("utf-8", "replace").strip()
-        except Exception:
-            return ""
+        out = []
+        for path, n in ((self._errpath, 600), (os.path.join(self._dir or "", "cache-errors.log"), 1200)):
+            try:   # pgpu's own error output, then Chromium's log (a failed check: why it ended)
+                with open(path, "rb") as f:
+                    f.seek(0, 2)
+                    f.seek(max(0, f.tell() - n))
+                    text = f.read().decode("utf-8", "replace").strip()
+                if text:
+                    out.append(" | ".join(text.splitlines()[-6:]))
+            except Exception:
+                pass
+        return " || ".join(out)
 
     def _line(self, raw):
         line = raw.decode("utf-8", "replace").strip()

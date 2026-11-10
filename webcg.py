@@ -262,6 +262,17 @@ class CefRenderer:
             elif line.startswith("error "):
                 self.error = line[6:][:200]
 
+    def _log_tail(self):
+        """The last lines the browser wrote to its error log (why it stopped), for Playout's log."""
+        try:
+            with open(os.path.join(self._dir, "cache-errors.log"), "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 1500))
+                text = f.read().decode("utf-8", "replace").strip()
+            return "\n  browser log: " + "\n  ".join(text.splitlines()[-8:]) if text else ""
+        except (OSError, TypeError):
+            return ""
+
     def _tell(self, cmd):
         try:
             self._proc.stdin.write((cmd + "\n").encode())
@@ -340,7 +351,7 @@ class CefRenderer:
             except Exception as e:
                 if self._running:
                     self.error = self.error or (str(e)[:200] or type(e).__name__)
-                    logging.info("web CG (built-in browser) %s: %s", self.url, self.error)
+                    logging.info("web CG (built-in browser) %s: %s%s", self.url, self.error, self._log_tail())
             finally:
                 self._stop()
                 self.loaded = False

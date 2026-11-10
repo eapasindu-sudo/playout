@@ -2593,6 +2593,9 @@ class App : public CefApp {
     cl->AppendSwitch("disable-extensions");
     cl->AppendSwitch("no-first-run");
     cl->AppendSwitch("disable-backgrounding-occluded-windows");
+    // a web page that keeps crashing Chromium's GPU process must not end the whole engine ("GPU process
+    // isn't usable. Goodbye.")
+    cl->AppendSwitch("disable-gpu-process-crash-limit");
     cl->AppendSwitchWithValue("disable-features", "OptimizationGuideModelDownloading,OptimizationHints,OnDeviceModelPerformanceParams");
   }
 
@@ -2608,8 +2611,24 @@ int Num(CefRefPtr<CefCommandLine> cl, const char* name, int def, int lo, int hi)
 
 }  // namespace
 
+// A Chromium check that fails (int 3, "The exception Breakpoint") or any other crash: end this process quietly
+// instead of leaving a Windows "Application Error" box on the playout screen (Chromium can change the error
+// mode set below). Playout starts the browser / engine again by itself.
+LONG CALLBACK QuietBreakpoint(EXCEPTION_POINTERS* e) {
+  if (e && e->ExceptionRecord && e->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT)
+    ::TerminateProcess(::GetCurrentProcess(), EXCEPTION_BREAKPOINT);
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+LONG WINAPI QuietCrash(EXCEPTION_POINTERS* e) {
+  ::TerminateProcess(::GetCurrentProcess(), e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 1);
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   ::SetErrorMode(::GetErrorMode() | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+  ::AddVectoredExceptionHandler(1, QuietBreakpoint);
+  ::SetUnhandledExceptionFilter(QuietCrash);
   CefMainArgs main_args(instance);
   CefRefPtr<App> app(new App);
   int code = CefExecuteProcess(main_args, app, nullptr);   // Chromium's own helper processes end here
@@ -2653,8 +2672,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   settings.no_sandbox = true;
   settings.windowless_rendering_enabled = true;
   settings.log_severity = LOGSEVERITY_DISABLE;
-  if (!g_opt.cache.empty())
+  if (!g_opt.cache.empty()) {
     CefString(&settings.root_cache_path) = g_opt.cache;
+    // Chromium's errors (why a web page took the engine down) next to the cache, for Playout's log
+    settings.log_severity = LOGSEVERITY_ERROR;
+    CefString(&settings.log_file) = g_opt.cache + "-errors.log";
+  }
   if (!CefInitialize(main_args, settings, app, nullptr)) {
     Say("error the built-in browser did not start");
     return 4;
