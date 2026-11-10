@@ -293,6 +293,15 @@ def to_bgra(v, width, height):
     return v.bgra(width, height) if isinstance(v, Uyvy) else v
 
 
+def bgra_to_uyvy(a, w, h):
+    """Flat BGRA w x h as flat UYVY (BT.709 video levels), when the GPU engine did not convert it."""
+    import av
+    f = av.VideoFrame.from_ndarray(np.asarray(a, np.uint8).reshape(h, w, 4), format="bgra")
+    o = f.reformat(format="uyvy422", dst_colorspace="itu709")
+    p = o.planes[0]
+    return np.ascontiguousarray(np.frombuffer(p, np.uint8).reshape(h, p.line_size)[:, :w * 2]).reshape(-1)
+
+
 def uyvy_to_bgra(a, w, h, width, height):
     import av
     f = av.VideoFrame(w, h, "uyvy422")
@@ -344,14 +353,16 @@ def fit_audio(a, n_samples):
 class NDIOutput:
     """The playout's program output as an NDI source. The engine's loop keeps the frame rate itself."""
 
-    def __init__(self, name, width, height, fps: Fraction, max_samples=None, paced=False):
+    def __init__(self, name, width, height, fps: Fraction, max_samples=None, paced=False, uyvy=False):
         self.name = name
+        self.width, self.height = width, height
+        self.uyvy = bool(uyvy) and not (width & 1)   # sent as UYVY (the GPU engine converts the program)
         self._pacer = None
         self.sender = Sender(name, clock_video=False, clock_audio=False)
         vf = VideoSendFrame()
         vf.set_resolution(width, height)
         vf.set_frame_rate(fps)
-        vf.set_fourcc(FourCC.BGRA)
+        vf.set_fourcc(FourCC.UYVY if self.uyvy else FourCC.BGRA)
         self.sender.set_video_frame(vf)
         af = AudioSendFrame()
         af.sample_rate = SAMPLE_RATE
@@ -368,8 +379,11 @@ class NDIOutput:
         if paced:
             self._pacer = _Pacer(self.out, fps)
 
-    def send(self, video, audio):
+    def send(self, video, audio, uyvy=None):
+        """uyvy: the same picture as UYVY already (from the GPU engine), used when this output sends UYVY."""
         audio = np.ascontiguousarray(audio, dtype=np.float32)   # NDI takes float32 only (mixing can give float64)
+        if self.uyvy:
+            video = uyvy if uyvy is not None else bgra_to_uyvy(video, self.width, self.height)
         if self._pacer is not None:
             self._pacer.push(video, audio)
         else:

@@ -84,7 +84,8 @@ size_t ReadbackOff() { return AudioOff() + 2 * kMaxSamples * sizeof(float); }
 size_t UploadOff() { return ReadbackOff() + PicBytes(); }
 size_t UploadBytes() { return 2 * PicBytes(); }
 size_t LedOff() { return UploadOff() + UploadBytes(); }   // the LED picture (program + CGs, no score overlay)
-size_t ShmBytes() { return LedOff() + PicBytes(); }
+size_t UyvyOff() { return LedOff() + PicBytes(); }       // the program as UYVY for the NDI output (w*h*2)
+size_t ShmBytes() { return UyvyOff() + PicBytes() / 2; }
 
 std::mutex g_say_lock;
 void Say(const std::string& line) {
@@ -449,6 +450,18 @@ float4 ps(V i) : SV_Target {
   if (prm.z > 0.5) return float4(saturate(c.rgb + prm.w), 1);   // plain copy (scaling, layouts), brightness
   return c * prm.x;                    // fade
 }
+// the program as UYVY 4:2:2 (BT.709, video levels) for the NDI output: drawn 1:1 into a half-width BGRA
+// picture whose bytes are then U Y0 V Y1
+float4 ps_touyvy(V i) : SV_Target {
+  int2 p = int2(i.pos.xy);
+  float3 a = tex.Load(int3(p.x * 2, p.y, 0)).rgb, b = tex.Load(int3(p.x * 2 + 1, p.y, 0)).rgb;
+  float3 m = (a + b) * 0.5;
+  float y0 = 0.0627451 + 0.7152 * 0.858824 * a.g + 0.2126 * 0.858824 * a.r + 0.0722 * 0.858824 * a.b;
+  float y1 = 0.0627451 + 0.7152 * 0.858824 * b.g + 0.2126 * 0.858824 * b.r + 0.0722 * 0.858824 * b.b;
+  float u = 0.5 + 0.878431 * (-0.114572 * m.r - 0.385428 * m.g + 0.5 * m.b);
+  float v = 0.5 + 0.878431 * (0.5 * m.r - 0.454153 * m.g - 0.045847 * m.b);
+  return float4(v, y0, u, y1);   // B G R A in memory: U Y0 V Y1
+}
 // a live picture in UYVY 4:2:2 (tex: RGBA = U Y0 V Y1, half the width), drawn 1:1; prm.x: BT.709 (else 601)
 float4 ps_uyvy(V i) : SV_Target {
   int2 p = int2(i.pos.xy);
@@ -484,6 +497,10 @@ class Mixer {
       if (FAILED(D3DCompile(kShader, std::strlen(kShader), "mix", nullptr, nullptr, "ps_uyvy", "ps_4_0", 0, 0, &pub, &perr)) ||
           FAILED(g_dev->CreatePixelShader(pub->GetBufferPointer(), pub->GetBufferSize(), nullptr, &ps_uyvy_)))
         ps_uyvy_.Reset();
+      ComPtr<ID3DBlob> pob, oerr;
+      if (FAILED(D3DCompile(kShader, std::strlen(kShader), "mix", nullptr, nullptr, "ps_touyvy", "ps_4_0", 0, 0, &pob, &oerr)) ||
+          FAILED(g_dev->CreatePixelShader(pob->GetBufferPointer(), pob->GetBufferSize(), nullptr, &ps_touyvy_)))
+        ps_touyvy_.Reset();
     }
     D3D11_BUFFER_DESC bd = {};
     bd.ByteWidth = sizeof(Params);
@@ -609,6 +626,53 @@ class Mixer {
     Draw(live_src_, 0, 0, static_cast<float>(pgm_.w), static_cast<float>(pgm_.h), 1, true, true, true);
     End();
     return &live_;
+  }
+
+  // the program as UYVY into dst (w * h * 2 bytes) for the NDI output; false when this GPU can't
+  bool ReadbackUyvy(uint8_t* dst) {
+    if (!ps_touyvy_ || (pgm_.w & 1))
+      return false;
+    const int hw = pgm_.w / 2;
+    if (!uyvy_out_.tex && !MakeTex(uyvy_out_, hw, pgm_.h, true))
+      return false;
+    if (!ustaging_) {
+      D3D11_TEXTURE2D_DESC sd = {};
+      sd.Width = hw;
+      sd.Height = pgm_.h;
+      sd.MipLevels = sd.ArraySize = 1;
+      sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      sd.SampleDesc.Count = 1;
+      sd.Usage = D3D11_USAGE_STAGING;
+      sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+      if (FAILED(g_dev->CreateTexture2D(&sd, nullptr, &ustaging_)))
+        return false;
+    }
+    Begin(uyvy_out_);
+    g_ctx->PSSetShader(ps_touyvy_.Get(), nullptr, 0);
+    Params p = {};
+    p.rect[0] = -1;
+    p.rect[1] = 1;
+    p.rect[2] = 1;
+    p.rect[3] = -1;
+    p.uv[2] = p.uv[3] = 1;
+    g_ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &p, 0, 0);
+    ID3D11ShaderResourceView* srv = pgm_.srv.Get();
+    g_ctx->PSSetShaderResources(0, 1, &srv);
+    float f[4] = {0, 0, 0, 0};
+    g_ctx->OMSetBlendState(copy_.Get(), f, 0xffffffff);
+    g_ctx->Draw(4, 0);
+    ID3D11ShaderResourceView* none = nullptr;
+    g_ctx->PSSetShaderResources(0, 1, &none);
+    End();
+    g_ctx->CopyResource(ustaging_.Get(), uyvy_out_.tex.Get());
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(g_ctx->Map(ustaging_.Get(), 0, D3D11_MAP_READ, 0, &m)))
+      return false;
+    const size_t row = static_cast<size_t>(hw) * 4;
+    for (int y = 0; y < pgm_.h; ++y)
+      std::memcpy(dst + y * row, static_cast<const uint8_t*>(m.pData) + static_cast<size_t>(y) * m.RowPitch, row);
+    g_ctx->Unmap(ustaging_.Get(), 0);
+    return true;
   }
 
   // the LED output's own picture (same size as the program)
@@ -739,13 +803,13 @@ class Mixer {
 
  private:
   ComPtr<ID3D11VertexShader> vs_;
-  ComPtr<ID3D11PixelShader> ps_, ps_uyvy_;
+  ComPtr<ID3D11PixelShader> ps_, ps_uyvy_, ps_touyvy_;
   ComPtr<ID3D11Buffer> cb_;
   ComPtr<ID3D11BlendState> over_, copy_;
   ComPtr<ID3D11SamplerState> point_, linear_;
   ComPtr<ID3D11RasterizerState> rs_;
-  ComPtr<ID3D11Texture2D> staging_;
-  Tex pgm_, base_, led_, uyvy_, live_, live_src_;
+  ComPtr<ID3D11Texture2D> staging_, ustaging_;
+  Tex pgm_, base_, led_, uyvy_, live_, live_src_, uyvy_out_;
   std::map<int64_t, Tex> sized_;
   float tw_ = 1, th_ = 1;
 };
@@ -2289,8 +2353,10 @@ void Frame(const Json& j) {
       led = g_mixer.Readback(*t, g_mem + LedOff());
     }
   }
+  const bool uv = j.N("uyvy_out") != 0 && g_mixer.ReadbackUyvy(g_mem + UyvyOff());
   ++g_frames;
-  Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : "") + (no_uyvy ? " nouyvy" : ""));
+  Say("ack " + std::to_string(k) + (rb ? " rb" : "") + (led ? " led" : "") + (no_uyvy ? " nouyvy" : "") +
+      (uv ? " uv" : ""));
 }
 
 void Command(const Json& j);

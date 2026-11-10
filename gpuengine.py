@@ -138,8 +138,10 @@ class NativeEngine:
         self.upload_off = self.readback_off + self.pic
         self.upload_size = 2 * self.pic
         self.led_off = self.upload_off + self.upload_size     # the LED picture (program + CGs, no score overlay)
-        self.size = self.led_off + self.pic
+        self.uyvy_off = self.led_off + self.pic             # the program as UYVY for the NDI output
+        self.size = self.uyvy_off + self.pic // 2
         self.last_led = None
+        self.last_uyvy = None
         self.ready = False
         self.error = ""
         self.gpu = ""
@@ -150,6 +152,7 @@ class NativeEngine:
         self._ack = -1
         self._ack_rb = False
         self._ack_led = False
+        self._ack_uv = False
         self.uyvy_ok = True             # the engine converts UYVY live pictures (an "ack ... nouyvy": it can't)
         self._cv = threading.Condition()
         self._k = 0
@@ -178,6 +181,7 @@ class NativeEngine:
                 self._rb = np.frombuffer(self._mm, np.uint8, self.pic, self.readback_off)
                 self._up = np.frombuffer(self._mm, np.uint8, self.upload_size, self.upload_off)
                 self._led = np.frombuffer(self._mm, np.uint8, self.pic, self.led_off)
+                self._uyvy = np.frombuffer(self._mm, np.uint8, self.pic // 2, self.uyvy_off)
             self._dir = tempfile.mkdtemp(prefix="playout-pgpu-")
             args = [exe(), f"--pg-shm={self._mm_name}", f"--pg-width={self.width}", f"--pg-height={self.height}",
                     f"--pg-fps-num={self.fps_num}", f"--pg-fps-den={self.fps_den}",
@@ -243,6 +247,7 @@ class NativeEngine:
                 self._ack = int(k)
                 self._ack_rb = "rb" in flags
                 self._ack_led = "led" in flags
+                self._ack_uv = "uv" in flags
                 if "nouyvy" in flags and self.uyvy_ok:
                     self.uyvy_ok = False
                     logging.info("GPU engine: no UYVY convert on this GPU; live pictures converted on the CPU")
@@ -359,13 +364,15 @@ class NativeEngine:
                 return False
 
     # ---- the program frame ---------------------------------------------
-    def frame(self, base, audio, jobs, readback=True, led_hide=None):
+    def frame(self, base, audio, jobs, readback=True, led_hide=None, uyvy_out=False):
         """base: the program picture (flat or (h, w, 4) BGRA); audio: (2, n) float32; jobs: [(image or WebTex,
         x, y, opacity 0-255)] bottom first. Returns the mixed picture (h * w * 4, a new array) or None when
         the engine is not there right now (the caller mixes on the CPU).
         led_hide: ids of the images / WebTex left off the LED output's picture; afterwards last_led is that
-        picture (the program itself when nothing is left off), or None (the caller makes it on the CPU)."""
+        picture (the program itself when nothing is left off), or None (the caller makes it on the CPU).
+        uyvy_out: also the program as UYVY for the NDI output (last_uyvy, or None)."""
         self.last_led = None
+        self.last_uyvy = None
         if not self.ready:
             return None
         if self._timeouts >= 8:     # not answering right now: mix on the CPU, and ask it about once a second only
@@ -428,11 +435,13 @@ class NativeEngine:
             cmd["led"] = 1
         if uyvy is not None:
             cmd["uyvy"] = uyvy
+        if uyvy_out and readback:
+            cmd["uyvy_out"] = 1
         if not self._send(cmd):
             return None
         with self._cv:
             self._cv.wait_for(lambda: self._ack >= k or not self.ready, self.ACK_TIMEOUT)
-            got, rb, led = self._ack >= k, self._ack_rb, self._ack_led
+            got, rb, led, uv = self._ack >= k, self._ack_rb, self._ack_led, self._ack_uv
         if not got:
             self._timeouts += 1
             quiet = time.monotonic() - self._last_ack
@@ -452,6 +461,8 @@ class NativeEngine:
             self.last_led = out
         elif led:
             self.last_led = self._led.copy()
+        if uv:
+            self.last_uyvy = self._uyvy.copy()
         return out
 
     def _image(self, img, up, used):
