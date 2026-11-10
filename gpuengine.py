@@ -150,6 +150,7 @@ class NativeEngine:
         self._ack = -1
         self._ack_rb = False
         self._ack_led = False
+        self.uyvy_ok = True             # the engine converts UYVY live pictures (an "ack ... nouyvy": it can't)
         self._cv = threading.Condition()
         self._k = 0
         self._timeouts = 0
@@ -242,6 +243,9 @@ class NativeEngine:
                 self._ack = int(k)
                 self._ack_rb = "rb" in flags
                 self._ack_led = "led" in flags
+                if "nouyvy" in flags and self.uyvy_ok:
+                    self.uyvy_ok = False
+                    logging.info("GPU engine: no UYVY convert on this GPU; live pictures converted on the CPU")
                 self._cv.notify_all()
         elif word == "ready":
             self.gpu = rest
@@ -371,7 +375,15 @@ class NativeEngine:
             self._probe = now
         n = int(audio.shape[1]) if audio is not None else 0
         n = min(n, MAX_SAMPLES)
-        np.copyto(self._base, np.asarray(base, np.uint8).reshape(-1))
+        uyvy = None
+        if getattr(base, "uyvy", False):           # a live picture as UYVY: the engine converts and scales it
+            nb = int(base.size)
+            if nb > self.pic:
+                return None
+            self._base[:nb] = base
+            uyvy = [int(base.w), int(base.h), 1 if base.h >= 720 else 0]
+        else:
+            np.copyto(self._base, np.asarray(base, np.uint8).reshape(-1))
         if n:
             self._audio[:, :n] = audio[:, :n]
         up, layers, used = [], [], 0
@@ -414,6 +426,8 @@ class NativeEngine:
             cmd["box"], cmd["under"] = box, under
         if hidden and readback:
             cmd["led"] = 1
+        if uyvy is not None:
+            cmd["uyvy"] = uyvy
         if not self._send(cmd):
             return None
         with self._cv:

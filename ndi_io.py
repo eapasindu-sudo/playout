@@ -69,6 +69,7 @@ class LiveInput:
         self._sent_tally = None
         self.audio_pair = 0              # which channel pair to take: 0 = 1-2, 1 = 3-4, ...
         self.keep_alpha = False          # True: hand the alpha channel on (NDI key overlay)
+        self.uyvy = False                # True: take pictures without alpha as UYVY (grab(raw=True) hands them on)
         # what the source sends (NDI Sources panel / health): filled while frames come in
         self.fmt = {}
         self.in_fps = None
@@ -108,7 +109,7 @@ class LiveInput:
         src = self.finder.get(self.source_name)
         if src is None:
             return
-        r = Receiver(color_format=RecvColorFormat.BGRX_BGRA,
+        r = Receiver(color_format=RecvColorFormat.UYVY_BGRA if self.uyvy else RecvColorFormat.BGRX_BGRA,
                      bandwidth=RecvBandwidth.highest,
                      recv_name="Playout Live In")
         self.video = VideoFrameSync()
@@ -126,7 +127,7 @@ class LiveInput:
         except Exception:
             return False
 
-    def grab(self, n_samples, want_video=True):
+    def grab(self, n_samples, want_video=True, raw=False):
         """Return (video, audio) for one output frame.
 
         video is a flat uint8 BGRA buffer of the output size, or None when
@@ -146,6 +147,15 @@ class LiveInput:
                 w, h = self.video.get_resolution()
                 if want_video and w > 0 and h > 0:
                     arr = self.video.get_array()
+                    if self.uyvy and self.video.get_fourcc() == FourCC.UYVY:
+                        stride = self.video.get_line_stride()
+                        if stride != w * 2:
+                            arr = np.ascontiguousarray(arr[:stride * h].reshape(h, stride)[:, :w * 2]).reshape(-1)
+                        if raw and w * h * 2 <= self.width * self.height * 4 and not (w & 1):
+                            video = arr.view(Uyvy)           # the GPU engine converts it
+                            video.w, video.h = w, h
+                            return video, audio
+                        return uyvy_to_bgra(arr, w, h, self.width, self.height), audio
                     if (w, h) != (self.width, self.height):
                         arr = resize_bgra(arr.reshape(h, w, 4), self.width, self.height)
                     video = arr.reshape(-1)
@@ -265,6 +275,31 @@ class LiveInput:
     def close(self):
         with self._lock:
             self._close()
+
+
+class Uyvy(np.ndarray):
+    """A live picture still in the source's own UYVY 4:2:2 (flat, w * h * 2 bytes). The GPU engine converts
+    and scales it as it mixes (half the bytes to hand over, no colour convert on the CPU); bgra() does it
+    here, for anything else that needs the picture."""
+    uyvy = True
+    w = h = 0
+
+    def bgra(self, width, height):
+        return uyvy_to_bgra(self, self.w, self.h, width, height)
+
+
+def to_bgra(v, width, height):
+    """v as flat BGRA of width x height (a Uyvy picture converted, anything else as it is)."""
+    return v.bgra(width, height) if isinstance(v, Uyvy) else v
+
+
+def uyvy_to_bgra(a, w, h, width, height):
+    import av
+    f = av.VideoFrame(w, h, "uyvy422")
+    p = f.planes[0]
+    np.frombuffer(p, np.uint8).reshape(h, p.line_size)[:, :w * 2] = np.asarray(a, np.uint8).reshape(h, w * 2)
+    out = f.reformat(width=width, height=height, format="bgra", src_colorspace="itu709" if h >= 720 else "itu601")
+    return out.to_ndarray().reshape(-1)
 
 
 def resize_bgra(img, width, height):
