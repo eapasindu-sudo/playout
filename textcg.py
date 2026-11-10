@@ -309,6 +309,19 @@ def render_static(cfg, out_w, out_h, now=None, left=None):
     return _bgra(im)
 
 
+CHUNK = 4096        # a ticker strip goes to the GPU engine in pieces this wide (a GPU picture has a size limit)
+
+
+class TickerImage(np.ndarray):
+    """A ticker's bar (no text) for the GPU engine, which draws the text strip over it itself: parts is
+    [(strip piece, x in the bar, first column, end column)]. cpu() makes the whole picture on this PC."""
+    parts = None
+    ticker = None
+
+    def cpu(self):
+        return self.ticker._compose()
+
+
 class TextLayer:
     """A text CG on air. Same interface as cg.CGLayer (tick / take_in / take_out / state)."""
 
@@ -331,6 +344,7 @@ class TextLayer:
         self._clock_key = None
         self._strip = None
         self._pos = 0.0
+        self._x = 0
         self._file_check = 0.0
         self._file_text = None
         self._deadline = None          # countdown: when it reaches zero (set as it goes IN)
@@ -399,41 +413,77 @@ class TextLayer:
                 self._label_w = lw + 4
         self._base = _bgra(base)
         self._frame = self._base.copy()
+        self._gpu_base = self._base.view(TickerImage)
+        self._gpu_base.ticker = self
+        sw = self._strip.shape[1]
+        self._chunks = [(c, np.ascontiguousarray(self._strip[:, c:c + CHUNK])) for c in range(0, sw, CHUNK)]
         if self._pos == 0:
             self._pos = float(self._box_w - self._label_w)   # start off the right edge
 
-    def _ticker_frame(self):
+    def _ticker_frame(self, gpu=False):
         if time.time() - self._file_check > 10 and self.cfg.get("text_file"):
             self._file_check = time.time()
             old = self._file_text
             self._ticker_text()
             if self._file_text != old:
                 self._build_ticker()
-        out = self._frame
-        out[:] = self._base
-        area_x, area_w = self._label_w, self._box_w - self._label_w
+        self._x = int(self._pos)
+        out = self._gpu_frame() if gpu else self._compose()
         sw = self._strip.shape[1]
-        x = int(self._pos)
-        # draw the strip repeatedly so the text runs round without a gap
-        start = x if x > 0 else x % sw - sw
-        while start < area_w:
-            a0, a1 = max(0, start), min(area_w, start + sw)
-            if a1 > a0:
-                src = self._strip[:, a0 - start:a1 - start]
-                dst = out[:, area_x + a0:area_x + a1]
-                al = src[..., 3:4].astype(np.uint16)
-                dst[..., :3] = ((src[..., :3] * al + dst[..., :3] * (255 - al) + 127) // 255).astype(np.uint8)
-                np.maximum(dst[..., 3], src[..., 3], out=dst[..., 3])   # text stays solid on a see-through bar
-            start += sw
         self._pos -= _num(self.cfg.get("speed"), 120) / self.fps
         if self._pos < -sw:
             self._pos += sw
         return out
 
+    def _runs(self):
+        """Where the strip goes in the text area, repeated so the text runs round without a gap:
+        [(strip column from, to, area column)]."""
+        area_w = self._box_w - self._label_w
+        sw = self._strip.shape[1]
+        x = self._x
+        start = x if x > 0 else x % sw - sw
+        runs = []
+        while start < area_w:
+            a0, a1 = max(0, start), min(area_w, start + sw)
+            if a1 > a0:
+                runs.append((a0 - start, a1 - start, a0))
+            start += sw
+        return runs
+
+    def _compose(self):
+        out = self._frame
+        out[:] = self._base
+        area_x = self._label_w
+        for s0, s1, a0 in self._runs():
+            src = self._strip[:, s0:s1]
+            dst = out[:, area_x + a0:area_x + a0 + (s1 - s0)]
+            al = src[..., 3:4].astype(np.uint16)
+            dst[..., :3] = ((src[..., :3] * al + dst[..., :3] * (255 - al) + 127) // 255).astype(np.uint8)
+            np.maximum(dst[..., 3], src[..., 3], out=dst[..., 3])   # text stays solid on a see-through bar
+        return out
+
+    def _gpu_frame(self):
+        """The bar as it is (uploaded once) and the pieces of the strip that show, for the GPU engine."""
+        parts = []
+        for s0, s1, a0 in self._runs():
+            for c, piece in self._chunks:
+                p0, p1 = max(s0, c), min(s1, c + piece.shape[1])
+                if p1 > p0:
+                    parts.append((piece, self._label_w + a0 + p0 - s0, p0 - c, p1 - c))
+        img = self._gpu_base
+        img.parts = parts
+        return img
+
     def _picture(self):
         style = self.cfg.get("style") or "text"
         if style == "ticker":
-            return self._ticker_frame() if self._strip is not None else None
+            if self._strip is None:
+                return None
+            gpu = self.state == "on" or (self.cfg.get("anim") or "fade") != "wipe"   # a wipe cuts the picture here
+            if gpu:
+                import gpuengine
+                gpu = gpuengine.active() is not None
+            return self._ticker_frame(gpu)
         if style == "countdown":
             if self._deadline is None:
                 self._deadline = countdown_deadline(self.cfg, time.time())

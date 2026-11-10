@@ -899,6 +899,7 @@ class CGManager:
             layers = layers[1 + sq["over"]:]
         layers = [L for L in layers if not isinstance(L[0], gpuengine.WebTex)]
         layers = [(cpu_key(L[0]),) + tuple(L[1:]) if getattr(L[0], "gpu_key", None) else L for L in layers]
+        layers = [(L[0].cpu(),) + tuple(L[1:]) if getattr(L[0], "parts", None) is not None else L for L in layers]
         if not layers:
             return np.asarray(src).reshape(-1)
         gl = gpucg.compositor()

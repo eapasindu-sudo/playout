@@ -2169,6 +2169,13 @@ void Frame(const Json& j) {
             ck = chroma;
           }
         }
+        if (L.Get("c1")) {   // only columns c0..c1 of the picture (a ticker's text strip)
+          const float c0 = static_cast<float>(L.N("c0")), c1 = static_cast<float>(L.N("c1"));
+          if (c1 > c0 && t.w > 0)
+            g_mixer.Draw(t, x, y, c1 - c0, static_cast<float>(t.h), op, false, false, false,
+                         c0 / t.w, 0, c1 / t.w, 1, 0, ck);
+          continue;
+        }
         g_mixer.Draw(t, x, y, static_cast<float>(t.w), static_cast<float>(t.h), op, false, false, false,
                      0, 0, 1, 1, 0, ck);
       }

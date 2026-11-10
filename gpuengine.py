@@ -397,6 +397,13 @@ class NativeEngine:
                 L["noled"] = 1
                 hidden = True
             layers.append(L)
+            for piece, px, c0, c1 in (getattr(img, "parts", None) or ()):   # a ticker: its text strip over the bar
+                pid, used = self._image(piece, up, used)
+                if pid is not None:
+                    P = {"img": pid, "x": int(x) + int(px), "y": int(y), "o": int(op), "c0": int(c0), "c1": int(c1)}
+                    if "noled" in L:
+                        P["noled"] = 1
+                    layers.append(P)
         if self._drop:
             self._send({"op": "drop", "ids": self._drop})
             self._drop = []
