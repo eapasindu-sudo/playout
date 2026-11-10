@@ -1064,7 +1064,7 @@ class Engine:
             self.message = f"Audio limiter error: {e}"
         peak = np.abs(audio).max(axis=1) if audio.size else np.zeros(CHANNELS)
         self.meters = [round(float(20 * np.log10(max(float(x), 1e-5))), 1) for x in peak]
-        uv = None
+        uv = mixed = None
         if nat is not None:
             # mixed (and encoded for the stream / recording) on the GPU; the mixed picture comes back for NDI
             mixed = None
@@ -1093,7 +1093,7 @@ class Engine:
                     self._uyvy_missing()
                 else:
                     self._uv_miss = 0
-                out.send(video, audio, uyvy=uv)   # NDIOutput's pacer sends it on an exact frame clock
+                out.send(video, audio, uyvy=uv, owned=mixed is not None)   # the pacer sends it on an exact frame clock
         except Exception:
             pass
         ex = self.extra

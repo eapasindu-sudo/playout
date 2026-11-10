@@ -379,13 +379,14 @@ class NDIOutput:
         if paced:
             self._pacer = _Pacer(self.out, fps)
 
-    def send(self, video, audio, uyvy=None):
-        """uyvy: the same picture as UYVY already (from the GPU engine), used when this output sends UYVY."""
+    def send(self, video, audio, uyvy=None, owned=False):
+        """uyvy: the same picture as UYVY already (from the GPU engine), used when this output sends UYVY.
+        owned: video is a new array nobody changes later (the pacer then keeps it without a copy)."""
         audio = np.ascontiguousarray(audio, dtype=np.float32)   # NDI takes float32 only (mixing can give float64)
-        if self.uyvy:
-            video = uyvy if uyvy is not None else bgra_to_uyvy(video, self.width, self.height)
+        if self.uyvy:                                          # (a new array either way)
+            video, owned = (uyvy if uyvy is not None else bgra_to_uyvy(video, self.width, self.height)), True
         if self._pacer is not None:
-            self._pacer.push(video, audio)
+            self._pacer.push(video, audio, owned)
         else:
             self.out.write_video_and_audio(video, audio)
 
@@ -472,9 +473,9 @@ class _Pacer:
         self._thread = threading.Thread(target=self._run, daemon=True, name="ndi pacer")
         self._thread.start()
 
-    def push(self, video, audio):
-        # the engine may reuse its frame buffers, so keep a copy of the picture
-        item = (np.array(video, copy=True), audio)
+    def push(self, video, audio, owned=False):
+        # the engine may reuse its frame buffers, so keep a copy of the picture (unless it is a new one already)
+        item = (video if owned else np.array(video, copy=True), audio)
         with self.cv:
             self.q.append(item)
             while len(self.q) > self.MAX:          # the engine ran far ahead (after a stall): keep in time
