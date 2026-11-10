@@ -497,6 +497,10 @@ Plain GET URLs:
 `/trigger/item/<item name>` (plays that playlist item now).
 ATEM (ATEM & Cameras): `/trigger/atem/cut`, `/trigger/atem/auto`, `/trigger/atem/program/<input>`,
 `/trigger/atem/preview/<input>`.
+Drone tally: the DJI RC Pro / RC Pro 2 gets a red (on air) or green (preview) border over DJI Fly with the
+[ATEM Tally app](https://github.com/eapasindu-sudo/atem-web-switcher/releases/download/tally-android/ATEM-Tally.apk)
+(same Wi-Fi, tap Find, pick the drone's ATEM input). Any phone or tablet can show a full-screen tally at
+`http://PLAYOUT-PC:3000/tally`; tally lights can read `/api/tally`.
 Sony cameras (ATEM & Cameras, port 3000): `http://PLAYOUT-PC:3000/api/sony/<cam>/<action>/<value>`, where
 `<cam>` is 1, 2, … or `all`, for example `/api/sony/all/rec/toggle`, `/api/sony/1/iris/up`,
 `/api/sony/1/zoom/in`, `/api/sony/1/preset/2`.
