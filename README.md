@@ -482,7 +482,7 @@ last switch. A switch only shows as done when the ATEM itself says so; when the 
 3 seconds the screen says so. The phone remote gets the same ATEM buttons. Every ATEM program change is
 written to the **Air Logs** (type `atem`; the Ad Report only counts clips).
 
-The ATEM must be on the network (Ethernet) with the playout PC. Sony cameras join the same network with
+The ATEM must be on the network (Ethernet) with the playout PC. The PC itself can be on Wi-Fi of the same router; **Find ATEM on the network** in Setup lists the ATEMs it can reach, and Setup explains when the ATEM is on another network (set DHCP in ATEM Setup over USB). Sony cameras join the same network with
 PC Remote on, over Wi-Fi or a USB-C to LAN adapter (camera menu: Network, Wired LAN), which is steadier
 (see the ATEM Web Switcher README). The installer lets the switcher page and the Sony camera
 search through Windows Firewall, and installs the Microsoft Visual C++ runtime the Sony SDK needs when the
