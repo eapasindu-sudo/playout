@@ -269,7 +269,8 @@ class Engine:
                 if on and kind not in extra:
                     extra[kind] = ExtraOutput(f"{self.output_name} - {kind.upper() if kind == 'led' else kind.title()}",
                                               self.width, self.height, self.fps, sound=(kind != "preview"),
-                                              compose=self._led_frame if kind == "led" else None)
+                                              compose=self._led_frame if kind == "led" else None,
+                                              uyvy=self._out_uyvy)
             self.extra = extra           # a new dict: the output loop never sees it half changed
             if old:
                 # the output loop may be sending on an old one this very moment: close it a little later
@@ -434,9 +435,9 @@ class Engine:
             key = item.get("source") or ""
             on = self._item(self.on_air) or {}
             if on.get("type") == "live" and (on.get("source") or "") == key:
-                return self.clean_frame                      # the same source is on air already
+                return self._clean                           # the same source is on air already
             if not key or key == self.live.source_name:
-                return to_bgra(live_v, self.width, self.height) if live_v is not None else self.black
+                return live_v if live_v is not None else self.black   # (UYVY as it came: the output converts)
             if key == "bars":
                 return self.bars
             inp = self.inputs.get(key)
@@ -1069,10 +1070,13 @@ class Engine:
             # mixed (and encoded for the stream / recording) on the GPU; the mixed picture comes back for NDI
             mixed = None
             try:
-                hide = (getattr(self.cg, "led_hide", ()) if self.cg is not None else ()) if "led" in self.extra else None
+                ex = self.extra
+                hide = (getattr(self.cg, "led_hide", ()) if self.cg is not None else ()) if "led" in ex else None
                 out = self.output
                 mixed = nat.frame(video, audio, layers or [], led_hide=hide,
-                                  uyvy_out=out is not None and out.uyvy)
+                                  uyvy_out=out is not None and out.uyvy,
+                                  clean_uyvy="clean" in ex and ex["clean"].uyvy and ex["clean"].watched,
+                                  led_uyvy="led" in ex and ex["led"].uyvy and ex["led"].watched)
                 uv = nat.last_uyvy
             except Exception as e:
                 self.message = f"GPU engine error: {e}"
@@ -1098,10 +1102,16 @@ class Engine:
             pass
         ex = self.extra
         if "clean" in ex:
-            ex["clean"].push(self.clean_frame, audio)
+            # as UYVY from the GPU engine (no convert on the CPU), else the picture as it is: the output's own
+            # thread converts it if it has to
+            ex["clean"].push(self._clean, audio,
+                             uyvy=nat.last_clean_uyvy if nat is not None and ex["clean"].uyvy else None)
         if "led" in ex:
             gled = nat.last_led if nat is not None else None
-            if gled is not None:                # mixed on the GPU too: nothing left to do on the CPU
+            luv = nat.last_led_uyvy if nat is not None else None
+            if luv is not None and ex["led"].uyvy:
+                ex["led"].push((None, []), audio, uyvy=luv)
+            elif gled is not None:                # mixed on the GPU too: nothing left to do on the CPU
                 ex["led"].push((gled, []), audio)
             else:
                 hide = getattr(self.cg, "led_hide", ()) if self.cg is not None else ()
