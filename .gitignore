@@ -15,3 +15,6 @@ build/atem/
 build/cef/
 cefcg/cef/
 cefcg/out/
+build/.venv-mac/
+build/output/
+build/dylibs/
