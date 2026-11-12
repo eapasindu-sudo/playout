@@ -229,6 +229,11 @@ class ClipboardApi:
     boxes such as the stream key or a scoreboard link). The page calls window.pywebview.api.*."""
 
     def get_text(self):
+        if sys.platform == "darwin":                # Mac: the system clipboard through pbpaste / pbcopy
+            try:
+                return subprocess.run(["pbpaste"], capture_output=True, timeout=3).stdout.decode("utf-8", "replace")
+            except Exception:
+                return ""
         import ctypes
         from ctypes import wintypes
         u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
@@ -251,6 +256,12 @@ class ClipboardApi:
             u32.CloseClipboard()
 
     def set_text(self, text):
+        if sys.platform == "darwin":
+            try:
+                subprocess.run(["pbcopy"], input=str(text or "").encode("utf-8"), timeout=3)
+                return True
+            except Exception:
+                return False
         import ctypes
         from ctypes import wintypes
         u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32

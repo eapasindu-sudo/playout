@@ -900,8 +900,7 @@ def record_action(action):
         if request.remote_addr not in ("127.0.0.1", "::1"):
             abort(403)
         os.makedirs(recorder.folder, exist_ok=True)
-        if sys.platform == "win32":
-            os.startfile(recorder.folder)
+        paths.open_path(recorder.folder)
         return jsonify(path=recorder.folder)
     abort(404)
 
@@ -1293,8 +1292,7 @@ def invoice():
         path = os.path.join(folder, name)
         with open(path, "wb") as f:
             f.write(data)
-        if sys.platform == "win32":
-            os.startfile(path)
+        paths.open_path(path)
         return jsonify(path=path)
     return send_file(io.BytesIO(data), mimetype="application/pdf", as_attachment=True, download_name=name)
 
@@ -1378,11 +1376,7 @@ def report_file(kind):
         path = os.path.join(folder, name)
         with open(path, "wb") as f:
             f.write(data)
-        if sys.platform == "win32":
-            try:
-                os.startfile(path)
-            except OSError:
-                pass
+        paths.open_path(path)
         return jsonify(path=path)
     return send_file(io.BytesIO(data), mimetype=mime, as_attachment=True, download_name=name)
 
@@ -1418,8 +1412,7 @@ def import_template():
         path = os.path.join(folder, "playlist_template.csv")
         with open(path, "wb") as f:
             f.write(importer.template_csv())
-        if sys.platform == "win32":
-            os.startfile(path)
+        paths.open_path(path)
         return jsonify(path=path)
     return send_file(io.BytesIO(importer.template_csv()), mimetype="text/csv", as_attachment=True,
                      download_name="playlist_template.csv")
@@ -1959,8 +1952,7 @@ def open_media_folder():
     """Opens the media folder in Explorer (only from the playout PC itself)."""
     if request.remote_addr not in ("127.0.0.1", "::1"):
         abort(403)
-    if sys.platform == "win32":
-        os.startfile(cfg["cg_dir"] if request.args.get("cg") else cfg["media_dir"])
+    paths.open_path(cfg["cg_dir"] if request.args.get("cg") else cfg["media_dir"])
     return jsonify(path=cfg["cg_dir"] if request.args.get("cg") else cfg["media_dir"])
 
 

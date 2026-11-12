@@ -38,3 +38,17 @@ def safe_name(name):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name).strip().strip(".")
     return "" if name in ("", ".", "..") else name
 
+
+
+def open_path(path):
+    """Show a file or folder the way the PC's own file manager / default app does (Explorer, Finder)."""
+    import subprocess
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except OSError:
+        pass

@@ -50,11 +50,29 @@ def list_capture_devices(ffmpeg=None):
         try:
             r = subprocess.run([exe, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
                                capture_output=True, text=True, timeout=10,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             for line in r.stderr.splitlines():
                 m = re.search(r'"(.+)" \((video|audio)\)', line)
                 if m and "Alternative name" not in line:
                     out.append({"name": m.group(1), "kind": m.group(2)})
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        # Mac: AVFoundation ("[0] FaceTime HD Camera" under "AVFoundation video devices:", then the audio ones)
+        exe = ffmpeg or _ffmpeg()
+        try:
+            r = subprocess.run([exe, "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                               capture_output=True, text=True, timeout=10)
+            kind = None
+            for line in r.stderr.splitlines():
+                if "video devices:" in line:
+                    kind = "video"
+                elif "audio devices:" in line:
+                    kind = "audio"
+                else:
+                    m = re.search(r"\]\s*\[(\d+)\]\s+(.+)$", line)
+                    if m and kind and not m.group(2).lower().startswith("capture screen"):
+                        out.append({"name": m.group(2).strip(), "kind": kind})
         except Exception:
             pass
     else:
@@ -150,7 +168,7 @@ def device_formats(name, ffmpeg=None, fresh=False):
         return _formats_cache[name]
     try:
         r = subprocess.run([ffmpeg or _ffmpeg(), "-hide_banner", "-list_options", "true", "-f", "dshow", "-i", f"video={name}"],
-                           capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+                           capture_output=True, text=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         found = parse_dshow_options(r.stderr)
     except Exception:
         found = []
@@ -217,6 +235,8 @@ def open_args(key):
             # rtbufsize: room for a short hiccup only; a big buffer fills up when the PC is busy and then
             # the picture runs seconds behind (the "delay" on USB capture)
             return url, "dshow", {"rtbufsize": "64M", "audio_buffer_size": "40"}
+        if sys.platform == "darwin":
+            return video + (f":{audio}" if audio else ""), "avfoundation", {}
         return video, "v4l2", {}
     if key.startswith("lavfi:"):
         return key[6:], "lavfi", {}
@@ -267,6 +287,21 @@ class CaptureInput:
     def _open(self):
         """Open the device, trying the capture formats from best to plain; with the sound device if possible."""
         url, fmt, opts = open_args(self.key)
+        if fmt == "avfoundation":
+            # AVFoundation opens only at a frame rate the device offers (its default 29.97 fails on a 25 fps
+            # ATEM): the output's rate first, then the usual ones
+            video, _, audio = self.key[4:].partition("|")
+            last = None
+            for u in [url] + ([video] if audio else []):
+                for rate in dict.fromkeys([f"{float(self.fps):g}", "25", "50", "30", "29.97", "60", "59.94", ""]):
+                    o = {"framerate": rate} if rate else {}
+                    try:
+                        c = av.open(u, format=fmt, options=o, timeout=5)
+                        note = "" if u == url or not audio else f"sound device {audio} did not open"
+                        return c, f"{rate} fps" if rate else "default", note
+                    except Exception as e:
+                        last = e
+            raise last or RuntimeError("cannot open the device")
         if fmt != "dshow":
             return av.open(url, format=fmt, options=opts, timeout=5), "", ""
         video, _, audio = self.key[4:].partition("|")
