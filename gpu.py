@@ -5,15 +5,18 @@ instead of the CPU.
 AMD (AMF); the CPU (x264) only when the PC has none. NVENC / AMF also take the BGRA program
 picture as it is, so the colour conversion runs on the graphics card too.
 """
+import sys
 import threading
 from fractions import Fraction
 
 import av
 import numpy as np
 
-GPU_ENCODERS = ("h264_nvenc", "h264_qsv", "h264_amf")
+# Mac: Apple's own encoder (VideoToolbox, the media engine of Apple Silicon)
+GPU_ENCODERS = ("h264_videotoolbox",) if sys.platform == "darwin" else ("h264_nvenc", "h264_qsv", "h264_amf")
 ENCODERS = ("auto", "libx264") + GPU_ENCODERS
-NAMES = {"h264_nvenc": "NVIDIA", "h264_qsv": "Intel", "h264_amf": "AMD", "libx264": "CPU (x264)"}
+NAMES = {"h264_nvenc": "NVIDIA", "h264_qsv": "Intel", "h264_amf": "AMD", "h264_videotoolbox": "Apple (VideoToolbox)",
+         "libx264": "CPU (x264)"}
 
 _lock = threading.Lock()
 _tested = {}            # encoder -> None (does not work) or the input pixel format it takes
@@ -85,6 +88,8 @@ def hw_options(enc, kbps, gop):
     if enc == "h264_amf":
         return {"usage": "lowlatency", "rc": "cbr", "quality": "speed", "maxrate": k,
                 "bufsize": f"{kbps * 2}k", "g": str(gop), "bf": "0"}
+    if enc == "h264_videotoolbox":
+        return {"realtime": "1", "maxrate": k, "bufsize": f"{kbps * 2}k", "g": str(gop), "bf": "0"}
     return {"g": str(gop), "bf": "0"}
 
 

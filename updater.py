@@ -18,7 +18,7 @@ import urllib.request
 from version import VERSION
 
 DEFAULT_REPO = "eapasindu-sudo/playout"
-ASSET = "Playout-Setup.exe"
+ASSET = "Playout-mac.zip" if sys.platform == "darwin" else "Playout-Setup.exe"   # Mac: the app, zipped
 
 
 def _ver(v):
@@ -70,7 +70,8 @@ class Updater:
 
     @property
     def available(self):
-        return bool(self.latest and _ver(self.latest) > _ver(self.current) and self.asset_url)
+        # (Mac: not installed from here; check() leaves a notice with the download link instead)
+        return bool(sys.platform == "win32" and self.latest and _ver(self.latest) > _ver(self.current) and self.asset_url)
 
     def _req(self, url, accept="application/vnd.github+json"):
         r = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Playout-Updater"})
@@ -91,7 +92,10 @@ class Updater:
             asset = next((a for a in rel.get("assets", []) if a.get("name") == ASSET), None)
             self.asset_url = asset.get("url") if asset else None
             self.size = asset.get("size", 0) if asset else 0
-            self.error = "" if asset else "The latest release has no Playout-Setup.exe"
+            self.error = "" if asset else f"The latest release has no {ASSET}"
+            if asset and sys.platform != "win32" and _ver(self.latest) > _ver(self.current):
+                self.notice = (f"Playout {self.latest} is out: download {ASSET} from "
+                               f"https://github.com/{self.repo}/releases/latest and replace Playout in Applications.")
         except urllib.error.HTTPError as e:
             self.error = ("Update server not reachable: the repository is private, add an access token in Settings"
                           if e.code == 404 and not self.token else f"Update check failed: HTTP {e.code}")
@@ -99,7 +103,7 @@ class Updater:
             self.error = f"Update check failed (no internet?): {e}"
             if "CERTIFICATE" in str(e):
                 self.error = ("Update check failed: this PC could not check GitHub's security certificate. "
-                              f"Download Playout-Setup.exe from https://github.com/{self.repo}/releases/latest "
+                              f"Download {ASSET} from https://github.com/{self.repo}/releases/latest "
                               "in a browser and install it once.")
         self.checked = time.time()
         self.state = "ready" if self.file and os.path.isfile(self.file) and self.available else "idle"

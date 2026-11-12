@@ -68,6 +68,13 @@ def find_browsers():
             if b:
                 out += sorted(glob.glob(os.path.join(b, r"Microsoft\EdgeWebView\Application\*\msedgewebview2.exe")),
                               reverse=True)[:1]
+    elif sys.platform == "darwin":
+        apps = ["Google Chrome.app/Contents/MacOS/Google Chrome", "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                "Chromium.app/Contents/MacOS/Chromium", "Brave Browser.app/Contents/MacOS/Brave Browser"]
+        for base in ("/Applications", os.path.expanduser("~/Applications")):
+            for a in apps:
+                if os.path.isfile(os.path.join(base, a)):
+                    out.append(os.path.join(base, a))
     else:
         for name in ("microsoft-edge", "google-chrome", "chromium", "chromium-browser"):
             p = shutil.which(name)
@@ -252,7 +259,7 @@ class CefRenderer:
             args.append(f"--cg-js={js}")
         _quiet_crashes()
         self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                      creationflags=subprocess.CREATE_NO_WINDOW)
+                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         _procs.add(self._proc)
         threading.Thread(target=self._read, args=(self._proc,), daemon=True, name="web cg messages").start()
 
