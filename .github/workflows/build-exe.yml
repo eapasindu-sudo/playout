@@ -164,6 +164,7 @@ jobs:
         with:
           name: Playout-Setup
           path: build/output/Playout-Setup.exe
+          retention-days: 3
       - name: Publish release (Playout updates itself from here)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
@@ -244,6 +245,7 @@ jobs:
         with:
           name: Playout-mac
           path: build/output/Playout-mac.zip
+          retention-days: 3
 
   # the Mac app goes into the same release as the Windows installer (made by the windows job)
   publish-mac:
