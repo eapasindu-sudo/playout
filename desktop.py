@@ -41,7 +41,7 @@ def message_box(title, text):
         import ctypes
         ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)
     else:
-        print(f"{title}: {text}")
+        print(f"{title}: {text}", flush=True)
 
 
 def port_in_use(port):
