@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   macos:
-    runs-on: ${{ vars.MAC_RUNNER || 'macos-14' }}
+    runs-on: ${{ vars.MAC_RUNNER || 'macos-latest' }}
     steps:
       - name: Which release (the newest one; the Mac app goes into it)
         id: rel
