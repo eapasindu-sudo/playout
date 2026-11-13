@@ -2268,6 +2268,16 @@ def shutdown():
 
 def serve(host="0.0.0.0", port=None):
     port = port or int(cfg.get("web_port", 8080))
+    if sys.platform == "darwin":
+        # Python's HTTPServer looks up the PC's full network name (socket.getfqdn) before it starts listening;
+        # on a Mac that lookup can hang for half a minute, so the control screen did not start in time
+        import http.server
+        import socketserver
+
+        def _bind(srv):
+            socketserver.TCPServer.server_bind(srv)
+            srv.server_name, srv.server_port = srv.server_address[:2]
+        http.server.HTTPServer.server_bind = _bind
     app.run(host=host, port=port, threaded=True, use_reloader=False)
 
 
