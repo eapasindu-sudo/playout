@@ -2,7 +2,14 @@ name: Build Playout installer
 on:
   push:
     branches: [main]
+    # text-only changes don't need a new installer
+    paths-ignore: ["**.md", ".gitignore", ".github/workflows/cleanup-artifacts.yml"]
   workflow_dispatch:
+
+# a newer push makes the build still running for an older one pointless: stop it (saves Actions minutes)
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -17,6 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -42,7 +50,16 @@ jobs:
           if ($errs.Count) { $errs | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
           Write-Host "update script OK"
 
+      # cefcg.exe / pgpu.exe + CEF + FFmpeg DLLs only change when cefcg/ or the CEF pin changes: keep the last
+      # build and skip the download + C++ build (about 3 minutes) when nothing there changed
+      - name: Built-in browser from the last build (cache)
+        id: cefcache
+        uses: actions/cache@v4
+        with:
+          path: build/cef
+          key: cef-150.0.23-${{ hashFiles('cefcg/**') }}
       - name: Built-in browser for web overlays (cefcg.exe + Chromium Embedded)
+        if: steps.cefcache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           # CEF is pinned: the GPU engine (pgpu.exe) is tested with this version on the Live PC. A newer CEF

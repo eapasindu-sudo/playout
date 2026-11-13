@@ -17,7 +17,8 @@ SetupIconFile=playout.ico
 WizardImageFile=wizard.bmp
 WizardSmallImageFile=wizard-small.bmp
 UninstallDisplayIcon={app}\endora-playout.ico
-Compression=lzma2/max
+; fast: max took about 3.5 minutes of every build for a slightly smaller file
+Compression=lzma2/fast
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
