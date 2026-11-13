@@ -165,6 +165,41 @@ THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 RUN_FLAG = os.path.join(cfg["data_dir"], "running.flag")   # left behind = last run did not close normally
 app = Flask(__name__, static_folder=None)
 
+# ---------- Endora licence key (14-day free trial, then a key from tools.endoraweddingfilms.com) ----------
+import licence as licence_mod
+LIC = licence_mod.Licence(cfg["data_dir"], "playout", trial_days=14)
+
+
+@app.before_request
+def licence_gate():
+    if request.path == "/api/licence" or request.path.startswith("/api/sync"):
+        return None
+    st = LIC.status()
+    if st["ok"]:
+        return None
+    if request.path.startswith("/api/") or request.path.startswith("/trigger/"):
+        return jsonify(error="licence", message=st.get("message", "")), 402
+    return Response(licence_mod.page(st.get("message") or "Enter your licence key."), 402, mimetype="text/html")
+
+
+@app.route("/api/licence", methods=["GET", "POST"])
+def licence_api():
+    if request.method == "GET":
+        return jsonify(LIC.status())
+    try:
+        return jsonify(LIC.activate((request.get_json(silent=True) or {}).get("key", "")))
+    except Exception:
+        return jsonify(ok=False, message="Could not reach the licence server. Check the internet.")
+
+
+def _licence_loop():
+    while True:
+        LIC.refresh()
+        time.sleep(6 * 3600)
+
+
+threading.Thread(target=_licence_loop, daemon=True, name="licence").start()
+
 
 def _secret_key():
     path = os.path.join(cfg["data_dir"], "secret.key")
