@@ -48,16 +48,19 @@ jobs:
       - name: Check the code runs on the Mac (starts, serves the control screen)
         env:
           PLAYOUT_HOME: ${{ runner.temp }}/playout-src
+          PYTHONFAULTHANDLER: "1"       # a crash in native code prints where it happened
         run: |
-          python desktop.py --headless > "$RUNNER_TEMP/src.log" 2>&1 &
+          python -X faulthandler desktop.py --headless > "$RUNNER_TEMP/src.log" 2>&1 &
           pid=$!
           ok=0
           for i in $(seq 1 30); do
             sleep 2
             if curl -sf http://localhost:8080/api/state | grep -q '"output"'; then ok=1; break; fi
+            if ! kill -0 $pid 2>/dev/null; then rc=0; wait $pid || rc=$?; echo "Playout stopped with exit code $rc"; break; fi
           done
-          kill $pid || true
-          tail -40 "$RUNNER_TEMP/src.log"
+          kill $pid 2>/dev/null || true
+          tail -80 "$RUNNER_TEMP/src.log"
+          echo "---- playout.log"; tail -60 "$PLAYOUT_HOME/logs/playout.log" 2>/dev/null || true
           test $ok = 1 || { echo "Playout did not start from source on the Mac"; exit 1; }
           sleep 3
       - name: Build Playout.app
