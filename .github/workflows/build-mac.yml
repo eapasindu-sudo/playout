@@ -1,0 +1,90 @@
+name: Build Playout for Mac
+
+# Mac (Apple Silicon, M2 and newer): Playout.app, zipped, added to the newest release (the same code as that
+# release's Windows installer). No GPU engine or built-in browser on the Mac yet (mixing the older way, web CGs
+# in Google Chrome / Edge, VideoToolbox encoding).
+# Run by hand only (Actions > Build Playout for Mac > Run workflow): a macOS minute counts as 10 Actions minutes,
+# so it does not run with every release. On a Mac of our own (self-hosted runner) set MAC_RUNNER to its label.
+# build/build-mac.sh builds the same app on a Mac without GitHub.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: ${{ vars.MAC_RUNNER || 'macos-14' }}
+    steps:
+      - name: Which release (the newest one; the Mac app goes into it)
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION=${tag#v}" >> "$GITHUB_ENV"
+          echo "Mac app for $tag"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.rel.outputs.tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: FriBiDi (Sinhala / Tamil text shaping in text CGs)
+        run: |
+          brew install fribidi || true
+          mkdir -p build/dylibs
+          cp "$(brew --prefix fribidi)"/lib/libfribidi.0.dylib build/dylibs/ || true
+          DYLD_LIBRARY_PATH="$PWD/build/dylibs" python -c "from PIL import features; print('raqm', features.check('raqm'))"
+      - name: Set version
+        run: |
+          echo "VERSION = '$APP_VERSION'" > version.py
+          cat version.py
+      - name: Check the code runs on the Mac (starts, serves the control screen)
+        env:
+          PLAYOUT_HOME: ${{ runner.temp }}/playout-src
+        run: |
+          python desktop.py --headless > "$RUNNER_TEMP/src.log" 2>&1 &
+          pid=$!
+          ok=0
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf http://localhost:8080/api/state | grep -q '"output"'; then ok=1; break; fi
+          done
+          kill $pid || true
+          tail -40 "$RUNNER_TEMP/src.log"
+          test $ok = 1 || { echo "Playout did not start from source on the Mac"; exit 1; }
+          sleep 3
+      - name: Build Playout.app
+        working-directory: build
+        run: pyinstaller --noconfirm playout-mac.spec
+      - name: Test Playout.app (starts, serves the control screen)
+        env:
+          PLAYOUT_HOME: ${{ runner.temp }}/playout-test
+        run: |
+          build/dist/Playout.app/Contents/MacOS/Playout --headless &
+          pid=$!
+          ok=0
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf http://localhost:8080/api/state | grep -q '"output"'; then ok=1; break; fi
+          done
+          curl -s http://localhost:8080/api/textcg/fonts | head -c 300; echo
+          kill $pid || true
+          tail -40 "$PLAYOUT_HOME/logs/playout.log" 2>/dev/null || true
+          test $ok = 1 || { echo "Playout.app did not start"; exit 1; }
+          echo "Playout.app started and answered on port 8080"
+      - name: Zip Playout.app
+        run: |
+          mkdir -p build/output
+          ditto -c -k --keepParent build/dist/Playout.app build/output/Playout-mac.zip
+          ls -l build/output
+      - name: Add Playout-mac.zip to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.rel.outputs.tag }}" build/output/Playout-mac.zip --repo "$GITHUB_REPOSITORY" --clobber
