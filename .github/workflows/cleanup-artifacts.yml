@@ -10,6 +10,7 @@ on:
 
 permissions:
   actions: write
+  contents: write      # old releases
 
 jobs:
   clean:
@@ -29,3 +30,15 @@ jobs:
           while IFS=$'\t' read -r id name created size; do
             gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && echo "deleted $name $created"
           done < old.tsv
+      - name: Delete old releases (keep the newest 5, so an older version is still there to go back to)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # only Playout's own vN.N.N releases, newest first; Playout updates itself from the newest one
+          gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[] | select(.draft | not) | [.published_at, .tag_name] | @tsv' \
+            | grep -P '\tv\d+\.\d+\.\d+$' | sort -r | tail -n +6 | cut -f2 > old-releases.txt || true
+          echo "deleting $(wc -l < old-releases.txt) release(s)"
+          while read -r tag; do
+            gh release delete "$tag" --repo "$REPO" --cleanup-tag --yes && echo "deleted $tag"
+          done < old-releases.txt
