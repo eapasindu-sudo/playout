@@ -172,7 +172,7 @@ LIC = licence_mod.Licence(cfg["data_dir"], "playout", trial_days=14)
 
 @app.before_request
 def licence_gate():
-    if request.path == "/api/licence" or request.path.startswith("/api/sync"):
+    if request.path in ("/api/licence", "/licence") or request.path.startswith("/api/sync"):
         return None
     st = LIC.status()
     if st["ok"]:
@@ -180,6 +180,37 @@ def licence_gate():
     if request.path.startswith("/api/") or request.path.startswith("/trigger/"):
         return jsonify(error="licence", message=st.get("message", "")), 402
     return Response(licence_mod.page(st.get("message") or "Enter your licence key."), 402, mimetype="text/html")
+
+
+@app.route("/licence")
+def licence_page():
+    st = LIC.status()
+    if st["state"] == "licensed":
+        msg = "Licensed with key " + st.get("key", "") + (" (until " + st["expires"] + ")" if st.get("expires") else "") + ". Enter another key to replace it."
+    elif st["state"] == "trial":
+        msg = f"Free trial: {st['days_left']} day{'s' if st['days_left'] != 1 else ''} left. Enter your licence key to activate Playout."
+    else:
+        msg = st.get("message") or "Enter your licence key."
+    return Response(licence_mod.page(msg), mimetype="text/html")
+
+
+@app.after_request
+def licence_banner(resp):
+    """During the free trial, every Playout page shows a small bar with a link to enter the key."""
+    try:
+        if resp.mimetype == "text/html" and resp.status_code == 200 and request.path != "/licence":
+            st = LIC.status()
+            if st["state"] == "trial":
+                bar = (f'<a href="/licence" style="position:fixed;right:12px;bottom:12px;z-index:99999;background:#c8a96a;color:#0b0a09;'
+                       f'font:600 13px system-ui,sans-serif;padding:8px 12px;border-radius:6px;text-decoration:none;box-shadow:0 4px 14px #0008">'
+                       f'Free trial: {st["days_left"]} day{"s" if st["days_left"] != 1 else ""} left · Enter licence key</a>')
+                resp.direct_passthrough = False  # files sent with send_file: read them so the bar can be added
+                body = resp.get_data(as_text=True)
+                if "</body>" in body:
+                    resp.set_data(body.replace("</body>", bar + "</body>", 1))
+    except Exception:
+        pass
+    return resp
 
 
 @app.route("/api/licence", methods=["GET", "POST"])
