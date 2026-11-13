@@ -25,9 +25,10 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "APP_VERSION=${tag#v}" >> "$GITHUB_ENV"
           echo "Mac app for $tag"
+      # main: the newest release's code; another branch (a test run): that branch, and nothing is published
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.rel.outputs.tag }}
+          ref: ${{ github.ref == 'refs/heads/main' && steps.rel.outputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -87,7 +88,14 @@ jobs:
           mkdir -p build/output
           ditto -c -k --keepParent build/dist/Playout.app build/output/Playout-mac.zip
           ls -l build/output
+      - uses: actions/upload-artifact@v4
+        if: github.ref != 'refs/heads/main'
+        with:
+          name: Playout-mac
+          path: build/output/Playout-mac.zip
+          retention-days: 3
       - name: Add Playout-mac.zip to the release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ steps.rel.outputs.tag }}" build/output/Playout-mac.zip --repo "$GITHUB_REPOSITORY" --clobber
