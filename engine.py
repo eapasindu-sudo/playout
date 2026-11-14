@@ -1041,7 +1041,7 @@ class Engine:
                 self.message = f"CG error: {e}"
         if self.key_input is not None and self.ndi_key.get("on"):
             kv, _ = self.key_input.grab(n)
-            if kv is not None:
+            if kv is not None and self.key_input.connected:     # a source that went away leaves no frozen picture
                 if nat is not None:
                     layers = (layers or []) + [(kv.reshape(self.height, self.width, 4), 0, 0, 255)]
                 else:

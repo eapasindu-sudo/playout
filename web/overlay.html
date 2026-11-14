@@ -46,10 +46,14 @@ function apply(s) {
   progs = s.progs.map(sp => {
     let p = old.get(sp.id);
     if (!p) {
-      p = {id: sp.id, pics: sp.pics, imgs: sp.pics.map((_, i) => {
+      p = {id: sp.id, pics: sp.pics, lag: 0, ready: false, imgs: sp.pics.map((_, i) => {
         const im = new Image(); im.src = `/api/live/layer/${sp.id}/${i}.png`; im.style.opacity = 0; st.appendChild(im); return im; })};
+      // the animation starts when every layer picture is ready (decoded), so nothing pops in late
+      const got = now, pp = p;
+      Promise.all(p.imgs.map(im => im.decode().catch(() => {}))).then(() => {
+        pp.lag = performance.now() - got; pp.t0 += pp.lag; pp.ready = true; });
     }
-    p.phase = sp.phase; p.t0 = now - sp.t * 1000; p.in = sp.in; p.out = sp.out;
+    p.phase = sp.phase; p.t0 = now - sp.t * 1000 + p.lag; p.in = sp.in; p.out = sp.out;
     return p;
   });
   // newest on top
@@ -62,6 +66,7 @@ const len = an => Math.max(0, ...an.filter(a => a[0] !== 'none').map(a => a[1] +
 function frame() {
   const now = performance.now();
   for (const p of progs) {
+    if (!p.ready) continue;
     let t = (now - p.t0) / 1000;
     if (p.phase === 'in' && t >= len(p.in)) { p.phase = 'on'; p.t0 = now; t = 0; }
     if (p.phase === 'out' && t >= len(p.out)) p.phase = 'gone';
@@ -84,6 +89,12 @@ function frame() {
           dx = d[0] * (1 - e); dy = d[1] * (1 - e); a = Math.min(1, e * 1.6);
         } else if (kind === 'wipe-l') cr = 1 - e;
         else if (kind === 'wipe-r') cl = 1 - e;
+        else if (kind === 'dwipe-l' || kind === 'dwipe-r') {     // one edge across the whole design
+          const b0 = Math.min(...p.pics.map(q => q[0])), b1 = Math.max(...p.pics.map(q => q[0] + q[2]));
+          if (kind === 'dwipe-l') cr = Math.min(1, Math.max(0, (x + w - (b0 + (b1 - b0) * e)) / w));
+          else cl = Math.min(1, Math.max(0, ((b1 - (b1 - b0) * e) - x) / w));
+          if (cl >= 1 || cr >= 1) show = false;
+        }
         else if (kind === 'scale') { sc = 0.6 + 0.4 * e; a = e; }
         else if (kind === 'pop') { sc = e < 0.85 ? 0.5 + 0.62 * e : 1.027 - 0.18 * (e - 0.85); a = Math.min(1, e * 2); }
       }

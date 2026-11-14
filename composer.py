@@ -55,7 +55,7 @@ LIVE = None                       # cglive.Live, made when the app starts (it op
 def live():
     global LIVE
     if LIVE is None:
-        LIVE = cglive.Live(HOME, FOLDER)
+        LIVE = cglive.Live(HOME, FOLDER, PLAYOUT_PORT)
     return LIVE
 
 
@@ -176,6 +176,9 @@ def live_layer(pid, i):
     return r
 
 
+_PREVIEWS = {}      # (item id, rev, w, h, picture width) -> PNG
+
+
 @app.get("/api/live/preview/<item_id>.png")
 def live_preview(item_id):
     """An item as it looks on air (the whole frame, see-through), for the Preview monitor and the list."""
@@ -186,12 +189,19 @@ def live_preview(item_id):
     if it is None:
         abort(404)
     w, h = L.size
-    im = design.render_full(it, w, h)
     tw = max(80, min(w, int(request.args.get("w") or 640)))
-    im = im.resize((tw, max(1, round(h * tw / w))), Image.BILINEAR)
-    buf = io.BytesIO()
-    im.save(buf, "PNG", compress_level=1)
-    r = Response(buf.getvalue(), mimetype="image/png")
+    key = (item_id, int(it.get("rev") or 0), w, h, tw)
+    data = _PREVIEWS.get(key)
+    if data is None:
+        a = L._animator(it)                  # the same layers Take uses (made once for both)
+        im = a.compose(a.state("on", 0))
+        im = im.resize((tw, max(1, round(h * tw / w))), Image.BILINEAR)
+        buf = io.BytesIO()
+        im.save(buf, "PNG", compress_level=1)
+        data = _PREVIEWS[key] = buf.getvalue()
+        while len(_PREVIEWS) > 200:
+            _PREVIEWS.pop(next(iter(_PREVIEWS)))
+    r = Response(data, mimetype="image/png")
     r.headers["Cache-Control"] = "max-age=86400"     # the page asks with the item's rev, which changes with it
     return r
 
@@ -249,8 +259,17 @@ def live_action(action):
 @app.post("/api/live/outputs")
 def live_outputs():
     b = request.get_json(force=True, silent=True) or {}
-    live().outputs(b.get("res"), b.get("fps"), b.get("ndi_on"), b.get("ndi_name"))
+    live().outputs(b.get("res"), b.get("fps"), b.get("ndi_on"), b.get("ndi_name"), b.get("playout"))
+    if b.get("playout"):
+        live().link_playout()
     return jsonify(live().state())
+
+
+@app.post("/api/live/transition")
+def live_transition():
+    b = request.get_json(force=True, silent=True) or {}
+    live().transition(b.get("type"), b.get("dur"))
+    return jsonify(ok=True)
 
 
 @app.get("/api/live/package")
@@ -407,7 +426,8 @@ def main():
     global PORT
     host, PORT = pick_port()
     port = PORT
-    live()
+    if live().s.get("playout"):
+        live().link_playout()                 # ready before the first Take (a new NDI source takes a moment)
     threading.Thread(target=lambda: app.run(host=host, port=port, threaded=True, use_reloader=False),
                      daemon=True, name="composer web").start()
     if "--browser" in sys.argv or not _have_webview():
@@ -432,6 +452,7 @@ def main():
         loading.destroy()
 
     webview.start(boot)
+    live().shutdown()
     return 0
 
 

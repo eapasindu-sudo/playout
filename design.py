@@ -257,7 +257,8 @@ def render_full(cfg, out_w, out_h):
 #   none | fade | slide-l | slide-r | slide-u | slide-d (comes from that side, fading) | wipe-l | wipe-r
 #   (revealed from the left / right) | scale (grows from smaller, fading) | pop (grows past its size and settles)
 # Without its own, a layer takes the design's "anim" (fade / wipe / slide / up) over "fade" frames, as Playout did.
-ANIMS = ("none", "fade", "slide-l", "slide-r", "slide-u", "slide-d", "wipe-l", "wipe-r", "scale", "pop")
+ANIMS = ("none", "fade", "slide-l", "slide-r", "slide-u", "slide-d", "wipe-l", "wipe-r", "scale", "pop", "dwipe-l", "dwipe-r")
+# dwipe-l / dwipe-r: one wipe across the whole design (every layer cut at the same edge), for a Take transition
 _OLD = {"fade": "fade", "wipe": "wipe-l", "slide": "slide-l", "up": "slide-u"}
 
 
@@ -286,6 +287,8 @@ class Animator:
         self.cfg, self.w, self.h, self.fps = cfg, out_w, out_h, float(fps or 25)
         self.layers = layer_pictures(cfg, out_w, out_h)
         self.anims = {ph: [_anim_of(cfg, L, ph, self.fps) for L, *_ in self.layers] for ph in ("in", "out")}
+        self.bx = (min([x for _L, _im, x, _y in self.layers] or [0]),
+                   max([x + im.width for _L, im, x, _y in self.layers] or [1]))
 
     def length(self, phase):
         return max([d + du for _t, d, du in self.anims[phase] if _t != "none"] or [0.0])
@@ -317,6 +320,16 @@ class Animator:
                 cr = 1 - e
             elif kind == "wipe-r":
                 cl = 1 - e
+            elif kind in ("dwipe-l", "dwipe-r"):        # one edge moving across the whole design
+                b0, b1 = self.bx
+                if kind == "dwipe-l":
+                    edge = b0 + (b1 - b0) * e
+                    cr = min(1.0, max(0.0, (x + im.width - edge) / im.width))
+                else:
+                    edge = b1 - (b1 - b0) * e
+                    cl = min(1.0, max(0.0, (edge - x) / im.width))
+                if cl >= 1 or cr >= 1:
+                    continue
             elif kind == "scale":
                 sc, a = 0.6 + 0.4 * e, e
             elif kind == "pop":

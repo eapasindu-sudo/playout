@@ -18,6 +18,7 @@ import io
 import json
 import logging
 import os
+import socket
 import threading
 import time
 import uuid
@@ -40,10 +41,10 @@ def _new_id():
 class Program:
     """One design on the Live output: its layers, and where it is in coming in / being on / going out."""
 
-    def __init__(self, item, w, h, fps):
+    def __init__(self, item, w, h, fps, anim=None):
         self.item = item
         self.id = _new_id()                  # the overlay page knows a design by this
-        self.anim = design.Animator(item, w, h, fps)
+        self.anim = anim or design.Animator(item, w, h, fps)
         self.phase, self.t0 = "in", time.monotonic()
 
     def states(self, now):
@@ -66,12 +67,16 @@ class Program:
 
 
 class Live:
-    def __init__(self, home, folder):
+    def __init__(self, home, folder, playout_port=8080):
+        self.playout_port = playout_port     # Playout on this PC: its NDI key shows our output on its program
+        self.link_msg = ""
+        self._linking = False
         self.file = os.path.join(home, "composer-live.json")
         self.folder = folder                 # the CG folder (pictures, the CG library)
         self.lock = threading.RLock()
         self.cv = threading.Condition(self.lock)
         self.s = self._load()
+        self._anims = {}                     # (item id, rev, w, h, fps) -> design.Animator, made ahead of the take
         self.progs = []                      # Program on air (the newest last; older ones going out)
         self.cued = None                     # item id on Preview
         self.live_item = None                # item id on Live
@@ -103,6 +108,8 @@ class Live:
         s.setdefault("res", "1080p")
         s.setdefault("fps", 50)
         s.setdefault("ndi", {"on": False, "name": "ENDORA CG COMPOSER"})
+        s.setdefault("trans", {"type": "", "dur": 0.5})   # Take transition for every design ("" = each design's own)
+        s.setdefault("playout", True)            # Take also puts it on Playout's program (NDI key on this PC)
         return s
 
     def _save(self):
@@ -141,6 +148,7 @@ class Live:
             return {"playlists": self.s["playlists"], "active": self.s["active"], "cued": self.cued,
                     "live": on.item["id"] if on else None, "phase": on.phase if on else "",
                     "res": self.s["res"], "fps": self.fps, "size": self.size, "recovered": self.recovered,
+                    "playout": {"on": bool(self.s.get("playout")), "msg": self.link_msg}, "trans": self.s["trans"],
                     "ndi": {**self.s["ndi"], "error": self.ndi_error,
                             "connections": self.ndi.connections() if self.ndi else 0}}
 
@@ -204,7 +212,7 @@ class Live:
     def _refresh_live(self, it):
         """New text on air at once (no animation): the design is made again and stays on."""
         w, h = self.size
-        p = Program(it, w, h, self.fps)
+        p = Program(it, w, h, self.fps, self._animator(it))
         p.phase = "on"
         self.progs = [p]
         self.version += 1
@@ -213,12 +221,59 @@ class Live:
     # ---- on air --------------------------------------------------------
     def cue(self, item_id):
         with self.lock:
-            if self._find(item_id)[1] is not None:
+            it = self._find(item_id)[1]
+            if it is not None:
                 self.cued = item_id
+                self._warm(it)
             return self.cued
+
+    # ---- made before the take: the cued design's layers and their PNGs, so Take is instant ----
+    def _key(self, it):
+        w, h = self.size
+        t = self.s.get("trans") or {}
+        return (it["id"], int(it.get("rev") or 0), w, h, self.fps, t.get("type") or "", float(t.get("dur") or 0))
+
+    def _animator(self, it):
+        k = self._key(it)
+        a = self._anims.get(k)
+        if a is None:
+            it = copy.deepcopy(it)
+            if k[5]:                              # the Live transition: the same for every layer, in and out
+                kind = "none" if k[5] == "cut" else k[5]
+                for L in (it.get("design") or {}).get("layers") or []:
+                    L["anim_in"] = {"type": kind, "delay": 0, "dur": k[6]}
+                    L.pop("anim_out", None)
+            a = design.Animator(it, k[2], k[3], k[4])
+            self._anims[k] = a
+            while len(self._anims) > 6:
+                self._anims.pop(next(iter(self._anims)))
+        return a
+
+    def _warm(self, it):
+        it = copy.deepcopy(it)
+
+        def go():
+            try:
+                a = self._animator(it)
+                for i in range(len(a.layers)):
+                    self._png(a, i)
+            except Exception:
+                logging.exception("cg live: preparing %s", it.get("name"))
+        threading.Thread(target=go, daemon=True, name="cg live warm").start()
+
+    @staticmethod
+    def _png(anim, i):
+        pngs = anim.__dict__.setdefault("pngs", {})
+        if i not in pngs:
+            buf = io.BytesIO()
+            anim.layers[i][1].save(buf, "PNG", compress_level=1)
+            pngs[i] = buf.getvalue()
+        return pngs[i]
 
     def take(self, item_id=None):
         """item_id (or the cued one) to Live; what is on air goes out as it comes in."""
+        if self.s.get("playout"):
+            self.link_playout()
         with self.lock:
             item_id = item_id or self.cued
             _pl, it = self._find(item_id) if item_id else (None, None)
@@ -227,7 +282,7 @@ class Live:
             for p in self.progs:
                 p.go_out()
             w, h = self.size
-            self.progs.append(Program(copy.deepcopy(it), w, h, self.fps))
+            self.progs.append(Program(copy.deepcopy(it), w, h, self.fps, self._animator(it)))
             self.progs = self.progs[-4:]
             self.live_item = item_id
             self.s["was_live"] = item_id
@@ -235,7 +290,7 @@ class Live:
             self.version += 1
             nxt = self._step(item_id, 1)          # the next one is cued, ready for the next take
             if nxt:
-                self.cued = nxt
+                self.cue(nxt)
             self.cv.notify_all()
             return ""
 
@@ -320,9 +375,7 @@ class Live:
             p = next((p for p in self.progs if p.id == pid), None)
         if p is None or not 0 <= i < len(p.anim.layers):
             return None
-        buf = io.BytesIO()
-        p.anim.layers[i][1].save(buf, "PNG", compress_level=1)
-        return buf.getvalue()
+        return self._png(p.anim, i)
 
     def picture(self):
         """The Live output as an RGBA PIL picture."""
@@ -345,8 +398,25 @@ class Live:
             return self.version
 
     # ---- outputs -------------------------------------------------------
-    def outputs(self, res=None, fps=None, ndi_on=None, ndi_name=None):
+    def transition(self, kind=None, dur=None):
         with self.lock:
+            t = self.s["trans"]
+            if kind is not None and kind in ("", "cut", "fade", "dwipe-l", "dwipe-r", "wipe-l", "slide-l", "slide-u", "scale"):
+                t["type"] = kind
+            if dur is not None:
+                t["dur"] = max(0.0, min(5.0, float(dur)))
+            self._save()
+            if self.cued:
+                it = self._find(self.cued)[1]
+                if it is not None:
+                    self._warm(it)
+
+    def outputs(self, res=None, fps=None, ndi_on=None, ndi_name=None, playout=None):
+        with self.lock:
+            if playout is not None:
+                self.s["playout"] = bool(playout)
+                if playout:
+                    ndi_on = True
             if res in RESOLUTIONS:
                 self.s["res"] = res
             if fps and int(fps) in FPS:
@@ -365,6 +435,68 @@ class Live:
                     p.phase = ph
                 self.version += 1
         self._apply_outputs()
+
+    # ---- Playout on this PC ----------------------------------------------
+    def link_playout(self):
+        """Our NDI output on, and Playout's NDI key on it (unless the key is busy with another source)."""
+        if not self.s["ndi"]["on"]:
+            self.outputs(ndi_on=True)
+        if self._linking:
+            return
+        self._linking = True
+        threading.Thread(target=self._link, daemon=True, name="cg live playout link").start()
+
+    def _playout(self, path, body=None):
+        import urllib.request
+        url = f"http://127.0.0.1:{self.playout_port}{path}"
+        req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return json.loads(r.read())
+
+    def _link(self):
+        try:
+            want = f"({self.s['ndi']['name']})"
+            for _ in range(20):                     # a new NDI source takes a moment to be seen
+                try:
+                    info = self._playout("/api/ndi")
+                except Exception:
+                    self.link_msg = "Playout is not running on this PC."
+                    return
+                key = info.get("key") or {}
+                mine = sorted((d["name"] for d in info.get("sources") or [] if d["name"].endswith(want)),
+                              key=lambda n: not n.upper().startswith(socket.gethostname().upper()))
+                if key.get("source") and key["source"] in mine and key.get("on"):
+                    self.link_msg = "On Playout's program (NDI key)."
+                    return
+                if key.get("on") and key.get("source") and key["source"] not in mine:
+                    self.link_msg = f"Playout's NDI key is on air with {key['source']}: not changed."
+                    return
+                if mine:
+                    self._playout("/api/ndi/key", {"source": mine[0], "on": True})
+                    self.link_msg = "On Playout's program (NDI key)."
+                    return
+                time.sleep(0.5)
+            self.link_msg = "Playout does not see this NDI output yet."
+        except Exception as e:
+            self.link_msg = f"Could not reach Playout: {e}"[:200]
+        finally:
+            self._linking = False
+
+    def shutdown(self):
+        """Closing: a see-through picture last, so nothing stays frozen on a receiver."""
+        self.stop = True
+        ndi = self.ndi
+        if ndi is not None:
+            w, h = self.size
+            blank = np.zeros(w * h * 4, np.uint8)
+            try:
+                for _ in range(3):
+                    ndi.send(blank, self._silence)
+                    time.sleep(1.0 / self.fps)
+                ndi.close()
+            except Exception:
+                pass
 
     def _apply_outputs(self):
         want = self.s["ndi"]["on"]
