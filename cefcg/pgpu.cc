@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -1603,6 +1604,25 @@ float4 ps(V i) : SV_Target {
 }
 )";
 
+// two pictures mixed: a frame made between two of the clip's own frames (frame blending, when the clip's frame rate
+// does not fit the output's: 25p / 30p / 50p on a 59.94 output plays smoothly instead of in a 2-3-2-3 rhythm)
+const char* kBlendShader = R"(
+cbuffer P : register(b0) { float4 k; };
+Texture2D<float4> a : register(t0);
+Texture2D<float4> b : register(t1);
+struct V { float4 pos : SV_Position; };
+V vs(uint id : SV_VertexID) {
+  float2 t = float2(id & 1, id >> 1);
+  V o;
+  o.pos = float4(t.x * 2 - 1, 1 - t.y * 2, 0, 1);
+  return o;
+}
+float4 ps(V i) : SV_Target {
+  int3 p = int3(i.pos.xy, 0);
+  return lerp(a.Load(p), b.Load(p), k.x);
+}
+)";
+
 struct YuvParams {
   float m0[4], m1[4], m2[4], off[4];
 };
@@ -1617,6 +1637,17 @@ class YuvConverter {
     if (FAILED(g_dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs_)) ||
         FAILED(g_dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &ps_)))
       return false;
+    ComPtr<ID3DBlob> bvs, bps;
+    if (SUCCEEDED(D3DCompile(kBlendShader, std::strlen(kBlendShader), "blend", nullptr, nullptr, "vs", "vs_4_0", 0, 0, &bvs, &err)) &&
+        SUCCEEDED(D3DCompile(kBlendShader, std::strlen(kBlendShader), "blend", nullptr, nullptr, "ps", "ps_4_0", 0, 0, &bps, &err)) &&
+        SUCCEEDED(g_dev->CreateVertexShader(bvs->GetBufferPointer(), bvs->GetBufferSize(), nullptr, &bvs_)) &&
+        SUCCEEDED(g_dev->CreatePixelShader(bps->GetBufferPointer(), bps->GetBufferSize(), nullptr, &bps_))) {
+      D3D11_BUFFER_DESC kd = {};
+      kd.ByteWidth = 16;
+      kd.Usage = D3D11_USAGE_DEFAULT;
+      kd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+      blend_ok_ = SUCCEEDED(g_dev->CreateBuffer(&kd, nullptr, &bcb_));
+    }
     D3D11_BUFFER_DESC bd = {};
     bd.ByteWidth = sizeof(YuvParams);
     bd.Usage = D3D11_USAGE_DEFAULT;
@@ -1637,6 +1668,61 @@ class YuvConverter {
 
   // GPU lock held. frame: a d3d11va picture. Writes w x h BGRA to dst.
   bool Convert(const AVFrame* frame, int w, int h, uint8_t* dst) {
+    return ToTex(frame, w, h, out_) && Read(out_, dst);
+  }
+  bool CanBlend() const { return blend_ok_; }
+
+  // GPU lock held. a and b mixed (wt 0: a, 1: b) and read back as w x h BGRA into dst.
+  bool Blend(const Tex& a, const Tex& b, float wt, uint8_t* dst) {
+    const int w = a.w, h = a.h;
+    if (out_.w != w || out_.h != h) {
+      if (!MakeTex(out_, w, h, true) || !MakeStaging(w, h))
+        return false;
+    }
+    float k[4] = {wt, 0, 0, 0};
+    g_ctx->UpdateSubresource(bcb_.Get(), 0, nullptr, k, 0, 0);
+    D3D11_VIEWPORT vp = {0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
+    ID3D11RenderTargetView* rtv = out_.rtv.Get();
+    g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
+    g_ctx->RSSetViewports(1, &vp);
+    g_ctx->RSSetState(rs_.Get());
+    float f[4] = {0, 0, 0, 0};
+    g_ctx->OMSetBlendState(blend_.Get(), f, 0xffffffff);
+    g_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    g_ctx->IASetInputLayout(nullptr);
+    g_ctx->VSSetShader(bvs_.Get(), nullptr, 0);
+    g_ctx->PSSetShader(bps_.Get(), nullptr, 0);
+    ID3D11Buffer* cb = bcb_.Get();
+    g_ctx->PSSetConstantBuffers(0, 1, &cb);
+    ID3D11ShaderResourceView* srv[2] = {a.srv.Get(), b.srv.Get()};
+    g_ctx->PSSetShaderResources(0, 2, srv);
+    g_ctx->Draw(4, 0);
+    ID3D11ShaderResourceView* none[2] = {nullptr, nullptr};
+    g_ctx->PSSetShaderResources(0, 2, none);
+    ID3D11RenderTargetView* no_rtv = nullptr;
+    g_ctx->OMSetRenderTargets(1, &no_rtv, nullptr);
+    return Read(out_, dst);
+  }
+
+  // GPU lock held. t (w x h BGRA) copied to dst.
+  bool Read(const Tex& t, uint8_t* dst) {
+    if (!staging_ || stage_w_ != t.w || stage_h_ != t.h) {
+      if (!MakeStaging(t.w, t.h))
+        return false;
+    }
+    g_ctx->CopyResource(staging_.Get(), t.tex.Get());
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(g_ctx->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &m)))
+      return false;
+    const size_t row = static_cast<size_t>(t.w) * 4;
+    for (int y = 0; y < t.h; ++y)
+      std::memcpy(dst + y * row, static_cast<const uint8_t*>(m.pData) + static_cast<size_t>(y) * m.RowPitch, row);
+    g_ctx->Unmap(staging_.Get(), 0);
+    return true;
+  }
+
+  // GPU lock held. frame (d3d11va) turned into w x h BGRA in dst (a render target texture).
+  bool ToTex(const AVFrame* frame, int w, int h, Tex& out) {
     auto* tex = reinterpret_cast<ID3D11Texture2D*>(frame->data[0]);
     const UINT index = static_cast<UINT>(reinterpret_cast<intptr_t>(frame->data[1]));
     D3D11_TEXTURE2D_DESC d;
@@ -1669,19 +1755,8 @@ class YuvConverter {
       src_h_ = d.Height;
       src_fmt_ = d.Format;
     }
-    if (out_.w != w || out_.h != h) {
-      if (!MakeTex(out_, w, h, true))
-        return false;
-      D3D11_TEXTURE2D_DESC sd = {};
-      sd.Width = w;
-      sd.Height = h;
-      sd.MipLevels = sd.ArraySize = 1;
-      sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-      sd.SampleDesc.Count = 1;
-      sd.Usage = D3D11_USAGE_STAGING;
-      sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-      staging_.Reset();
-      if (FAILED(g_dev->CreateTexture2D(&sd, nullptr, &staging_)))
+    if (out.w != w || out.h != h || !out.rtv) {
+      if (!MakeTex(out, w, h, true))
         return false;
     }
     g_ctx->CopySubresourceRegion(src_.Get(), 0, 0, 0, 0, tex, index, nullptr);
@@ -1701,7 +1776,7 @@ class YuvConverter {
     p.off[3] = static_cast<float>(frame->height) / d.Height;
     g_ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &p, 0, 0);
     D3D11_VIEWPORT vp = {0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
-    ID3D11RenderTargetView* rtv = out_.rtv.Get();
+    ID3D11RenderTargetView* rtv = out.rtv.Get();
     g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
     g_ctx->RSSetViewports(1, &vp);
     g_ctx->RSSetState(rs_.Get());
@@ -1723,18 +1798,28 @@ class YuvConverter {
     g_ctx->PSSetShaderResources(0, 2, none);
     ID3D11RenderTargetView* no_rtv = nullptr;
     g_ctx->OMSetRenderTargets(1, &no_rtv, nullptr);
-    g_ctx->CopyResource(staging_.Get(), out_.tex.Get());
-    D3D11_MAPPED_SUBRESOURCE m;
-    if (FAILED(g_ctx->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &m)))
-      return false;
-    const size_t row = static_cast<size_t>(w) * 4;
-    for (int y = 0; y < h; ++y)
-      std::memcpy(dst + y * row, static_cast<const uint8_t*>(m.pData) + static_cast<size_t>(y) * m.RowPitch, row);
-    g_ctx->Unmap(staging_.Get(), 0);
     return true;
   }
 
  private:
+  bool MakeStaging(int w, int h) {
+    D3D11_TEXTURE2D_DESC sd = {};
+    sd.Width = w;
+    sd.Height = h;
+    sd.MipLevels = sd.ArraySize = 1;
+    sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    sd.SampleDesc.Count = 1;
+    sd.Usage = D3D11_USAGE_STAGING;
+    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    staging_.Reset();
+    stage_w_ = stage_h_ = 0;
+    if (FAILED(g_dev->CreateTexture2D(&sd, nullptr, &staging_)))
+      return false;
+    stage_w_ = w;
+    stage_h_ = h;
+    return true;
+  }
+
   ComPtr<ID3D11VertexShader> vs_;
   ComPtr<ID3D11PixelShader> ps_;
   ComPtr<ID3D11Buffer> cb_;
@@ -1743,6 +1828,11 @@ class YuvConverter {
   ComPtr<ID3D11BlendState> blend_;
   ComPtr<ID3D11Texture2D> src_, staging_;
   ComPtr<ID3D11ShaderResourceView> lum_, chroma_;
+  ComPtr<ID3D11VertexShader> bvs_;
+  ComPtr<ID3D11PixelShader> bps_;
+  ComPtr<ID3D11Buffer> bcb_;
+  bool blend_ok_ = false;
+  int stage_w_ = 0, stage_h_ = 0;
   int src_w_ = 0, src_h_ = 0;
   DXGI_FORMAT src_fmt_ = DXGI_FORMAT_UNKNOWN;
   Tex out_;
@@ -1777,9 +1867,10 @@ enum AVPixelFormat PickD3D11(AVCodecContext*, const enum AVPixelFormat* fmts) {
 
 class Clip {
  public:
-  Clip(int id, std::string path, std::wstring shm, int w, int h, double start, double end, double frame_dur, bool gpu)
+  Clip(int id, std::string path, std::wstring shm, int w, int h, double start, double end, double frame_dur, bool gpu,
+       bool blend)
       : id_(id), path_(std::move(path)), shm_(std::move(shm)), w_(w), h_(h), start_(start), end_(end),
-        dur_(frame_dur), gpu_(gpu) {}
+        dur_(frame_dur), gpu_(gpu), blend_(blend) {}
   ~Clip() { Stop(); }
   void Start() { thread_ = std::thread(&Clip::Run, this); }
   void Stop() {
@@ -1830,6 +1921,36 @@ class Clip {
     ::CloseHandle(map);
   }
 
+  // one output picture at time T: clip frames a and b mixed (wt 0: a, 1: b), on the GPU or the CPU
+  bool EmitBlend(Tex* tex, std::vector<uint8_t>* buf, int a, int b, double wt, double T) {
+    int slot;
+    uint8_t* dst = FreeSlot(slot);
+    if (!dst)
+      return false;
+    const bool near_a = wt < 0.03, near_b = wt > 0.97;
+    bool ok = false;
+    if (!buf[b].empty()) {                                  // CPU pictures
+      if (near_a || near_b) {
+        std::memcpy(dst, buf[near_a ? a : b].data(), buf[b].size());
+      } else {
+        const uint32_t wb = static_cast<uint32_t>(wt * 256 + 0.5), wa = 256 - wb;
+        const uint8_t* pa = buf[a].data();
+        const uint8_t* pb = buf[b].data();
+        const size_t n = buf[b].size();
+        for (size_t i = 0; i < n; ++i)
+          dst[i] = static_cast<uint8_t>((pa[i] * wa + pb[i] * wb + 128) >> 8);
+      }
+      ok = true;
+    } else {
+      std::lock_guard<std::recursive_mutex> l(g_gpu);
+      ok = near_a || near_b ? conv_.Read(tex[near_a ? a : b], dst) : conv_.Blend(tex[a], tex[b], static_cast<float>(wt), dst);
+    }
+    if (!ok)
+      return false;
+    Publish(slot, T);
+    return true;
+  }
+
   std::string Decode() {
     AVFormatContext* fmt = nullptr;
     int r = avformat_open_input(&fmt, path_.c_str(), nullptr, nullptr);
@@ -1872,6 +1993,23 @@ class Clip {
       av_seek_frame(fmt, vi, static_cast<int64_t>(t0 / tb), AVSEEK_FLAG_BACKWARD);
     }
     const double end_t = end_ > 0 ? base + end_ : -1;
+    // frame blending: only when the clip's frame rate does not fit the output's (25p on 59.94: 2.4 output frames per
+    // clip frame); a clip at the output rate, or at a whole multiple / half of it, plays its own frames as before
+    AVRational fr = vs->avg_frame_rate.num > 0 && vs->avg_frame_rate.den > 0 ? vs->avg_frame_rate : vs->r_frame_rate;
+    const double src_dt = fr.num > 0 && fr.den > 0 ? av_q2d(av_inv_q(fr)) : 0.0;
+    bool blend = false;
+    if (blend_ && src_dt > 0 && dur_ > 0) {
+      const double ratio = src_dt / dur_;                    // output frames per clip frame
+      const double q = ratio >= 1 ? ratio : 1 / ratio;
+      blend = std::fabs(q - std::round(q)) > 0.02;
+    }
+    if (blend)
+      Tell("blend " + std::to_string(1 / src_dt).substr(0, 6));
+    Tex btex[2];                                             // GPU: the clip frames before and after the output time
+    std::vector<uint8_t> bbuf[2];                            // CPU: the same as BGRA
+    int bprev = -1;                                          // which of the two holds the earlier frame
+    double tprev = 0;
+    int64_t k_out = 0;                                       // next output frame (at k_out * dur_)
     int64_t last_slot = INT64_MIN;
     bool told = false;
     SwsContext* sws = nullptr;
@@ -1905,6 +2043,68 @@ class Clip {
           out_point = true;
           av_frame_unref(frame);
           break;
+        }
+        if (blend && frame->format == AV_PIX_FMT_D3D11) {     // a GPU without the blend shader: play as before
+          std::lock_guard<std::recursive_mutex> l(g_gpu);
+          if (!conv_ready_) {
+            conv_ready_ = true;
+            conv_ok_ = conv_.Init();
+          }
+          if (conv_ok_ && !conv_.CanBlend() && bprev < 0)
+            blend = false;
+        }
+        if (blend) {
+          // the frame goes into the free one of the two; every output time up to it is made from the pair
+          const int cur = bprev < 0 ? 0 : 1 - bprev;
+          bool ok = false;
+          if (frame->format == AV_PIX_FMT_D3D11) {
+            if (!told) {
+              Tell("gpu " + std::string(codec->name));
+              told = true;
+            }
+            std::lock_guard<std::recursive_mutex> l(g_gpu);
+            if (!conv_ready_) {
+              conv_ready_ = true;
+              conv_ok_ = conv_.Init();
+            }
+            ok = conv_ok_ && conv_.CanBlend() && conv_.ToTex(frame, w_, h_, btex[cur]);
+            bbuf[cur].clear();
+          } else {
+            if (!told) {
+              Tell("cpu " + std::string(codec->name));
+              told = true;
+            }
+            sws = sws_getCachedContext(sws, frame->width, frame->height, static_cast<AVPixelFormat>(frame->format), w_, h_,
+                                       AV_PIX_FMT_BGRA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+            if (sws) {
+              bbuf[cur].resize(static_cast<size_t>(w_) * h_ * 4);
+              uint8_t* planes[4] = {bbuf[cur].data(), nullptr, nullptr, nullptr};
+              int lines[4] = {w_ * 4, 0, 0, 0};
+              sws_scale(sws, frame->data, frame->linesize, 0, frame->height, planes, lines);
+              ok = true;
+            }
+          }
+          av_frame_unref(frame);
+          if (!ok) {
+            result = "the picture could not be converted";
+            break;
+          }
+          const double tc = t - t0;
+          if (bprev < 0)
+            tprev = tc;
+          while (!stop_ && k_out * dur_ <= tc + 1e-6) {
+            const double T = k_out * dur_;
+            const double wt = (bprev < 0 || tc <= tprev) ? 1.0 : std::min(1.0, std::max(0.0, (T - tprev) / (tc - tprev)));
+            if (!EmitBlend(btex, bbuf, bprev < 0 ? cur : bprev, cur, wt, T)) {
+              if (!stop_)
+                result = "the picture could not be blended";
+              break;
+            }
+            ++k_out;
+          }
+          bprev = cur;
+          tprev = tc;
+          continue;
         }
         // one picture per output frame (a 50p clip at 25p converts only the pictures shown)
         const int64_t slot_no = static_cast<int64_t>(std::ceil((t - t0) / dur_ - 0.5 - 1e-6));
@@ -1955,6 +2155,13 @@ class Clip {
       if (out_point || (eof && r == AVERROR_EOF))
         break;
     }
+    // frame blending: the clip's last frame stays up for its own length
+    while (blend && result.empty() && !stop_ && bprev >= 0 && k_out * dur_ < tprev + src_dt - dur_ * 0.5 &&
+           (end_t < 0 || k_out * dur_ < end_t - t0 - dur_ * 0.5)) {
+      if (!EmitBlend(btex, bbuf, bprev, bprev, 0.0, k_out * dur_))
+        break;
+      ++k_out;
+    }
     sws_freeContext(sws);
     av_frame_free(&frame);
     av_packet_free(&pkt);
@@ -1966,7 +2173,7 @@ class Clip {
   std::wstring shm_;
   int w_, h_;
   double start_, end_, dur_;
-  bool gpu_;
+  bool gpu_, blend_;
   uint8_t* mem_ = nullptr;
   int next_ = 0;
   std::atomic<bool> stop_{false};
@@ -1997,7 +2204,7 @@ void ClipCommand(const Json& j) {
   std::string shm = j.S("shm");
   std::unique_ptr<Clip> c(new Clip(id, j.S("path"), std::wstring(shm.begin(), shm.end()), static_cast<int>(j.N("w")),
                                    static_cast<int>(j.N("h")), j.N("start"), j.N("end"), j.N("dur", 0.04),
-                                   j.N("gpu", 1) != 0));
+                                   j.N("gpu", 1) != 0, j.N("blend", 0) != 0));
   c->Start();
   std::lock_guard<std::mutex> l(g_clips_lock);
   g_clips[id] = std::move(c);
@@ -2696,7 +2903,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     CefString(&settings.log_file) = g_opt.cache + "-errors.log";
   }
   if (!CefInitialize(main_args, settings, app, nullptr)) {
-    Say("error the built-in browser did not start");
+    // why (cef_resultcode_t): e.g. a profile still held by another Chromium (process singleton)
+    Say("error the built-in browser did not start (CEF code " + std::to_string(CefGetExitCode()) + ")");
     return 4;
   }
   Say(std::string("ready ") + (g_nvidia ? "nvidia" : g_warp ? "software" : "gpu") + " " + g_adapter);
