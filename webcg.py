@@ -229,7 +229,10 @@ class CefRenderer:
         self.css = str(css or "")
         self.width, self.height = max(16, int(width)), max(16, int(height))
         self.zoom = max(1, float(zoom or 100)) / 100.0
-        self.rate = max(1.0, min(30.0, float(rate or 10)))
+        if not rate:
+            import hwprofile
+            rate = hwprofile.web_rate()          # this PC's default (fewer pictures on a small PC)
+        self.rate = max(1.0, min(30.0, float(rate)))
         self.interval = 1.0 / self.rate
         self.frame = None
         self.error = ""

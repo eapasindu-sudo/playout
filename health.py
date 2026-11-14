@@ -231,6 +231,13 @@ class Health:
                 parts = [f"Playout {s['app_cpu'] + (s.get('app_children_cpu') or 0)}%" + (f" ({inside})" if inside else "")] + [f"{n} {c}%" for n, c in s.get("top_other") or [] if c >= 3]
                 add("CPU use", "warn", "Where the CPU goes: " + ", ".join(parts) +
                     (" - close the other programs or move them to another PC" if any(c >= 10 for _, c in s.get("top_other") or []) else ""))
+            import hwprofile as _hw
+            P = _hw.PROFILE
+            if P:
+                add("This PC", "ok", f"{P['cpu']}, {P['cores']} cores / {P['threads']} threads, {P['ram_gb']:.0f} GB RAM" +
+                    (f", {' + '.join(P['gpus'])}" if P.get("gpus") else "") +
+                    f": {P['level']} profile (CG memory {P['cg_cache_mb']} MB, {P['clip_buffer']} frames ahead)" +
+                    (" - a small PC: keep NDI Clean / LED outputs and extra web CGs off" if P["level"] == "light" else ""))
             add("Computer", lvl, f"CPU {cpu:.0f}%" + (f", GPU {gpu:.0f}%" if gpu is not None else "") +
                 (f", RAM {s['ram']:.0f}%" if s.get("ram") is not None else "") +
                 (f", upload {s['net_up_mbps']:.1f} Mbps" if s.get("net_up_mbps") is not None else ""))
