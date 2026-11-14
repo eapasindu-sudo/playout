@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0c0d0f">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/img/app-icon-192.png">
+<link rel="apple-touch-icon" href="/img/app-icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Playout">
 <title>Endora Playout Remote</title>
 <style>
   :root { --bg:#0c0d0f; --panel:#1a1c1f; --panel2:#232529; --line:#33363b; --text:#e9eaec; --dim:#8d9299;
@@ -45,9 +52,15 @@
   dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; width:min(360px, 92vw); }
   dialog::backdrop { background:#000a; }
   dialog .b { display:flex; gap:8px; margin-top:14px; } dialog .b button { flex:1; }
+  body { padding-top:max(10px, env(safe-area-inset-top)); padding-bottom:max(40px, env(safe-area-inset-bottom)); }
+  .net { display:none; position:sticky; top:0; z-index:5; margin:0 -16px 8px; padding:10px 16px; background:#7a3d08; color:#fff; font-weight:700; font-size:14px; }
+  .net.show { display:block; } .net small { display:block; font-weight:400; opacity:.85; margin-top:2px; }
+  .install { display:none; } .install.show { display:block; }
+  .install p { margin:0; color:var(--dim); font-size:13px; }
 </style>
 </head>
 <body>
+<div class="net" id="net">&#9888; Playout PC eka hoyaganna ba - reconnecting...<small>Phone eka Playout PC eka thiyena Wi-Fi ekatama connect karala thiyenawada balanna.</small></div>
 <div class="top"><img src="/img/logo-playout.png" alt="Endora Playout" style="height:30px"><span class="clock" id="clock">--:--:--</span><a href="/health" style="color:#8d9299; font-size:13px; margin-left:auto">Health &rsaquo;</a><span class="tally" id="tally" style="margin-left:8px">LIVE</span></div>
 <div class="warn" id="foWarn">&#9888; LIVE INPUT LOST - filler on air</div>
 <div class="warn" id="fbWarn" style="background:#7a3d08"></div>
@@ -72,6 +85,10 @@
 <div class="card" id="atemCard" style="display:none"><h2 style="display:flex">ATEM <span style="flex:1"></span><a id="atemLink" style="color:#8d9299; text-transform:none; letter-spacing:0" target="_blank">Full switcher + cameras &rsaquo;</a></h2>
   <div class="grid" id="atemPgm" style="grid-template-columns:repeat(4, 1fr); margin-top:0"></div>
   <div class="grid"><button class="red" onclick="atem('cut')">CUT</button><button class="blue" onclick="atem('auto')">AUTO</button><span class="msg" id="atemMsg" style="margin:0; align-self:center"></span></div>
+</div>
+<div class="card install" id="install"><h2 style="display:flex">Install app <span style="flex:1"></span><button class="sm" onclick="hideInstall()">&#10005;</button></h2>
+  <p id="installText"></p>
+  <button class="blue" id="bInstall" style="display:none; width:100%; margin-top:8px" onclick="doInstall()">Install Playout app</button>
 </div>
 <div class="card"><h2>Playlist</h2><div id="pl"></div></div>
 <div class="card"><h2 style="display:flex">Manual CG <span style="flex:1"></span><button class="sm red" onclick="api('/api/cg/all_out', {}).then(pollCG)">ALL OUT</button></h2><div id="cg"></div></div>
@@ -99,9 +116,13 @@ const mode = () => api('/api/modes', {auto: !S.auto}).then(poll);
 function hms(sec) { if (sec == null || isNaN(sec)) return '--:--:--'; sec = Math.max(0, Math.floor(sec)); const p = n => String(n).padStart(2, '0'); return `${p(Math.floor(sec / 3600))}:${p(Math.floor(sec / 60) % 60)}:${p(sec % 60)}`; }
 const tod = ts => ts == null ? '' : new Date(ts * 1000).toTimeString().slice(0, 5);
 
-let shownVersion = -1;
+let shownVersion = -1, fails = 0;
+function online(ok) {
+  fails = ok ? 0 : fails + 1;
+  $('net').classList.toggle('show', fails >= 3);    // ~1.5 s without the PC: phone left the Wi-Fi, or the PC is off
+}
 async function poll() {
-  try { S = await api('/api/state'); } catch (e) { $('clock').textContent = 'OFFLINE'; return; }
+  try { S = await api('/api/state'); online(true); } catch (e) { if (e.message !== 'login') { online(false); $('clock').textContent = 'OFFLINE'; } return; }
   $('clock').textContent = new Date(S.now * 1000).toTimeString().slice(0, 8);
   const it = S.on_air, clip = it && it.type === 'clip';
   const t = $('tally');
@@ -186,6 +207,27 @@ const atem = (cmd, input) => fetch('/api/atem/cmd', {method:'POST', headers:{'Co
   .then(r => r.json()).then(r => { if (!r.ok) $('atemMsg').textContent = r.error; pollAtem(); });
 pollAtem(); setInterval(pollAtem, 1000);
 poll(); setInterval(poll, 500);
+
+// ---- phone app (PWA): install to the home screen, keep the screen on --------------------------
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let installEv = null;
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+function showInstall(text, button) {
+  if (standalone || lsGet('installHidden')) return;
+  $('installText').innerHTML = text; $('bInstall').style.display = button ? '' : 'none'; $('install').classList.add('show');
+}
+function hideInstall() { $('install').classList.remove('show'); lsSet('installHidden', '1'); }
+async function doInstall() { if (!installEv) return; installEv.prompt(); await installEv.userChoice.catch(() => {}); installEv = null; $('install').classList.remove('show'); }
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEv = e; showInstall('Playout remote eka phone eke app ekak widiyata install karanna.', true); });
+if (/iPhone|iPad|iPod/.test(navigator.userAgent)) showInstall('Safari eke <b>Share &#8679;</b> button eka obala <b>Add to Home Screen</b> denna. Ita passe Playout app eka home screen eke thiyenawa.');
+else if (!window.isSecureContext) showInstall('Chrome menu eka (<b>&#8942;</b>) obala <b>Add to Home screen</b> denna. Phone eka Playout PC eke Wi-Fi ekatama thiyenakota app eka weda karanawa.');
+if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// keep the phone screen on while the app is open (where the phone allows it)
+let wake = null;
+async function keepAwake() { try { if (document.visibilityState === 'visible' && 'wakeLock' in navigator && !wake) { wake = await navigator.wakeLock.request('screen'); wake.onrelease = () => { wake = null; }; } } catch (e) {} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { keepAwake(); poll(); pollCG(); pollRec(); pollStream(); } });
+keepAwake();
 pollCG(); setInterval(pollCG, 1500);
 pollRec(); setInterval(pollRec, 2000);
 pollStream(); setInterval(pollStream, 3000);

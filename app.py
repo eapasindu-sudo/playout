@@ -277,7 +277,8 @@ def sec():
     return s
 
 
-OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png")
+OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png", "/img/logo-composer.png",
+              "/manifest.webmanifest", "/sw.js", "/img/app-icon-192.png", "/img/app-icon-512.png")   # phone app (PWA) install
 LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/native_output", "/api/screens", "/api/fullscreen", "/api/preview.jpg",
               "/atem", "/api/atem", "/api/atem/open")   # + the ATEM & Cameras window   # + CG Composer   # full screen output window
 ADMIN_ONLY = ("/api/vmix/settings", "/api/restart", "/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
@@ -691,7 +692,23 @@ def singlish_js():
     return send_from_directory(os.path.join(BUNDLE, "web"), "singlish.js", max_age=600)
 
 
-@app.get("/img/<any('logo-playout.png', 'logo-composer.png'):name>")
+@app.get("/manifest.webmanifest")
+def pwa_manifest():
+    """Phone app: lets the phone install /remote as an app (Add to Home Screen)."""
+    r = send_from_directory(os.path.join(BUNDLE, "web"), "manifest.webmanifest", max_age=600)
+    r.mimetype = "application/manifest+json"
+    return r
+
+
+@app.get("/sw.js")
+def pwa_service_worker():
+    r = send_from_directory(os.path.join(BUNDLE, "web"), "sw.js", max_age=0)
+    r.mimetype = "text/javascript"
+    r.headers["Service-Worker-Allowed"] = "/"
+    return r
+
+
+@app.get("/img/<any('logo-playout.png', 'logo-composer.png', 'app-icon-192.png', 'app-icon-512.png'):name>")
 def logo_img(name):
     return send_from_directory(os.path.join(BUNDLE, "web"), name, max_age=86400)
 
