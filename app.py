@@ -110,6 +110,8 @@ import gpucg
 gpucg.MODE = cfg.get("cg_gpu", "auto")   # CG blending on the graphics card: auto / off
 gpucg.CONVERT_MODE = cfg.get("picture_gpu", "off")   # clip pictures converted on the graphics card: off / auto
 media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
+import hwprofile
+hwprofile.apply(cfg)     # this PC's CPU / RAM / graphics card: memory for CGs, frames ahead, CPU encoder preset
 store = Store(cfg["data_dir"])
 if (store.data.get("ndi") or {}).get("name"):
     cfg["output_name"] = store.data["ndi"]["name"]     # renamed in the NDI Sources panel
@@ -656,6 +658,12 @@ def qr_png():
 @app.get("/api/health")
 def health_info():
     return jsonify(**health.get(), station=store.data.get("station_name", ""))
+
+
+@app.get("/api/system/profile")
+def system_profile():
+    import gpu
+    return jsonify(**hwprofile.PROFILE, encoder=gpu.NAMES.get(gpu.best(), gpu.best()))
 
 
 @app.get("/health")

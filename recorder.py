@@ -159,7 +159,8 @@ class Recorder:
         opts = {"g": str(gop), "maxrate": f"{kbps}k", "bufsize": f"{kbps * 2}k"}
         if encoder == "libx264":
             # constant bitrate, so the file really is the chosen 10 / 20 / 50 Mbps
-            opts.update(preset="veryfast", minrate=f"{kbps}k", **{"x264-params": "nal-hrd=cbr:force-cfr=1"})
+            import hwprofile
+            opts.update(preset=hwprofile.x264_preset(), minrate=f"{kbps}k", **{"x264-params": "nal-hrd=cbr:force-cfr=1"})
         else:
             opts = gpu.hw_options(encoder, kbps, gop)
             opts.pop("bf", None)
