@@ -93,7 +93,7 @@ jobs:
         with:
           name: Playout-mac
           path: build/output/Playout-mac.zip
-          retention-days: 3
+          retention-days: 1
       - name: Add Playout-mac.zip to the release
         if: github.ref == 'refs/heads/main'
         env:

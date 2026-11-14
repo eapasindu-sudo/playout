@@ -1,7 +1,7 @@
 name: Clean old build artifacts
 
 # Actions storage is small on the free plan. Every build uploads the installer as an artifact, and the
-# release already keeps it, so only the newest artifact of each name is kept; the rest are deleted.
+# release already keeps it, so artifacts older than a day are deleted (all of them when run by hand).
 on:
   workflow_dispatch:
   workflow_run:
@@ -16,7 +16,7 @@ jobs:
   clean:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete all but the newest artifact of each name
+      - name: Delete artifacts older than a day (every artifact when run by hand)
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -24,8 +24,10 @@ jobs:
           gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
             --jq '.artifacts[] | [.id, .name, .created_at, .size_in_bytes] | @tsv' > all.tsv
           echo "artifacts: $(wc -l < all.tsv)"
-          # newest first; keep the first of each name
-          sort -t$'\t' -k3,3r all.tsv | awk -F'\t' 'seen[$2]++' > old.tsv
+          # a branch test build's installer stays a day for testing; the releases keep every main build
+          cutoff=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && cutoff=9999
+          awk -F'\t' -v c="$cutoff" '$3 < c' all.tsv > old.tsv
           echo "deleting: $(wc -l < old.tsv) ($(awk -F'\t' '{s+=$4} END {printf "%.0f MB", s/1048576}' old.tsv))"
           while IFS=$'\t' read -r id name created size; do
             gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && echo "deleted $name $created"
