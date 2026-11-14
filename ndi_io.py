@@ -82,6 +82,8 @@ class LiveInput:
         self._lvl = None
         self.underruns = 0
         self._under_t = 0.0
+        self._snd = None                 # ndi_audio.FrameSyncAudio: the sound, pulled one frame's worth at a time
+        self._snd_err = None
 
     def set_source(self, name):
         with self._lock:
@@ -90,6 +92,12 @@ class LiveInput:
             self._last_try = 0.0
 
     def _close(self):
+        if self._snd is not None:
+            try:
+                self._snd.close()
+            except Exception:
+                pass
+            self._snd = None
         if self.receiver is not None:
             try:
                 self.receiver.disconnect()
@@ -118,6 +126,14 @@ class LiveInput:
         r.frame_sync.set_audio_frame(self.audio)
         r.set_source(src)
         self.receiver = r
+        self._abuf, self._primed, self._prime, self._lvl = None, False, self.PRIME, None
+        try:
+            import ndi_audio
+            self._snd = ndi_audio.FrameSyncAudio(self.source_name, self.audio_pair)
+            self._snd_err = None
+        except Exception as e:
+            self._snd = None
+            self._snd_err = str(e)
 
     @property
     def connected(self):
@@ -141,7 +157,19 @@ class LiveInput:
             try:
                 fs = r.frame_sync
                 fs.capture_video()
-                audio = self._take_audio(fs, n_samples)
+                audio = None
+                if self._snd is not None:
+                    try:
+                        self._snd.pair = self.audio_pair
+                        audio = self._snd.pull(n_samples)
+                        if fs.audio_samples_available() > 0:
+                            fs.capture_available_audio()  # not used: keep the video receiver's sound queue empty
+                    except Exception as e:
+                        if audio is None:                 # the NDI sound pull failed: Playout's own buffer from now
+                            logging.warning("live input %s: NDI sound pull failed (%s)", self.source_name, e)
+                            self._snd_err, self._snd = str(e), None
+                if audio is None:
+                    audio = self._take_audio(fs, n_samples)
                 self._stats(r)
                 video = None
                 w, h = self.video.get_resolution()
@@ -270,7 +298,16 @@ class LiveInput:
     def info(self):
         return {"source": self.source_name, "connected": self.connected, "format": dict(self.fmt),
                 "in_fps": self.in_fps, "dropped": self.dropped, "tally": list(self.tally),
-                "audio_pair": self.audio_pair}
+                "audio_pair": self.audio_pair, "sound": self.sound_info()}
+
+    def sound_info(self):
+        """How the sound comes in: NDI frame-sync pull (normal) or Playout's own buffer, with its counters."""
+        s = self._snd
+        if s is not None:
+            return s.info()
+        return {"mode": "buffer", "underruns": self.underruns, "buffer_ms": round(self._prime * 1000),
+                "queued_ms": round((0 if self._abuf is None else self._abuf.shape[1]) * 1000 / SAMPLE_RATE),
+                "why": self._snd_err}
 
     def close(self):
         with self._lock:

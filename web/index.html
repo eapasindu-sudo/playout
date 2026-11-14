@@ -2673,7 +2673,10 @@ async function ndiLoad(fill) {
   $('nsT').innerHTML = '<tr><th>Source</th><th>PC</th><th>Used for</th><th>Format</th><th>Received</th><th>Sound</th><th></th></tr>' + (names.map(n => {
     const u = used[n] || [], i = u[0], f = i?.format || {}, h = host(n);
     const fmt = f.width ? `${f.width}x${f.height} ${f.fps ? f.fps + ' fps' : ''} ${f.fourcc || ''}${f.alpha ? ' + alpha' : ''}` : (i ? (i.connected ? 'waiting for pictures' : 'connecting...') : '');
-    const rec = i ? (i.connected ? `${i.in_fps ?? '-'} fps` + (i.dropped ? `, ${i.dropped} dropped` : '') : (h ? 'not connected' : 'source gone')) : '';
+    const sd = i?.sound || {};
+    const rec = i ? (i.connected ? `${i.in_fps ?? '-'} fps` + (i.dropped ? `, ${i.dropped} dropped` : '')
+      + (sd.silent_pct_5s != null ? `, sound ${sd.silent_pct_5s >= 99 ? 'silent' : sd.silent_pct_5s > 5 ? Math.round(sd.silent_pct_5s) + '% silent' : 'OK'}` : '')
+      + (sd.mode === 'buffer' && sd.underruns ? `, sound ran dry ${sd.underruns}x` : '') : (h ? 'not connected' : 'source gone')) : '';
     const tally = i ? `<span class="dot ${i.tally?.[0] ? 'bad' : i.tally?.[1] ? 'ok' : ''}" style="display:inline-block; vertical-align:-1px" title="tally"></span> ` : '';
     const ch = f.channels || 2, pair = NDI.audio_pairs?.[n] || 0;
     const pairs = Array.from({length: Math.max(1, Math.ceil(Math.max(ch, 2 * (pair + 1)) / 2))}, (_, k) => `<option value="${k}" ${k === pair ? 'selected' : ''}>Ch ${2 * k + 1}-${2 * k + 2}</option>`).join('');
