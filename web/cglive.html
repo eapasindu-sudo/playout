@@ -103,6 +103,13 @@
       <div class="mon"><div class="t" style="color:var(--red)">LIVE <span id="lvName"></span></div>
         <div class="scr lv"><iframe src="/overlay" title="Live output"></iframe></div></div>
     </div>
+    <div class="ctl" style="align-items:center;gap:8px">
+      <span class="hint">Transition</span>
+      <select id="trType" onchange="trans()"><option value="">Each design's own</option><option value="cut">Cut</option><option value="fade">Fade</option>
+        <option value="dwipe-l">Wipe left to right</option><option value="dwipe-r">Wipe right to left</option><option value="wipe-l">Wipe (each layer)</option>
+        <option value="slide-l">Slide</option><option value="slide-u">Up</option><option value="scale">Zoom</option></select>
+      <input id="trDur" type="number" min="0" max="5" step="0.1" style="width:60px" onchange="trans()" title="Seconds"><span class="hint">s</span>
+    </div>
     <div class="ctl">
       <button onclick="act('prev')" title="Take the one before (PgUp)">&#9664; PREV<small>PgUp</small></button>
       <button class="red" onclick="act('take')" style="min-width:170px">TAKE<small>Space / Enter</small></button>
@@ -116,6 +123,8 @@
     <div class="box">
       <div class="r"><label>Size</label><select id="res" onchange="outputs({res:this.value})"><option value="720p">1280 x 720</option><option value="1080p">1920 x 1080</option><option value="4k">3840 x 2160</option></select>
         <select id="fps" onchange="outputs({fps:+this.value})"><option>25</option><option>30</option><option>50</option><option>60</option></select><span class="hint">fps</span></div>
+      <div class="r"><label title="Take also puts it on Playout's program on this PC (through Playout's NDI key)"><input type="checkbox" id="pOn" onchange="outputs({playout:this.checked})"> On Playout's program</label></div>
+      <div class="hint" id="pInfo"></div>
       <div class="r"><label><input type="checkbox" id="ndiOn" onchange="outputs({ndi_on:this.checked})"> NDI with alpha</label></div>
       <div class="r"><input id="ndiName" style="flex:1" onchange="outputs({ndi_name:this.value})" title="The name vMix / OBS / Playout see"></div>
       <div class="hint" id="ndiInfo"></div>
@@ -205,6 +214,9 @@ function render() {
   if ($('pvImg').dataset.src !== src) { $('pvImg').dataset.src = src; if (src) $('pvImg').src = src; else $('pvImg').removeAttribute('src'); }
   $('pvImg').style.display = src ? '' : 'none';
   fieldsPanel(cued || live);
+  $('pOn').checked = S.playout.on; $('pInfo').textContent = S.playout.on ? S.playout.msg : '';
+  if (document.activeElement !== $('trDur')) { $('trType').value = S.trans.type || ''; $('trDur').value = S.trans.dur ?? 0.5; }
+  $('trDur').disabled = ['', 'cut'].includes($('trType').value);
   $('res').value = S.res; $('fps').value = S.fps; $('ndiOn').checked = S.ndi.on;
   if (document.activeElement !== $('ndiName')) $('ndiName').value = S.ndi.name;
   $('ndiInfo').innerHTML = S.ndi.error ? `<span class="err">${esc(S.ndi.error)}</span>` :
@@ -246,6 +258,7 @@ async function plOp(op, pid, name, order) { await post('/api/live/playlist', {op
 function plRename() { const n = prompt('Playlist name', pl().name); if (n) plOp('rename', null, n); }
 function plDelete() { if (S.playlists.length < 2) return say('The last playlist stays.', true); if (confirm(`Delete "${pl().name}" and its items?`)) plOp('delete'); }
 async function itemOp(op, id) { if (op === 'delete' && !confirm('Remove this item from the playlist?')) return; try { await post('/api/live/item', {op, id}); } catch (e) { say(e.message, true); } load(); }
+async function trans() { await post('/api/live/transition', {type:$('trType').value, dur:+$('trDur').value}); load(); }
 async function outputs(b) { S = await post('/api/live/outputs', b).catch(e => (say(e.message, true), S)); load(); }
 function editDesign(id) { const it = find(id); if (!it) return;
   try { localStorage.setItem('designerDraft', JSON.stringify({name:it.name, kind:'text', style:'design', design:it.design, fields:it.fields || {}, anim:it.anim, fade:it.fade})); } catch (e) {}
