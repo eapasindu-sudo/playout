@@ -184,7 +184,7 @@ jobs:
         with:
           name: Playout-Setup
           path: build/output/Playout-Setup.exe
-          retention-days: 3
+          retention-days: 1
       - name: Publish release (Playout updates itself from here)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
