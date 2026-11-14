@@ -283,6 +283,41 @@ try:
     print("clip colours (BGRA) at 0.4 s, 1.4 s, 2.4 s:", pics[10], pics[35], pics[60])
     assert near(pics[10], (0, 0, 255, 255), 12) and near(pics[35], (0, 255, 0, 255), 12) and near(pics[60], (255, 0, 0, 255), 12), \
         "clip colours wrong"
+
+    # frame blending: a 25p clip at 60 output pictures a second is made between its own frames (no 2-3-2-3)
+    import struct
+    blend_path = os.path.join(tempfile.gettempdir(), "pgpu-blend.mp4")
+    with av.open(blend_path, "w") as c:
+        st = c.add_stream("libx264", rate=25)
+        st.width, st.height, st.pix_fmt = 320, 180, "yuv444p"
+        st.options = {"qp": "0"}
+        for i in range(25):
+            a = np.full((180, 320, 3), 8 * i + 16, np.uint8)      # grey getting lighter frame by frame
+            for pk in st.encode(av.VideoFrame.from_ndarray(a, format="rgb24")):
+                c.mux(pk)
+        for pk in st.encode(None):
+            c.mux(pk)
+    bc = eng.clip_open(blend_path, 320, 180, 0, 0, 1 / 60)
+    assert bc is not None, "clip_open failed"
+    got_t, got_v, slot = [], [], 0
+    end = time.monotonic() + 20
+    while len(got_t) < 40 and time.monotonic() < end:
+        if struct.unpack_from("<i", bc.mm, 64 + slot * 16)[0] == 1:
+            got_t.append(struct.unpack_from("<d", bc.mm, 64 + slot * 16 + 8)[0])
+            off = gpuengine.CLIP_PIXELS + slot * 320 * 180 * 4
+            got_v.append(int(np.frombuffer(bc.mm, np.uint8, 320 * 180 * 4, off).reshape(180, 320, 4)[90, 160, 1]))
+            struct.pack_into("<i", bc.mm, 64 + slot * 16, 0)
+            slot = (slot + 1) % gpuengine.CLIP_SLOTS
+        else:
+            time.sleep(0.002)
+    print("blend:", bc.blend, "times", [round(t, 4) for t in got_t[:8]], "values", got_v[:12])
+    bc.close()
+    assert bc.blend, "the 25p clip was not blended"
+    assert len(got_t) >= 40, "blended pictures missing"
+    assert all(abs(t - k / 60) < 1e-6 for k, t in enumerate(got_t)), "blended pictures not at the output's times"
+    want = [16 + 8 * (k / 60) * 25 for k in range(len(got_v))]
+    worst = max(abs(g - w) for g, w in zip(got_v, want))
+    assert worst <= 4, f"blended pictures wrong (off by {worst})"
 finally:
     web.close()
     gpuengine.stop()

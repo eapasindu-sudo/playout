@@ -164,7 +164,8 @@ class ClipPlayer:
                     if not got:
                         got = True
                         DECODE["gpu"] = clip.mode.startswith("gpu")
-                        DECODE["codec"] = clip.mode.partition(" ")[2] + " (GPU engine)"
+                        DECODE["codec"] = clip.mode.partition(" ")[2] + " (GPU engine)" + \
+                            (f", {clip.blend} fps blended to the output" if clip.blend else "")
                     last_t = t
                     while not self._stop.is_set():
                         try:

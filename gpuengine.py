@@ -28,6 +28,8 @@ import time
 import numpy as np
 
 MODE = "auto"                   # config "native_engine"
+FRAME_BLEND = "auto"            # config "frame_blend": clips whose frame rate does not fit the output's are blended
+                                # (made between two of their frames on the GPU) instead of played 2-3-2-3; "off"
 EXE = "pgpu.exe"
 HEADER = 256
 MAX_SAMPLES = 8192
@@ -70,6 +72,55 @@ def exe():
     return p if os.path.isfile(p) else None
 
 
+def _long_path(p):
+    """The full (long) form of a path: %TEMP% can be an 8.3 short name (C:\\Users\\ENDORA~1\\...)."""
+    if sys.platform != "win32":
+        return p
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetLongPathNameW(str(p), buf, 1024)
+        return buf.value if 0 < n < 1024 else p
+    except Exception:
+        return p
+
+
+def _end_orphans():
+    """pgpu.exe left running by a Playout that closed or was stopped (an update, a crash): its Chromium and GPU
+    encoders stay up, and a new engine then often did not start ("the built-in browser did not start").
+    Ends every pgpu.exe whose Playout is gone, with its helper processes."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import psutil
+    except Exception:
+        return 0
+    me, n = os.getpid(), 0
+    for p in psutil.process_iter(["name", "ppid", "pid"]):
+        try:
+            if (p.info["name"] or "").lower() != EXE or p.info["ppid"] == me:
+                continue
+            parent = psutil.Process(p.info["ppid"]) if psutil.pid_exists(p.info["ppid"]) else None
+            pname = (parent.name() if parent else "").lower()
+            if parent is not None and pname == EXE:
+                continue                    # a helper of another pgpu: ended with its own pgpu
+            if parent is not None and pname in ("playout.exe", "python.exe", "pythonw.exe"):
+                continue                    # another Playout that is still running
+            kids = p.children(recursive=True)
+            for q in kids + [p]:
+                try:
+                    q.kill()
+                except psutil.Error:
+                    pass
+            psutil.wait_procs(kids + [p], timeout=5)
+            n += 1
+        except psutil.Error:
+            continue
+    if n:
+        logging.info("GPU engine: ended %d pgpu.exe left by an earlier Playout", n)
+    return n
+
+
 def start(width, height, fps):
     """Called once by app.py. Returns the engine, or None when Playout mixes and encodes the older way."""
     global _engine
@@ -78,6 +129,7 @@ def start(width, height, fps):
         return None
     with _lock:
         if _engine is None:
+            _end_orphans()
             e = NativeEngine(width, height, fps)
             if e.launch():
                 _engine = e
@@ -96,6 +148,7 @@ def _retry_start(width, height, fps):
     while True:                         # never give up for the run: 15 s, 30 s, ... at most 2 min apart
         time.sleep(min(15 * 2 ** min(i, 3), 120))
         i += 1
+        _end_orphans()
         e = NativeEngine(width, height, fps)
         if e.launch():
             with _lock:
@@ -197,7 +250,7 @@ class NativeEngine:
                 self._small = np.frombuffer(self._mm, np.uint8, SMALL_BYTES, self.small_off)
                 self._cuyvy = np.frombuffer(self._mm, np.uint8, self.pic // 2, self.clean_uyvy_off)
                 self._luyvy = np.frombuffer(self._mm, np.uint8, self.pic // 2, self.led_uyvy_off)
-            self._dir = tempfile.mkdtemp(prefix="playout-pgpu-")
+            self._dir = _long_path(tempfile.mkdtemp(prefix="playout-pgpu-"))
             args = [exe(), f"--pg-shm={self._mm_name}", f"--pg-width={self.width}", f"--pg-height={self.height}",
                     f"--pg-fps-num={self.fps_num}", f"--pg-fps-den={self.fps_den}",
                     f"--pg-cache={os.path.join(self._dir, 'cache')}"]
@@ -574,7 +627,8 @@ class NativeEngine:
         c = NativeClip(self, w, h)
         self.clips[c.id] = c
         if not self._send({"op": "clip_open", "id": c.id, "path": path, "shm": c.name, "w": int(w), "h": int(h),
-                           "start": float(start or 0), "end": float(end or 0), "dur": float(frame_dur)}):
+                           "start": float(start or 0), "end": float(end or 0), "dur": float(frame_dur),
+                           "blend": 0 if str(FRAME_BLEND).lower() == "off" else 1}):
             c.close()
             return None
         return c
@@ -624,6 +678,7 @@ class NativeClip:
         self.name = f"Local\\playout-clip-{os.getpid()}-{self.id}"
         self.mm = mmap.mmap(-1, CLIP_PIXELS + CLIP_SLOTS * w * h * 4, tagname=self.name)
         self.mode = ""
+        self.blend = ""                 # the clip's frame rate when its frames are blended to the output's
         self.error = ""
         self.done = threading.Event()
 
@@ -631,6 +686,8 @@ class NativeClip:
         word, _, rest = msg.partition(" ")
         if word in ("gpu", "cpu"):
             self.mode = msg
+        elif word == "blend":
+            self.blend = rest
         elif word == "error":
             self.error = rest[:200] or "error"
             self.done.set()

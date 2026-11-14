@@ -110,6 +110,8 @@ import gpucg
 gpucg.MODE = cfg.get("cg_gpu", "auto")   # CG blending on the graphics card: auto / off
 gpucg.CONVERT_MODE = cfg.get("picture_gpu", "off")   # clip pictures converted on the graphics card: off / auto
 media_mod.HWACCEL = cfg.get("hwaccel", "auto")   # GPU video decoding: auto / off / d3d11va / cuda / qsv
+import gpuengine as _ge
+_ge.FRAME_BLEND = cfg.get("frame_blend", "auto")   # clips of another frame rate blended on the GPU: auto / off
 import hwprofile
 hwprofile.apply(cfg)     # this PC's CPU / RAM / graphics card: memory for CGs, frames ahead, CPU encoder preset
 store = Store(cfg["data_dir"])
