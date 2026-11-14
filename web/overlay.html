@@ -10,7 +10,7 @@
 <style>
   html, body { margin:0; height:100%; overflow:hidden; background:transparent; }
   #wrap { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
-  #st { position:relative; transform-origin:0 0; overflow:hidden; }
+  #st { position:relative; transform-origin:0 0; overflow:hidden; flex:none; }   /* never shrunk to the window (that cut the right half off) */
   #st img { position:absolute; left:0; top:0; transform-origin:50% 50%; will-change:transform, opacity; }
   body.nocur, body.nocur * { cursor:none; }
   #msg { position:absolute; left:8px; bottom:6px; font:11px system-ui, sans-serif; color:#ff6b5f; text-shadow:0 1px 2px #000; }
@@ -47,12 +47,21 @@ function apply(s) {
     let p = old.get(sp.id);
     if (!p) {
       p = {id: sp.id, pics: sp.pics, lag: 0, ready: false, imgs: sp.pics.map((_, i) => {
-        const im = new Image(); im.src = `/api/live/layer/${sp.id}/${i}.png`; im.style.opacity = 0; st.appendChild(im); return im; })};
+        const im = new Image(); im.src = `/api/live/layer/${sp.id}/${i}.png?r=${(sp.r || [])[i] || 0}`; im.style.opacity = 0; st.appendChild(im); return im; })};
       // the animation starts when every layer picture is ready (decoded), so nothing pops in late
       const got = now, pp = p;
       Promise.all(p.imgs.map(im => im.decode().catch(() => {}))).then(() => {
         pp.lag = performance.now() - got; pp.t0 += pp.lag; pp.ready = true; });
     }
+    // a layer changed on air (new text, a clock): load its new picture, swap when it is ready (no flicker)
+    (sp.r || []).forEach((r, i) => {
+      if (p.r && p.r[i] !== r && p.imgs[i]) {
+        const nim = new Image(), url = `/api/live/layer/${sp.id}/${i}.png?r=${r}`, im = p.imgs[i];
+        nim.src = url;
+        nim.decode().then(() => { im.src = url; p.pics[i] = sp.pics[i]; }).catch(() => {});
+      }
+    });
+    p.r = sp.r || [];
     p.phase = sp.phase; p.t0 = now - sp.t * 1000 + p.lag; p.in = sp.in; p.out = sp.out;
     return p;
   });

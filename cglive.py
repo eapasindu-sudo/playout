@@ -45,6 +45,7 @@ class Program:
         self.item = item
         self.id = _new_id()                  # the overlay page knows a design by this
         self.anim = anim or design.Animator(item, w, h, fps)
+        self.revs = [0] * len(self.anim.layers)   # a layer changed on air (new text, a timer) -> its rev goes up
         self.phase, self.t0 = "in", time.monotonic()
 
     def states(self, now):
@@ -76,6 +77,9 @@ class Live:
         self.lock = threading.RLock()
         self.cv = threading.Condition(self.lock)
         self.s = self._load()
+        self._polled = {}                    # item id -> time its data link was last read
+        self.data_errors = {}
+        self.atem_msg = ""
         self._anims = {}                     # (item id, rev, w, h, fps) -> design.Animator, made ahead of the take
         self.progs = []                      # Program on air (the newest last; older ones going out)
         self.cued = None                     # item id on Preview
@@ -93,6 +97,7 @@ class Live:
             self.recovered = None
         self._apply_outputs()
         threading.Thread(target=self._run, daemon=True, name="cg live").start()
+        threading.Thread(target=self._tick, daemon=True, name="cg live timers").start()
 
     # ---- saved state ---------------------------------------------------
     def _load(self):
@@ -149,6 +154,8 @@ class Live:
                     "live": on.item["id"] if on else None, "phase": on.phase if on else "",
                     "res": self.s["res"], "fps": self.fps, "size": self.size, "recovered": self.recovered,
                     "playout": {"on": bool(self.s.get("playout")), "msg": self.link_msg}, "trans": self.s["trans"],
+                    "atem": {**(self.s.get("atem") or {"on": False, "key": 0}), "msg": self.atem_msg},
+                    "data_errors": dict(self.data_errors), "now": time.time(),
                     "ndi": {**self.s["ndi"], "error": self.ndi_error,
                             "connections": self.ndi.connections() if self.ndi else 0}}
 
@@ -205,9 +212,43 @@ class Live:
                         it[k] = changes[k]
                 it["rev"] = int(it.get("rev") or 0) + 1      # pictures of it made again
                 if self.live_item == item_id and self.progs and self.progs[-1].phase in ("in", "on"):
-                    self._refresh_live(it)
+                    self._update_on_air(it)
             self._save()
             return ""
+
+    def _update_on_air(self, it, refresh_whole=True):
+        """New text on air without a new take: only the layers whose picture changed are swapped (the page loads
+        just those). A design whose layers changed (one appeared or went) is made again as a whole."""
+        p = self.progs[-1] if self.progs else None
+        if p is None or p.phase not in ("in", "on"):
+            return
+        try:
+            new = self._make_anim(it, timers=True)
+        except Exception:
+            logging.exception("cg live: update on air")
+            return
+        ids = lambda a: [L.get("id") or L.get("name") for L, *_ in a.layers]
+        if ids(new) != ids(p.anim):
+            if refresh_whole:
+                self._refresh_live(it)
+            return
+        changed = []
+        for i, ((_L, im, x, y), (_L2, im2, x2, y2)) in enumerate(zip(p.anim.layers, new.layers)):
+            if (x, y, im.size) != (x2, y2, im2.size) or im.tobytes() != im2.tobytes():
+                changed.append(i)
+        if not changed:
+            return
+        a = copy.copy(p.anim)                     # the cached animator stays as it was
+        a.layers = list(p.anim.layers)
+        a.pngs = dict(getattr(p.anim, "pngs", {}))
+        for i in changed:
+            a.layers[i] = (a.layers[i][0],) + tuple(new.layers[i][1:])
+            a.pngs.pop(i, None)
+            p.revs[i] += 1
+        p.anim = a
+        p.item = copy.deepcopy(it)
+        self.version += 1
+        self.cv.notify_all()
 
     def _refresh_live(self, it):
         """New text on air at once (no animation): the design is made again and stays on."""
@@ -233,18 +274,28 @@ class Live:
         t = self.s.get("trans") or {}
         return (it["id"], int(it.get("rev") or 0), w, h, self.fps, t.get("type") or "", float(t.get("dur") or 0))
 
+    def _make_anim(self, it, timers=False):
+        """A new Animator for it at the output size, with the Live transition and (timers) the clocks now."""
+        k = self._key(it)
+        it = copy.deepcopy(it)
+        if k[5]:                                  # the Live transition: the same for every layer, in and out
+            kind = "none" if k[5] == "cut" else k[5]
+            for L in (it.get("design") or {}).get("layers") or []:
+                L["anim_in"] = {"type": kind, "delay": 0, "dur": k[6]}
+                L.pop("anim_out", None)
+        if timers:
+            self._with_timers(it)
+        return design.Animator(it, k[2], k[3], k[4])
+
     def _animator(self, it):
+        """The item's Animator (made once and kept: the cued one is made ahead so Take is instant).
+        An item with a running clock is made fresh each time (its text changes)."""
+        if self._timer_layers(it):
+            return self._make_anim(it, timers=True)
         k = self._key(it)
         a = self._anims.get(k)
         if a is None:
-            it = copy.deepcopy(it)
-            if k[5]:                              # the Live transition: the same for every layer, in and out
-                kind = "none" if k[5] == "cut" else k[5]
-                for L in (it.get("design") or {}).get("layers") or []:
-                    L["anim_in"] = {"type": kind, "delay": 0, "dur": k[6]}
-                    L.pop("anim_out", None)
-            a = design.Animator(it, k[2], k[3], k[4])
-            self._anims[k] = a
+            a = self._anims[k] = self._make_anim(it)
             while len(self._anims) > 6:
                 self._anims.pop(next(iter(self._anims)))
         return a
@@ -285,6 +336,7 @@ class Live:
             self.progs.append(Program(copy.deepcopy(it), w, h, self.fps, self._animator(it)))
             self.progs = self.progs[-4:]
             self.live_item = item_id
+            self._atem(True)
             self.s["was_live"] = item_id
             self._save()
             self.version += 1
@@ -298,6 +350,8 @@ class Live:
         with self.lock:
             for p in self.progs:
                 p.go_out()
+            if self.live_item:
+                self._atem(False)
             self.live_item = None
             self.s.pop("was_live", None)
             self._save()
@@ -354,6 +408,186 @@ class Live:
             fields[name] = value
             return self.item("update", item_id, {"fields": fields})
 
+    # ---- countdown / count-up timers -------------------------------------
+    # A text layer with "timer": {"mode": "down" | "up", "secs": 300, "format": "mm:ss"} shows a running clock.
+    # Each item keeps its clock in item["timer"] = {"running", "elapsed" (s before the last start), "t0" (wall)}.
+    @staticmethod
+    def _timer_layers(it):
+        return [L for L in (it.get("design") or {}).get("layers") or [] if L.get("type") == "text" and L.get("timer")]
+
+    @staticmethod
+    def _elapsed(it):
+        t = it.get("timer") or {}
+        e = float(t.get("elapsed") or 0)
+        if t.get("running"):
+            e += time.time() - float(t.get("t0") or time.time())
+        return max(0.0, e)
+
+    @staticmethod
+    def clock_text(secs, fmt="mm:ss"):
+        secs = int(secs + 0.999) if secs > 0 else 0
+        h, m, s = secs // 3600, secs // 60 % 60, secs % 60
+        if fmt == "hh:mm:ss" or h:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        if fmt == "ss":
+            return str(secs)
+        return f"{secs // 60:02d}:{s:02d}"
+
+    def _with_timers(self, it):
+        """it with each timer layer's text set to the clock now (the item given is changed)."""
+        e = self._elapsed(it)
+        for L in self._timer_layers(it):
+            tm = L["timer"]
+            total = float(tm.get("secs") or 0)
+            v = max(0.0, total - e) if tm.get("mode", "down") == "down" else e
+            L["text"] = (tm.get("prefix") or "") + self.clock_text(v, tm.get("format") or "mm:ss")
+            L.pop("field", None)
+        return it
+
+    def timer(self, op, item_id=None, secs=None):
+        """start / stop / toggle / reset (secs: a new length for countdowns) the timer of an item (or the one on air)."""
+        with self.lock:
+            item_id = item_id or self.live_item or self.cued
+            _pl, it = self._find(item_id) if item_id else (None, None)
+            if it is None or not self._timer_layers(it):
+                return "no timer"
+            t = it.setdefault("timer", {"running": False, "elapsed": 0.0})
+            if op == "toggle":
+                op = "stop" if t.get("running") else "start"
+            if op == "start" and not t.get("running"):
+                t.update(running=True, t0=time.time())
+            elif op == "stop" and t.get("running"):
+                t.update(running=False, elapsed=self._elapsed(it))
+            elif op == "reset":
+                t.update(running=False, elapsed=0.0)
+                if secs is not None:
+                    for L in self._timer_layers(it):
+                        L["timer"]["secs"] = max(0, float(secs))
+            self._save()
+            if item_id == self.live_item:
+                self._update_on_air(it)
+            return ""
+
+    def _tick(self):
+        """Every quarter second: timers on air move on, data links bring new values."""
+        last = {}
+        while not self.stop:
+            time.sleep(0.25)
+            try:
+                with self.lock:
+                    it = self._find(self.live_item)[1] if self.live_item else None
+                    if it is not None and self._timer_layers(it):
+                        txt = [L.get("text") for L in self._timer_layers(self._with_timers(copy.deepcopy(it)))]
+                        if txt != last.get(it["id"]):
+                            last[it["id"]] = txt
+                            self._update_on_air(it)
+                        t = it.get("timer") or {}
+                        if t.get("running") and all(L["timer"].get("mode", "down") == "down" for L in self._timer_layers(it)) \
+                                and self._elapsed(it) >= max(float(L["timer"].get("secs") or 0) for L in self._timer_layers(it)):
+                            t.update(running=False, elapsed=self._elapsed(it))      # reached 0:00
+                            self._save()
+                self._poll_data()
+            except Exception:
+                logging.exception("cg live tick")
+
+    # ---- data links: fields filled from a JSON address (scores) ------------
+    # item["data"] = {"url": "http://...", "every": 5, "map": {"score1": "home.score", ...}}
+    @staticmethod
+    def _path(obj, path):
+        for part in str(path).split("."):
+            if isinstance(obj, list):
+                try:
+                    obj = obj[int(part)]
+                except (ValueError, IndexError):
+                    return None
+            elif isinstance(obj, dict):
+                obj = obj.get(part)
+            else:
+                return None
+        return obj
+
+    def _poll_data(self):
+        now = time.time()
+        with self.lock:
+            due = [it for p in self.s["playlists"] for it in p["items"]
+                   if (it.get("data") or {}).get("url") and (it.get("data") or {}).get("map")
+                   and now - self._polled.get(it["id"], 0) >= max(1.0, float(it["data"].get("every") or 5))
+                   and it["id"] in (self.live_item, self.cued)]
+            for it in due:
+                self._polled[it["id"]] = now
+        for it in due:
+            threading.Thread(target=self._fetch_data, args=(it["id"], dict(it["data"])), daemon=True,
+                             name="cg live data").start()
+
+    def _fetch_data(self, item_id, data):
+        import urllib.request
+        try:
+            req = urllib.request.Request(data["url"], headers={"User-Agent": "Endora CG Composer"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                j = json.loads(r.read())
+        except Exception as e:
+            self.data_errors[item_id] = str(e)[:160]
+            return
+        self.data_errors.pop(item_id, None)
+        with self.lock:
+            _pl, it = self._find(item_id)
+            if it is None:
+                return
+            fields = dict(it.get("fields") or {})
+            for f, path in (data.get("map") or {}).items():
+                v = self._path(j, path) if path else None
+                if v is not None:
+                    fields[f] = str(v)
+            if fields != (it.get("fields") or {}):
+                self.item("update", item_id, {"fields": fields})
+
+    def set_data(self, item_id, data):
+        with self.lock:
+            _pl, it = self._find(item_id)
+            if it is None:
+                return "item not found"
+            data = data or {}
+            if data.get("url"):
+                it["data"] = {"url": str(data["url"]).strip(), "every": max(1.0, float(data.get("every") or 5)),
+                              "map": {str(k): str(v).strip() for k, v in (data.get("map") or {}).items() if str(v).strip()}}
+            else:
+                it.pop("data", None)
+            self._polled.pop(item_id, None)
+            self._save()
+            return ""
+
+    # ---- ATEM: Take / Clear also put a downstream key on / off air -----------
+    # Through the ATEM Switcher app on this PC (it keeps the ATEM connection); Composer's full-screen or SDI output
+    # goes into the ATEM as the key's fill / key.
+    def _atem(self, on):
+        a = self.s.get("atem") or {}
+        if not a.get("on"):
+            return
+
+        def go():
+            try:
+                import websocket
+                ws = websocket.create_connection(f"ws://127.0.0.1:{int(a.get('port') or 3000)}/", timeout=3,
+                                                 header=["User-Agent: Endora CG Composer"])
+                ws.send(json.dumps({"cmd": "hello", "role": "controller"}))
+                key = max(0, int(a.get("key") or 0))
+                ws.send(json.dumps({"cmd": "dsk", "key": key, "onAir": bool(on)}))
+                time.sleep(0.2)
+                ws.close()
+                self.atem_msg = f"DSK {key + 1} {'on' if on else 'off'} air"
+            except Exception as e:
+                self.atem_msg = f"ATEM Switcher not reachable: {e}"[:160]
+        threading.Thread(target=go, daemon=True, name="cg live atem").start()
+
+    def set_atem(self, on=None, key=None):
+        with self.lock:
+            a = self.s.setdefault("atem", {"on": False, "key": 0})
+            if on is not None:
+                a["on"] = bool(on)
+            if key is not None:
+                a["key"] = max(0, min(3, int(key)))
+            self._save()
+
     # ---- the picture ---------------------------------------------------
     def overlay_state(self):
         """For the overlay page: the designs showing, their layer pictures, each layer's animations and how
@@ -364,7 +598,7 @@ class Live:
                 p.states(now)                    # moves phases on (in -> on, out -> gone)
             self.progs = [p for p in self.progs if p.phase != "gone"]
             out = [{"id": p.id, "phase": p.phase, "t": round(now - p.t0, 3),
-                    "pics": [[x, y, im.width, im.height] for _L, im, x, y in p.anim.layers],
+                    "pics": [[x, y, im.width, im.height] for _L, im, x, y in p.anim.layers], "r": list(p.revs),
                     "in": [list(a) for a in p.anim.anims["in"]], "out": [list(a) for a in p.anim.anims["out"]]}
                    for p in self.progs]
             w, h = self.size
