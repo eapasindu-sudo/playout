@@ -129,6 +129,25 @@ opacity, and order them in the layer list (Ctrl+Z undo, Ctrl+D copy, arrows nudg
 layer a **Field** name (name, title, score...) and the operator types it in Playout: CG Library > **+ Manual**,
 then **Edit** on the design; **Update** puts the new text on air at once. The preview is drawn by Playout's
 own engine, so it is exactly what goes on air. Pictures and logos used by a design travel inside its `.cgp`.
+Each layer can have its own animation in and out (fade, slide, wipe, zoom, pop) with a wait and a length,
+so a bar wipes on first and the name slides in after it; Playout plays them the same way.
+
+**Live** (button at the top of CG Composer) plays designs to air from CG Composer itself, without Playout:
+- Playlists (as many as you like, Ctrl+1-9 to switch), designs added from the CG library or with
+  **To Live** in the Designer, dragged into order. Click cues an item on **Preview**; **Take** (Space / Enter)
+  puts it on **Live** as the old one goes out; **Clear** (Esc), **Next** / **Prev** (PgDn / PgUp, arrows only
+  cue), F1-F12 take item 1-12. Fields (names, scores) are typed below the monitors; on air, **Update on air**.
+- Outputs: **NDI with alpha** (vMix, OBS with the NDI plugin, Playout's NDI key) at 720p / 1080p / 4K and
+  25-60 fps; a see-through web page `http://<this PC>:8090/overlay` for an OBS **Browser Source** or a vMix
+  **Web Browser** input; **Full screen** on another screen (black, green or blue behind, for a projector,
+  an LED wall or a keyer).
+- Stream Deck / Companion / vMix scripts: `http://<this PC>:8090/trigger/take`, `clear`, `next`, `prev`,
+  `cue-next`, `cue-prev`, `item/3`, `cue/3`, `playlist/2`, `field/score1?value=120` (a field of the design on air).
+  Other PCs reach only the overlay and these triggers; editing stays on this PC. Port: `composer_port` in
+  config.json.
+- Everything is saved after each change, so after a crash or a restart the playlists come back and what was
+  on air is cued, ready to take again. **Export package** saves playlists with every picture they use as one
+  `.cgpack` file; **Import package** adds them on another PC.
 
 ## Squeeze Feed (L-ad)
 

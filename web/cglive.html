@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CG Composer - Live</title>
+<style>
+  :root { --bg:#0c0d0f; --panel:#1a1c1f; --panel2:#232529; --line:#33363b; --text:#e9eaec; --dim:#8d9299;
+          --green:#2fbf3a; --red:#e0261b; --orange:#ff8a1c; --blue:#3b82f6; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:13px/1.35 "Segoe UI", system-ui, sans-serif; display:flex; flex-direction:column; user-select:none; overflow:hidden; }
+  button { font:inherit; color:var(--text); background:linear-gradient(#45484e, #2f3236); border:1px solid #0006; border-radius:3px;
+           padding:5px 10px; cursor:pointer; box-shadow: inset 0 1px 0 #ffffff1a; white-space:nowrap; }
+  button:hover { filter:brightness(1.2); } button:disabled { opacity:.45; cursor:default; filter:none; }
+  button.blue { background:linear-gradient(#4b8ff7, #2462c9); } button.red { background:linear-gradient(#f0362a, #b5170e); }
+  button.green { background:linear-gradient(#36c843, #1f8f29); } button.orange { background:linear-gradient(#ff9d3d, #d86c06); }
+  button.sm { padding:2px 7px; font-size:11px; } button.sel { box-shadow: inset 0 -3px 0 var(--orange), inset 0 1px 0 #ffffff1a; }
+  input, select { font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:4px 6px; }
+  input[type=checkbox] { accent-color:var(--orange); }
+  .bar { display:flex; gap:8px; align-items:center; padding:7px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .brand { display:flex; flex-direction:column; line-height:1.05; margin-right:6px; }
+  .brand b { font-size:15px; letter-spacing:.06em; } .brand span { font-size:9px; letter-spacing:.22em; color:var(--orange); }
+  .main { flex:1; display:grid; grid-template-columns: 330px minmax(0,1fr) 300px; min-height:0; }
+  .left, .rightp { background:#0f1012; display:flex; flex-direction:column; min-height:0; }
+  .left { border-right:1px solid var(--line); } .rightp { border-left:1px solid var(--line); overflow:auto; }
+  .sect { font-size:10px; letter-spacing:.14em; color:var(--dim); padding:9px 10px 5px; text-transform:uppercase; display:flex; align-items:center; gap:6px; }
+  .tabs { display:flex; gap:3px; padding:0 8px 6px; flex-wrap:wrap; }
+  .tabs button { padding:3px 9px; font-size:12px; }
+  .list { flex:1; overflow:auto; border-top:1px solid var(--line); }
+  .it { display:grid; grid-template-columns: 26px 96px 1fr auto; gap:7px; align-items:center; padding:5px 8px; border-bottom:1px solid #1e2023; cursor:pointer; position:relative; }
+  .it:hover { background:#17191c; }
+  .it.cue { background:#14304a; box-shadow: inset 3px 0 0 var(--green); }
+  .it.live { background:#3a1512; box-shadow: inset 3px 0 0 var(--red); }
+  .it .n { color:var(--dim); text-align:right; font-variant-numeric:tabular-nums; }
+  .it img { width:96px; aspect-ratio:16/9; display:block; background:repeating-conic-gradient(#2a2c30 0 25%, #222428 0 50%) 0 0 / 12px 12px; border-radius:2px; }
+  .it .nm { overflow:hidden; } .it .nm b { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
+  .it .nm span { display:block; font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .it .tag { font-size:10px; font-weight:700; letter-spacing:.08em; padding:1px 5px; border-radius:2px; }
+  .it.live .tag { background:var(--red); } .it.cue .tag { background:var(--green); color:#000; }
+  .it .acts { display:none; gap:2px; } .it:hover .acts { display:flex; }
+  .it .acts button { background:none; border:0; box-shadow:none; padding:0 4px; color:var(--dim); }
+  .it.drag { opacity:.4; } .it.over { box-shadow: inset 0 2px 0 var(--orange); }
+  .center { display:flex; flex-direction:column; min-width:0; min-height:0; padding:12px; gap:10px; background:#16181b; }
+  .mons { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .mon { display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .mon .t { font-size:11px; letter-spacing:.14em; font-weight:700; display:flex; gap:8px; align-items:center; }
+  .mon .t span { color:var(--dim); font-weight:400; letter-spacing:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .scr { position:relative; aspect-ratio:16/9; width:100%; background:repeating-conic-gradient(#3a3d42 0 25%, #2a2c30 0 50%) 0 0 / 24px 24px; border:2px solid #333; }
+  .scr.pv { border-color:var(--green); } .scr.lv { border-color:var(--red); }
+  .scr img, .scr iframe { position:absolute; inset:0; width:100%; height:100%; border:0; display:block; }
+  .ctl { display:flex; gap:10px; align-items:stretch; justify-content:center; flex-wrap:wrap; }
+  .ctl button { padding:12px 22px; font-size:15px; font-weight:700; letter-spacing:.05em; min-width:110px; }
+  .ctl button small { display:block; font-size:10px; font-weight:400; opacity:.75; letter-spacing:0; }
+  .fields { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; overflow:auto; min-height:0; }
+  .fields label { display:flex; flex-direction:column; gap:2px; font-size:11px; color:var(--dim); }
+  .fields input { width:200px; }
+  .box { padding:0 12px 12px; display:flex; flex-direction:column; gap:7px; }
+  .box .r { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .box label { color:#cfd2d6; font-size:12px; }
+  .url { font:11px/1.4 Consolas, monospace; background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:4px 6px; word-break:break-all; user-select:text; cursor:copy; }
+  .hint { color:var(--dim); font-size:11px; }
+  .err { color:#ff6b5f; }
+  .ok { color:var(--green); }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:16px; width:640px; }
+  dialog::backdrop { background:#000a; }
+  .lib { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; max-height:420px; overflow:auto; margin:10px 0; }
+  .lib div { border:1px solid var(--line); border-radius:4px; cursor:pointer; overflow:hidden; background:#16181b; }
+  .lib div.sel { border-color:var(--orange); box-shadow:0 0 0 1px var(--orange); }
+  .lib img { width:100%; aspect-ratio:16/9; object-fit:contain; display:block; background:repeating-conic-gradient(#2a2c30 0 25%, #222428 0 50%) 0 0 / 12px 12px; }
+  .lib span { display:block; font-size:11px; padding:3px 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .empty { padding:30px 10px; text-align:center; color:var(--dim); }
+  .keys { display:grid; grid-template-columns:auto 1fr; gap:3px 10px; font-size:11px; color:var(--dim); }
+  .keys b { color:#cfd2d6; font-weight:600; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <img src="/img/logo-composer.png" alt="" style="height:30px" onerror="this.style.display='none'">
+  <div class="brand"><b>ENDORA CG COMPOSER</b><span>PROFESSIONAL BROADCAST GRAPHICS</span></div>
+  <button onclick="location.href='/'" title="Key, crop and place a PNG / MOV / MP4 CG">Picture CG</button>
+  <button onclick="location.href='/designer'">Designer</button>
+  <button class="sel">Live</button>
+  <span style="flex:1"></span>
+  <span id="msg" class="hint"></span>
+  <button onclick="importPkg()" title="Add the playlists of a .cgpack file (with their pictures)">Import package</button>
+  <button onclick="exportPkg()" title="Save every playlist and the pictures they use as one .cgpack file">Export package</button>
+</div>
+<div class="main">
+  <div class="left">
+    <div class="sect">Playlists <span style="flex:1"></span>
+      <button class="sm" onclick="plOp('add')" title="New playlist">+</button>
+      <button class="sm" onclick="plRename()" title="Rename this playlist">Rename</button>
+      <button class="sm" onclick="plDelete()" title="Delete this playlist">&#10005;</button></div>
+    <div class="tabs" id="tabs"></div>
+    <div class="sect">Items <span style="flex:1"></span><button class="sm blue" onclick="openLib()">+ Add designs</button></div>
+    <div class="list" id="list"></div>
+  </div>
+  <div class="center">
+    <div class="mons">
+      <div class="mon"><div class="t" style="color:var(--green)">PREVIEW <span id="pvName"></span></div>
+        <div class="scr pv"><img id="pvImg" alt=""></div></div>
+      <div class="mon"><div class="t" style="color:var(--red)">LIVE <span id="lvName"></span></div>
+        <div class="scr lv"><iframe src="/overlay" title="Live output"></iframe></div></div>
+    </div>
+    <div class="ctl">
+      <button onclick="act('prev')" title="Take the one before (PgUp)">&#9664; PREV<small>PgUp</small></button>
+      <button class="red" onclick="act('take')" style="min-width:170px">TAKE<small>Space / Enter</small></button>
+      <button onclick="act('clear')">CLEAR<small>Esc</small></button>
+      <button onclick="act('next')" title="Take the next one (PgDn)">NEXT &#9654;<small>PgDn</small></button>
+    </div>
+    <div class="fields" id="fields"></div>
+  </div>
+  <div class="rightp">
+    <div class="sect">Output</div>
+    <div class="box">
+      <div class="r"><label>Size</label><select id="res" onchange="outputs({res:this.value})"><option value="720p">1280 x 720</option><option value="1080p">1920 x 1080</option><option value="4k">3840 x 2160</option></select>
+        <select id="fps" onchange="outputs({fps:+this.value})"><option>25</option><option>30</option><option>50</option><option>60</option></select><span class="hint">fps</span></div>
+      <div class="r"><label><input type="checkbox" id="ndiOn" onchange="outputs({ndi_on:this.checked})"> NDI with alpha</label></div>
+      <div class="r"><input id="ndiName" style="flex:1" onchange="outputs({ndi_name:this.value})" title="The name vMix / OBS / Playout see"></div>
+      <div class="hint" id="ndiInfo"></div>
+      <div class="r" id="fsRow" style="display:none">
+        <select id="fsBg" title="Behind the graphics on the full-screen output"><option value="#000000">Black</option><option value="#00b140">Green (key)</option><option value="#0047bb">Blue (key)</option></select>
+        <select id="fsScreen"><option value="-1">Last screen</option><option value="0">Screen 1</option><option value="1">Screen 2</option><option value="2">Screen 3</option></select>
+        <button onclick="fullscreen()">Full screen</button><button class="sm" onclick="pywebview.api.close_outputs()">Close</button>
+      </div>
+    </div>
+    <div class="sect">OBS / vMix Browser Source</div>
+    <div class="box">
+      <div class="url" id="ovUrl" onclick="copy(this)"></div>
+      <div class="hint">Add a Browser Source (OBS) or a Web Browser input (vMix) at your output size with this address. It is see-through. Other PCs on the network use this PC's address.</div>
+    </div>
+    <div class="sect">Stream Deck / HTTP control</div>
+    <div class="box">
+      <div class="hint">Open these addresses from Bitfocus Companion (Generic HTTP), a vMix script or a browser:</div>
+      <div id="trig" style="display:flex;flex-direction:column;gap:4px"></div>
+    </div>
+    <div class="sect">Keys</div>
+    <div class="box"><div class="keys">
+      <b>Space / Enter</b><span>Take the item on Preview</span>
+      <b>Esc</b><span>Clear</span>
+      <b>&#8593; &#8595;</b><span>Cue the one before / after</span>
+      <b>PgUp / PgDn</b><span>Take the one before / after</span>
+      <b>F1 - F12</b><span>Take item 1 - 12</span>
+      <b>Ctrl+1 - 9</b><span>Show playlist 1 - 9</span>
+    </div></div>
+  </div>
+</div>
+
+<dialog id="dLib">
+  <b>Add designs from the CG library</b>
+  <div class="hint">Designs saved with "Save to Playout" in the Designer. Click to pick, double-click to add one.</div>
+  <div class="lib" id="lib"></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button onclick="dLib.close()">Cancel</button><button class="blue" onclick="addPicked()">Add</button></div>
+</dialog>
+<input type="file" id="pkgFile" accept=".cgpack" style="display:none" onchange="uploadPkg(this)">
+
+<script>
+const $ = id => document.getElementById(id);
+let S = null, sel = null, editing = {};
+const post = (u, b) => fetch(u, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b || {})})
+  .then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+function say(t, err) { $('msg').textContent = t || ''; $('msg').className = err ? 'err' : 'hint'; if (t) setTimeout(() => { if ($('msg').textContent === t) $('msg').textContent = ''; }, 4000); }
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pl = () => S.playlists.find(p => p.id === S.active) || S.playlists[0];
+const find = id => { for (const p of S.playlists) for (const it of p.items) if (it.id === id) return it; return null; };
+function fieldsOf(it) {
+  const out = [], seen = new Set();
+  for (const L of (it.design || {}).layers || []) {
+    const f = (L.field || '').trim();
+    if (L.type === 'text' && f && !seen.has(f)) { seen.add(f); out.push([f, L.name || f, L.text || '']); }
+  }
+  return out;
+}
+const thumb = (it, w) => `/api/live/preview/${it.id}.png?w=${w}&r=${it.rev || 0}&s=${S.res}`;
+
+async function load() {
+  const prev = S;
+  S = await fetch('/api/live/state').then(r => r.json());
+  if (!prev && S.recovered) say('Composer was closed while on air: that item is on Preview, ready to take again.');
+  render();
+}
+
+function render() {
+  $('tabs').innerHTML = S.playlists.map((p, i) => `<button class="${p.id === S.active ? 'sel' : ''}" onclick="plOp('select','${p.id}')" title="Ctrl+${i + 1}">${esc(p.name)} <span class="hint">${p.items.length}</span></button>`).join('');
+  const items = pl().items;
+  const lk = JSON.stringify([S.active, S.res, S.cued, S.live, items.map(i => [i.id, i.rev, i.name, i.fields])]);
+  if ($('list').dataset.k !== lk) { $('list').dataset.k = lk; $('list').innerHTML = items.length ? items.map((it, i) => {
+    const f = fieldsOf(it).map(([k]) => (it.fields || {})[k]).filter(Boolean).join(' · ');
+    const cls = it.id === S.live ? 'live' : it.id === S.cued ? 'cue' : '';
+    return `<div class="it ${cls}" draggable="true" data-id="${it.id}" onclick="cue('${it.id}')" ondblclick="take('${it.id}')">
+      <span class="n">${i + 1}</span><img loading="lazy" src="${thumb(it, 192)}" alt="">
+      <div class="nm"><b>${esc(it.name || 'Design')}</b><span>${esc(f)}</span></div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+        <span class="tag">${cls === 'live' ? 'LIVE' : cls === 'cue' ? 'NEXT' : ''}</span>
+        <div class="acts"><button title="Copy" onclick="event.stopPropagation();itemOp('duplicate','${it.id}')">&#10697;</button>
+        <button title="Edit in the Designer" onclick="event.stopPropagation();editDesign('${it.id}')">&#9998;</button>
+        <button title="Remove" onclick="event.stopPropagation();itemOp('delete','${it.id}')">&#10005;</button></div></div></div>`;
+  }).join('') : '<div class="empty">No designs in this playlist.<br><br><button class="blue" onclick="openLib()">+ Add designs</button></div>';
+  dragSetup(); }
+  const cued = S.cued && find(S.cued), live = S.live && find(S.live);
+  $('pvName').textContent = cued ? cued.name || 'Design' : '';
+  $('lvName').textContent = live ? (live.name || 'Design') + (S.phase === 'in' ? ' (coming in)' : '') : '';
+  const src = cued ? thumb(cued, 960) : '';
+  if ($('pvImg').dataset.src !== src) { $('pvImg').dataset.src = src; if (src) $('pvImg').src = src; else $('pvImg').removeAttribute('src'); }
+  $('pvImg').style.display = src ? '' : 'none';
+  fieldsPanel(cued || live);
+  $('res').value = S.res; $('fps').value = S.fps; $('ndiOn').checked = S.ndi.on;
+  if (document.activeElement !== $('ndiName')) $('ndiName').value = S.ndi.name;
+  $('ndiInfo').innerHTML = S.ndi.error ? `<span class="err">${esc(S.ndi.error)}</span>` :
+    S.ndi.on ? `<span class="ok">On air as "${esc(S.ndi.name)}"</span> · ${S.ndi.connections || 0} watching` : 'Off';
+  const hosts = ['127.0.0.1', ...(S.ips || [])], base = h => `http://${h}:${S.port}`;
+  $('ovUrl').innerHTML = hosts.map(h => esc(base(h) + '/overlay')).join('<br>');
+  const lan = base((S.ips || [])[0] || '127.0.0.1');
+  $('trig').innerHTML = ['take', 'clear', 'next', 'prev', 'cue-next', 'item/1', 'field/score1?value=2']
+    .map(t => `<div class="url" onclick="copy(this)">${esc(lan + '/trigger/' + t)}</div>`).join('');
+  $('fsRow').style.display = window.pywebview ? '' : 'none';
+}
+
+function fieldsPanel(it) {
+  const box = $('fields');
+  const fs = it ? fieldsOf(it) : [];
+  const key = it ? it.id + ':' + fs.map(f => f[0]).join(',') : '';
+  if (box.dataset.key === key && box.contains(document.activeElement)) return;   // the operator is typing
+  box.dataset.key = key;
+  if (!it || !fs.length) { box.innerHTML = `<span class="hint">${it ? 'This design has no fields.' : 'Click an item to cue it: its fields (names, scores) show here.'}</span>`; return; }
+  const onAir = it.id === S.live;
+  box.innerHTML = `<b style="width:100%;font-size:12px">${esc(it.name || 'Design')} ${onAir ? '<span style="color:var(--red)">ON AIR</span>' : ''}</b>` +
+    fs.map(([f, label, def]) => `<label>${esc(label)}<input data-f="${esc(f)}" value="${esc((it.fields || {})[f] ?? def)}" onkeydown="if(event.key==='Enter'){event.preventDefault();saveFields('${it.id}')}"></label>`).join('') +
+    `<button class="${onAir ? 'red' : 'blue'}" onclick="saveFields('${it.id}')">${onAir ? 'Update on air' : 'Save'}</button><span class="hint">Enter saves</span>`;
+}
+
+async function saveFields(id) {
+  const it = find(id); if (!it) return;
+  const fields = {...(it.fields || {})};
+  $('fields').querySelectorAll('input[data-f]').forEach(i => fields[i.dataset.f] = i.value);
+  try { await post('/api/live/item', {op:'update', id, changes:{fields}}); document.activeElement.blur(); say('Saved'); }
+  catch (e) { say(e.message, true); }
+  load();
+}
+
+async function act(a, body) { try { await post('/api/live/' + a, body); } catch (e) { say(e.message, true); } load(); }
+const cue = id => act('cue', {id});
+const take = id => act('take', {id});
+async function plOp(op, pid, name, order) { await post('/api/live/playlist', {op, pid: pid || S.active, name, order}); load(); }
+function plRename() { const n = prompt('Playlist name', pl().name); if (n) plOp('rename', null, n); }
+function plDelete() { if (S.playlists.length < 2) return say('The last playlist stays.', true); if (confirm(`Delete "${pl().name}" and its items?`)) plOp('delete'); }
+async function itemOp(op, id) { if (op === 'delete' && !confirm('Remove this item from the playlist?')) return; try { await post('/api/live/item', {op, id}); } catch (e) { say(e.message, true); } load(); }
+async function outputs(b) { S = await post('/api/live/outputs', b).catch(e => (say(e.message, true), S)); load(); }
+function editDesign(id) { const it = find(id); if (!it) return;
+  try { localStorage.setItem('designerDraft', JSON.stringify({name:it.name, kind:'text', style:'design', design:it.design, fields:it.fields || {}, anim:it.anim, fade:it.fade})); } catch (e) {}
+  location.href = '/designer'; }
+function copy(el) { const t = el.innerText.split('\n')[0]; navigator.clipboard?.writeText(t).then(() => say('Copied ' + t)).catch(() => {}); }
+
+// drag to reorder
+function dragSetup() {
+  let from = null;
+  $('list').querySelectorAll('.it').forEach(el => {
+    el.ondragstart = () => { from = el.dataset.id; el.classList.add('drag'); };
+    el.ondragend = () => el.classList.remove('drag');
+    el.ondragover = e => { e.preventDefault(); el.classList.add('over'); };
+    el.ondragleave = () => el.classList.remove('over');
+    el.ondrop = e => { e.preventDefault(); el.classList.remove('over');
+      const ids = pl().items.map(i => i.id).filter(i => i !== from);
+      ids.splice(ids.indexOf(el.dataset.id), 0, from);
+      plOp('order', null, null, ids); };
+  });
+}
+
+// the CG library
+let picked = new Set();
+async function openLib() {
+  picked = new Set();
+  const j = await fetch('/api/design/library').then(r => r.json()).catch(() => ({designs:[]}));
+  $('lib').innerHTML = j.designs.length ? j.designs.map(n => `<div data-n="${esc(n)}" onclick="pick(this)" ondblclick="addNames([this.dataset.n])"><img loading="lazy" src="/api/design/preview/${encodeURIComponent(n)}" alt=""><span>${esc(n.replace(/\.cgp$/i, ''))}</span></div>`).join('')
+    : '<div class="empty" style="grid-column:1/-1">No designs yet. Make one in the Designer and press "Save to Playout".</div>';
+  $('dLib').showModal();
+}
+function pick(el) { el.classList.toggle('sel'); el.classList.contains('sel') ? picked.add(el.dataset.n) : picked.delete(el.dataset.n); }
+const addPicked = () => picked.size ? addNames([...picked]) : $('dLib').close();
+async function addNames(names) { $('dLib').close(); try { await post('/api/live/add', {names, pid:S.active}); } catch (e) { say(e.message, true); } load(); }
+
+// packages
+async function exportPkg() {
+  if (window.pywebview) { const p = await pywebview.api.export_package(null); if (p) say('Saved ' + p); }
+  else location.href = '/api/live/package';
+}
+const importPkg = () => $('pkgFile').click();
+async function uploadPkg(inp) {
+  const f = inp.files[0]; inp.value = ''; if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  const j = await fetch('/api/live/package', {method:'POST', body:fd}).then(r => r.json());
+  j.error ? say(j.error, true) : say('Added ' + j.playlists.join(', '));
+  load();
+}
+async function fullscreen() { await pywebview.api.output_window($('fsBg').value, +$('fsScreen').value); }
+
+// keys
+addEventListener('keydown', e => {
+  if (e.target.matches('input, select, textarea') || $('dLib').open) return;
+  const k = e.key;
+  if (k === ' ' || k === 'Enter') act('take');
+  else if (k === 'Escape') act('clear');
+  else if (k === 'ArrowDown') act('next', {take:false});
+  else if (k === 'ArrowUp') act('prev', {take:false});
+  else if (k === 'PageDown') act('next');
+  else if (k === 'PageUp') act('prev');
+  else if (/^F([1-9]|1[0-2])$/.test(k)) { const it = pl().items[+k.slice(1) - 1]; if (it) take(it.id); }
+  else if (e.ctrlKey && /^[1-9]$/.test(k)) { const p = S.playlists[+k - 1]; if (p) plOp('select', p.id); }
+  else return;
+  e.preventDefault();
+});
+window.addEventListener('pywebviewready', () => S && render());
+load();
+setInterval(() => { if (!document.hidden) load(); }, 1000);
+</script>
+</body>
+</html>

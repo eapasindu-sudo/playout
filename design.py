@@ -198,13 +198,14 @@ def _text(L, text, w, h, k):
     return im
 
 
-def render_full(cfg, out_w, out_h):
-    """The whole design at the output size: RGBA PIL image (see-through where nothing is drawn)."""
+def layer_pictures(cfg, out_w, out_h):
+    """Every visible layer drawn on its own at the output size: [(layer, RGBA picture, x, y)], back to front.
+    x, y is where the (rotated) picture's top-left goes on the output."""
     design = cfg.get("design") or {}
     dw, dh = _num(design.get("w"), out_w) or out_w, _num(design.get("h"), out_h) or out_h
     k = min(out_w / dw, out_h / dh)
-    canvas = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
     fields = cfg.get("fields") or {}
+    out = []
     for L in design.get("layers") or []:
         if L.get("hidden"):
             continue
@@ -238,9 +239,111 @@ def render_full(cfg, out_w, out_h):
         rot = _num(L.get("rotate")) % 360
         if rot:
             im = im.rotate(-rot, resample=Image.BICUBIC, expand=True)
-        part, at = _clip(im, int(round(cx - im.width / 2)), int(round(cy - im.height / 2)), out_w, out_h)
+        out.append((L, im, int(round(cx - im.width / 2)), int(round(cy - im.height / 2))))
+    return out
+
+
+def render_full(cfg, out_w, out_h):
+    """The whole design at the output size: RGBA PIL image (see-through where nothing is drawn)."""
+    canvas = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+    for _L, im, x, y in layer_pictures(cfg, out_w, out_h):
+        part, at = _clip(im, x, y, out_w, out_h)
         canvas.alpha_composite(part, at)
     return canvas
+
+
+# ---------------------------------------------------------------- animation (in / out, layer by layer)
+# A layer's "anim_in" / "anim_out": {"type": ..., "delay": seconds, "dur": seconds}. Types:
+#   none | fade | slide-l | slide-r | slide-u | slide-d (comes from that side, fading) | wipe-l | wipe-r
+#   (revealed from the left / right) | scale (grows from smaller, fading) | pop (grows past its size and settles)
+# Without its own, a layer takes the design's "anim" (fade / wipe / slide / up) over "fade" frames, as Playout did.
+ANIMS = ("none", "fade", "slide-l", "slide-r", "slide-u", "slide-d", "wipe-l", "wipe-r", "scale", "pop")
+_OLD = {"fade": "fade", "wipe": "wipe-l", "slide": "slide-l", "up": "slide-u"}
+
+
+def _ease(p):
+    return 1 - (1 - p) ** 3
+
+
+def _anim_of(cfg, L, phase, fps):
+    own = L.get("anim_in" if phase == "in" else "anim_out")
+    if phase == "out" and not (own or {}).get("type"):
+        own = L.get("anim_in")                       # going out the way it came in, backwards
+        own = {**own, "delay": 0} if own else own
+    if own and own.get("type"):
+        return own.get("type"), max(0.0, _num(own.get("delay"))), max(0.0, _num(own.get("dur"), 0.5))
+    frames = max(0, int(_num(cfg.get("fade"), 12)))
+    return _OLD.get(cfg.get("anim") or "fade", "fade"), 0.0, frames / float(fps or 25)
+
+
+class Animator:
+    """A design's layers made once, then put together for any moment of its coming in / going out.
+
+    state(phase, t): [(i, x, y, alpha 0-1, scale, cut_left 0-1, cut_right 0-1)] for each layer showing
+    compose(states): the output picture (RGBA PIL) for those states"""
+
+    def __init__(self, cfg, out_w, out_h, fps=25):
+        self.cfg, self.w, self.h, self.fps = cfg, out_w, out_h, float(fps or 25)
+        self.layers = layer_pictures(cfg, out_w, out_h)
+        self.anims = {ph: [_anim_of(cfg, L, ph, self.fps) for L, *_ in self.layers] for ph in ("in", "out")}
+
+    def length(self, phase):
+        return max([d + du for _t, d, du in self.anims[phase] if _t != "none"] or [0.0])
+
+    def state(self, phase, t):
+        out = []
+        for i, (L, im, x, y) in enumerate(self.layers):
+            kind, delay, dur = self.anims["in" if phase == "on" else phase][i]
+            if phase == "on" or kind == "none":       # a layer without animation: there until the others are out
+                if phase != "out" or t < self.length("out"):
+                    out.append((i, x, y, 1.0, 1.0, 0.0, 0.0))
+                continue
+            q = 1.0 if dur <= 0 else min(1.0, max(0.0, (t - delay) / dur))
+            p = q if phase == "in" else 1 - q           # 0 = gone, 1 = in place
+            if p <= 0:
+                continue
+            e = _ease(p) if phase == "in" else 1 - _ease(1 - p)
+            dx = dy = 0
+            a, sc, cl, cr = 1.0, 1.0, 0.0, 0.0
+            if kind == "fade":
+                a = e
+            elif kind.startswith("slide"):
+                dist_x = max(60, min(500, im.width * 0.6))
+                dist_y = max(40, min(300, im.height * 0.8))
+                d = {"slide-l": (-dist_x, 0), "slide-r": (dist_x, 0), "slide-u": (0, dist_y), "slide-d": (0, -dist_y)}[kind]
+                dx, dy = int(d[0] * (1 - e)), int(d[1] * (1 - e))
+                a = min(1.0, e * 1.6)
+            elif kind == "wipe-l":
+                cr = 1 - e
+            elif kind == "wipe-r":
+                cl = 1 - e
+            elif kind == "scale":
+                sc, a = 0.6 + 0.4 * e, e
+            elif kind == "pop":
+                sc = (0.5 + 0.62 * e) if e < 0.85 else (1.027 - 0.18 * (e - 0.85))
+                a = min(1.0, e * 2)
+            out.append((i, x + dx, y + dy, a, sc, cl, cr))
+        return out
+
+    def compose(self, states):
+        canvas = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        for i, x, y, a, sc, cl, cr in states:
+            im = self.layers[i][1]
+            if cl > 0 or cr > 0:
+                x0, x1 = int(im.width * cl), int(im.width * (1 - cr))
+                if x1 <= x0:
+                    continue
+                im, x = im.crop((x0, 0, x1, im.height)), x + x0
+            if abs(sc - 1) > 0.001:
+                nw, nh = max(1, int(im.width * sc)), max(1, int(im.height * sc))
+                x, y = x + (im.width - nw) // 2, y + (im.height - nh) // 2
+                im = im.resize((nw, nh), Image.BILINEAR)
+            if a < 0.999:
+                im = im.copy()
+                im.putalpha(im.getchannel("A").point(lambda v, a=a: int(v * a)))
+            part, at = _clip(im, x, y, self.w, self.h)
+            canvas.alpha_composite(part, at)
+        return canvas
 
 
 def _clip(im, x, y, W, H):

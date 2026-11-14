@@ -353,6 +353,9 @@ class TextLayer:
         self._file_check = 0.0
         self._file_text = None
         self._deadline = None          # countdown: when it reaches zero (set as it goes IN)
+        self._pt = 0                   # design: frames since it started coming in / going out
+        self._anim = None
+        self._xy = (0, 0)
         self._build()
 
     # ---- content --------------------------------------------------------
@@ -378,7 +381,11 @@ class TextLayer:
     def _build(self):
         style = self.cfg.get("style") or "text"
         try:
-            if style == "ticker":
+            if style == "design":           # layers made once; each comes in / goes out with its own animation
+                import design
+                self._anim = design.Animator(self.cfg, self.out_w, self.out_h, self.fps)
+                self._img, self._xy = self._design_frame(self._anim.state("on", 0))
+            elif style == "ticker":
                 self._build_ticker()
             elif style not in ("clock", "countdown"):
                 self._img = render_static(self.cfg, self.out_w, self.out_h)
@@ -510,6 +517,7 @@ class TextLayer:
 
     # ---- on air ---------------------------------------------------------
     def take_out(self):
+        self._pt = 0
         if self.state == "wait":
             self.state = "off"
         elif self.state in ("in", "on"):
@@ -517,6 +525,7 @@ class TextLayer:
 
     def take_in(self):
         if self.state in ("out", "off"):
+            self._pt = 0
             if self.state == "off":
                 self._deadline = None      # a countdown starts again
                 self._clock_key = None
@@ -526,7 +535,51 @@ class TextLayer:
     def visible(self):
         return self.state in ("in", "on", "out")
 
+    def _design_frame(self, states):
+        """The design's picture for these layer states, cropped to what shows -> (BGRA, (x, y)) or (None, (0, 0))."""
+        canvas = self._anim.compose(states)
+        box = canvas.getchannel("A").getbbox()
+        if not box:
+            return None, (0, 0)
+        return _bgra(canvas.crop(box)), (box[0], box[1])
+
+    def _tick_design(self):
+        self.ticks += 1
+        if self.state == "off":
+            return None
+        if self.state == "wait":
+            if self.ticks < self.delay_frames:
+                return None
+            self.state, self._pt = "in", 0
+        an = getattr(self, "_anim", None)
+        if an is None:
+            return None
+        t = self._pt / self.fps
+        self._pt += 1
+        img, xy = None, (0, 0)
+        if self.state == "in":
+            if t >= an.length("in"):
+                self.state = "on"
+            else:
+                img, xy = self._design_frame(an.state("in", t))
+        elif self.state == "out":
+            if t >= an.length("out"):
+                self.state = "off"
+                return None
+            img, xy = self._design_frame(an.state("out", t))
+        if self.state == "on":
+            self.on_ticks += 1
+            if self.duration_frames and self.on_ticks >= self.duration_frames:
+                self.state, self._pt = "out", 0
+            img, xy = self._img, self._xy
+        if img is None:
+            return None
+        self.cfg["x"], self.cfg["y"] = xy
+        return img, 255, (0, 0)
+
     def tick(self, n_samples=0):
+        if (self.cfg.get("style") or "") == "design":
+            return self._tick_design()
         self.ticks += 1
         if self.state == "off":
             return None
@@ -578,6 +631,8 @@ class TextLayer:
 def preview(cfg, out_w, out_h):
     """Picture of a text CG for the editor (ticker: a still of its start)."""
     layer = TextLayer({**cfg, "fade": 0}, out_w, out_h, 25)
+    if (cfg.get("style") or "") == "design":
+        layer.state = "on"                     # as it stands on air, not its first frame coming in
     if (cfg.get("style") or "") == "ticker":
         layer._pos = 0.0
     r = layer.tick()

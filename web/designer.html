@@ -81,6 +81,7 @@
   <div class="brand"><b>ENDORA CG COMPOSER</b><span>PROFESSIONAL BROADCAST GRAPHICS</span></div>
   <button onclick="location.href='/'" title="Key, crop and place a PNG / MOV / MP4 CG">Picture CG</button>
   <button class="sel">Designer</button>
+  <button onclick="location.href='/live'" title="Playlists, Preview / Live, Take, NDI and OBS / vMix output">Live</button>
   <span style="width:8px"></span>
   <input id="dName" placeholder="Design name" style="width:200px" oninput="meta(); ">
   <button onclick="undo()" title="Undo (Ctrl+Z)">&#8630;</button><button onclick="redo()" title="Redo (Ctrl+Y)">&#8631;</button>
@@ -90,6 +91,7 @@
   <button onclick="openDialog()">Open</button>
   <button class="green" onclick="saveToPlayout()" title="Save as .cgp into the Playout CG library (Ctrl+S)">Save to Playout</button>
   <button onclick="exportCgp()" title="Save a .cgp file anywhere (to copy to another PC)">Export .cgp</button>
+  <button class="red" onclick="sendToLive()" title="Add this design to the Live playlist">To Live</button>
 </div>
 <div class="main">
   <div class="left">
@@ -239,6 +241,14 @@ function setProp(k, v, live) {
   if (k === 'field' && v) { D.fields[v] ??= L.text || ''; }
   changed();
 }
+function setAnim(ph, k, v) {
+  const L = cur(); if (!L) return;
+  const a = {...(L['anim_' + ph] || {})};
+  if (k === 'type' && !v) { push(); delete L['anim_' + ph]; changed(); props(); return; }
+  a[k] = v;
+  if (k === 'type') { a.delay ??= 0; a.dur ??= 0.5; }
+  if (k === 'type') { push(); L['anim_' + ph] = a; changed(); props(); } else liveProp('anim_' + ph, a);
+}
 let liveTimer = 0, livePushed = false;
 function liveProp(k, v) {     // typing / sliders: one undo step per burst
   if (!livePushed) { push(); livePushed = true; }
@@ -279,6 +289,14 @@ function props() {
       <span class="l">Fit</span>${opt('mode', [['contain', 'Whole picture in the box'], ['cover', 'Fill the box (cut edges)'], ['stretch', 'Stretch to the box']])}
       <span class="l"></span><button class="sm" onclick="natural()">Picture's own shape</button>`;
   }
+  const A = [['fade', 'Fade'], ['slide-l', 'Slide from left'], ['slide-r', 'Slide from right'], ['slide-u', 'Slide up'], ['slide-d', 'Slide down'],
+             ['wipe-l', 'Wipe from left'], ['wipe-r', 'Wipe from right'], ['scale', 'Zoom'], ['pop', 'Pop'], ['none', 'None (cut)']];
+  const an = ph => { const a = L['anim_' + ph] || {}, on = !!a.type;
+    return `<span class="l">${ph === 'in' ? 'Comes in' : 'Goes out'}</span><span class="row">
+      <select onchange="setAnim('${ph}', 'type', this.value)"><option value="">${ph === 'in' ? 'As the design' : 'Back the way in'}</option>${A.map(([v, t]) => `<option value="${v}" ${a.type === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      ${on ? `<input type="number" step="0.1" min="0" max="10" value="${a.delay ?? 0}" title="Wait (seconds)" style="width:52px" oninput="setAnim('${ph}', 'delay', +this.value)"><span class="hint">wait</span>
+      <input type="number" step="0.1" min="0" max="10" value="${a.dur ?? 0.5}" title="Length (seconds)" style="width:52px" oninput="setAnim('${ph}', 'dur', +this.value)"><span class="hint">s</span>` : ''}</span>`; };
+  h += `<span class="l" style="color:var(--orange)">Animation</span><span class="hint">each layer its own; wait = after the take</span>${an('in')}${an('out')}`;
   p.innerHTML = h;
   // a picked colour change in the gradient / fill rebuilds the panel only on change
   if (L.type !== 'text') p.querySelectorAll('select').forEach(s => s.addEventListener('change', () => setTimeout(props, 0)));
@@ -495,6 +513,12 @@ async function saveToPlayout() {
   savedAt = c.name;
   $('busy').textContent = 'saved ' + r.saved;
   msg(`Saved "${r.saved}" to the Playout CG library.\n\nIn Playout: CG > CG Library, press + Manual. Its fields (names, scores) are typed there with Edit, also while it is on air.`);
+}
+async function sendToLive() {
+  if (!layers().length) { msg('Nothing to send yet.'); return; }
+  const r = await (await fetch('/api/live/add', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cfgs:[cfgOut()]})})).json();
+  if (r.error) { msg(r.error); return; }
+  if (await ask(`"${cfgOut().name}" is in the Live playlist. Go to Live now?`)) location.href = '/live';
 }
 async function exportCgp() {
   const c = cfgOut();

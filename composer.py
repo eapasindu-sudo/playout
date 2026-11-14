@@ -18,8 +18,9 @@ import sys
 import threading
 import time
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
+import cglive
 import design
 import paths
 import textcg
@@ -41,12 +42,21 @@ def _settings():
         c = {}
     folder = os.path.join(HOME, c.get("cg_dir", "cg"))
     os.makedirs(folder, exist_ok=True)
-    return folder, int(c.get("width", 1920)), int(c.get("height", 1080)), int(c.get("web_port", 8080))
+    return (folder, int(c.get("width", 1920)), int(c.get("height", 1080)), int(c.get("web_port", 8080)),
+            int(c.get("composer_port", 8090)))
 
 
-FOLDER, WIDTH, HEIGHT, PLAYOUT_PORT = _settings()
+FOLDER, WIDTH, HEIGHT, PLAYOUT_PORT, COMPOSER_PORT = _settings()
 textcg.set_font_dirs(FOLDER)      # fonts dropped into the CG folder
 design.set_image_dirs(FOLDER)     # picture layers of Designer designs
+LIVE = None                       # cglive.Live, made when the app starts (it opens the NDI output)
+
+
+def live():
+    global LIVE
+    if LIVE is None:
+        LIVE = cglive.Live(HOME, FOLDER)
+    return LIVE
 
 
 def program_frame():
@@ -104,11 +114,233 @@ def upload():
     return jsonify(saved=saved)
 
 
+# ---------------------------------------------------------------- Live (playlists to air)
+# Other PCs on the network may only reach the overlay (OBS / vMix Browser Source), the HTTP triggers
+# (Stream Deck, Companion, vMix scripts) and the read-only state; the editor stays on this PC.
+REMOTE_OK = ("/overlay", "/trigger/", "/api/live/overlay", "/api/live/stream", "/api/live/layer/", "/api/live/state",
+             "/api/live/preview/")
+
+
+@app.before_request
+def only_local():
+    if request.remote_addr not in ("127.0.0.1", "::1") and not request.path.startswith(REMOTE_OK):
+        abort(403)
+
+
+@app.get("/live")
+def live_page():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "cglive.html")
+
+
+@app.get("/overlay")
+def overlay_page():
+    r = send_from_directory(os.path.join(BUNDLE, "web"), "overlay.html")
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
+@app.get("/api/live/state")
+def live_state():
+    st = live().state()
+    st["port"] = PORT
+    st["ips"] = lan_ips()
+    return jsonify(st)
+
+
+@app.get("/api/live/overlay")
+def live_overlay():
+    return jsonify(live().overlay_state())
+
+
+@app.get("/api/live/stream")
+def live_stream():
+    """Server-sent events: the overlay state each time it changes (and every few seconds, to keep alive)."""
+    L = live()
+
+    def gen():
+        v = None
+        while True:
+            v = L.wait_change(v if v is not None else -1, 5)
+            yield "data: " + json.dumps(L.overlay_state()) + "\n\n"
+
+    return Response(gen(), mimetype="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/live/layer/<pid>/<int:i>.png")
+def live_layer(pid, i):
+    data = live().layer_png(pid, i)
+    if data is None:
+        abort(404)
+    r = Response(data, mimetype="image/png")
+    r.headers["Cache-Control"] = "max-age=3600"     # a design on air never changes its pictures (an update is a new id)
+    return r
+
+
+@app.get("/api/live/preview/<item_id>.png")
+def live_preview(item_id):
+    """An item as it looks on air (the whole frame, see-through), for the Preview monitor and the list."""
+    from PIL import Image
+    import io
+    L = live()
+    _pl, it = L._find(item_id)
+    if it is None:
+        abort(404)
+    w, h = L.size
+    im = design.render_full(it, w, h)
+    tw = max(80, min(w, int(request.args.get("w") or 640)))
+    im = im.resize((tw, max(1, round(h * tw / w))), Image.BILINEAR)
+    buf = io.BytesIO()
+    im.save(buf, "PNG", compress_level=1)
+    r = Response(buf.getvalue(), mimetype="image/png")
+    r.headers["Cache-Control"] = "max-age=86400"     # the page asks with the item's rev, which changes with it
+    return r
+
+
+@app.post("/api/live/add")
+def live_add():
+    """Designs from the CG library (names of .cgp files) or the Designer (cfgs) into a playlist."""
+    from cgedit import clean_design, is_design
+    b = request.get_json(force=True, silent=True) or {}
+    cfgs = [clean_design(c) for c in b.get("cfgs") or [] if is_design(c)]
+    for n in b.get("names") or []:
+        try:
+            c = read_cgp(os.path.join(FOLDER, safe_name(n)), FOLDER)
+        except Exception:
+            continue
+        if is_design(c):
+            c["name"] = c.get("name") or os.path.splitext(n)[0]
+            cfgs.append(c)
+    if not cfgs:
+        return jsonify(error="No designs to add."), 400
+    return jsonify(added=live().add_items(cfgs, b.get("pid")))
+
+
+@app.post("/api/live/playlist")
+def live_playlist():
+    b = request.get_json(force=True, silent=True) or {}
+    live().playlist(b.get("op"), b.get("pid"), b.get("name"), b.get("order"))
+    return jsonify(ok=True)
+
+
+@app.post("/api/live/item")
+def live_item():
+    b = request.get_json(force=True, silent=True) or {}
+    err = live().item(b.get("op"), b.get("id"), b.get("changes"))
+    return (jsonify(error=err), 400) if err else jsonify(ok=True)
+
+
+@app.post("/api/live/<any(cue, take, clear, next, prev):action>")
+def live_action(action):
+    b = request.get_json(force=True, silent=True) or {}
+    L = live()
+    if action == "cue":
+        err = "" if L.cue(b.get("id")) else "item not found"
+    elif action == "take":
+        err = L.take(b.get("id"))
+    elif action == "clear":
+        err = L.clear() or ""
+    elif action == "next":
+        err = L.next(b.get("take", True))
+    else:
+        err = L.prev(b.get("take", True))
+    return (jsonify(error=err), 400) if err else jsonify(ok=True)
+
+
+@app.post("/api/live/outputs")
+def live_outputs():
+    b = request.get_json(force=True, silent=True) or {}
+    live().outputs(b.get("res"), b.get("fps"), b.get("ndi_on"), b.get("ndi_name"))
+    return jsonify(live().state())
+
+
+@app.get("/api/live/package")
+def live_package_get():
+    """The playlists (and their pictures) as a .cgpack download (the browser; the window uses a save dialog)."""
+    import tempfile
+    pids = [p for p in (request.args.get("pids") or "").split(",") if p]
+    fd, tmp = tempfile.mkstemp(suffix=cglive.PACKAGE_EXT)
+    os.close(fd)
+    live().export_package(tmp, pids)
+    with open(tmp, "rb") as f:
+        data = f.read()
+    os.remove(tmp)
+    r = Response(data, mimetype="application/zip")
+    r.headers["Content-Disposition"] = 'attachment; filename="CG Composer' + cglive.PACKAGE_EXT + '"'
+    return r
+
+
+@app.post("/api/live/package")
+def live_package_put():
+    f = request.files.get("file")
+    if not f:
+        return jsonify(error="No file."), 400
+    try:
+        import io
+        names = live().import_package(io.BytesIO(f.read()))
+    except Exception as e:
+        return jsonify(error=f"Not a CG Composer package ({e})."), 400
+    return jsonify(playlists=names)
+
+
+@app.route("/trigger/<action>", methods=["GET", "POST"])
+@app.route("/trigger/<action>/<arg>", methods=["GET", "POST"])
+def trigger(action, arg=None):
+    """One URL per button, for Stream Deck (Companion "HTTP request"), vMix scripts, a phone browser:
+    take, clear, next, prev, cue-next, cue-prev, item/<n> (takes item n), cue/<n>,
+    field/<name>?value=... (a field of the design on air, e.g. a score), playlist/<n>."""
+    L = live()
+    n = int(arg) if arg and arg.isdigit() else None
+    if action == "take":
+        err = L.take()
+    elif action == "clear":
+        err = L.clear() or ""
+    elif action == "next":
+        err = L.next()
+    elif action == "prev":
+        err = L.prev()
+    elif action == "cue-next":
+        err = L.next(take=False)
+    elif action == "cue-prev":
+        err = L.prev(take=False)
+    elif action == "item" and n:
+        err = L.by_number(n)
+    elif action == "cue" and n:
+        err = L.by_number(n, take=False)
+    elif action == "field" and arg:
+        err = L.set_field(arg, request.values.get("value", ""))
+    elif action == "playlist" and n:
+        pls = L.state()["playlists"]
+        err = "" if 1 <= n <= len(pls) else f"no playlist {n}"
+        if not err:
+            L.playlist("select", pls[n - 1]["id"])
+    else:
+        return jsonify(ok=False, error="unknown trigger"), 404
+    return (jsonify(ok=False, error=err), 400) if err else jsonify(ok=True)
+
+
+def lan_ips():
+    """This PC's addresses on the network (for the overlay / trigger URLs other PCs use)."""
+    ips = set()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            ips.add(s.getsockname()[0])
+    except Exception:
+        pass
+    try:
+        for a in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(a[4][0])
+    except Exception:
+        pass
+    return sorted(i for i in ips if not i.startswith("127."))
+
+
 class Api:
     """Called from the page through window.pywebview.api (desktop window only)."""
 
     def __init__(self):
         self._window = None      # underscore: pywebview must not walk into the window object (it freezes)
+        self._outputs = []
 
     def export_cgp(self, cfg):
         import webview
@@ -123,16 +355,60 @@ class Api:
         write_cgp(dest, FOLDER, cfg)
         return dest
 
+    def export_package(self, pids=None):
+        import webview
+        res = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename="CG Composer" + cglive.PACKAGE_EXT,
+                                             file_types=("CG Composer package (*.cgpack)",))
+        if not res:
+            return None
+        dest = res if isinstance(res, str) else res[0]
+        if not dest.lower().endswith(cglive.PACKAGE_EXT):
+            dest += cglive.PACKAGE_EXT
+        return live().export_package(dest, pids)
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    def output_window(self, bg="#000000", screen=-1):
+        """The Live output full screen (on the last screen: the projector / LED / second monitor)."""
+        import webview
+        from urllib.parse import quote
+        screens = webview.screens or []
+        scr = screens[screen] if screens and -len(screens) <= screen < len(screens) else None
+        kw = {"screen": scr} if scr is not None else {}
+        win = webview.create_window("CG Composer output", f"http://127.0.0.1:{PORT}/overlay?bg={quote(bg)}&cursor=0",
+                                    fullscreen=True, background_color=bg if bg.startswith("#") else "#000000", **kw)
+        self._outputs.append(win)
+        return len(screens)
+
+    def close_outputs(self):
+        for w in self._outputs:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._outputs = []
+
+
+PORT = COMPOSER_PORT
+
+
+def pick_port():
+    """The fixed port (composer_port in config.json, 8090) on every network card, so OBS / vMix / Stream Deck
+    on other PCs keep one address; any free port on this PC alone when it is taken."""
+    try:
+        with socket.socket() as s:
+            s.bind(("0.0.0.0", COMPOSER_PORT))
+        return "0.0.0.0", COMPOSER_PORT
+    except OSError:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return "127.0.0.1", s.getsockname()[1]
 
 
 def main():
-    port = free_port()
-    threading.Thread(target=lambda: app.run(host="127.0.0.1", port=port, threaded=True, use_reloader=False),
+    global PORT
+    host, PORT = pick_port()
+    port = PORT
+    live()
+    threading.Thread(target=lambda: app.run(host=host, port=port, threaded=True, use_reloader=False),
                      daemon=True, name="composer web").start()
     if "--browser" in sys.argv or not _have_webview():
         import webbrowser
