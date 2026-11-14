@@ -12,7 +12,7 @@ for pkg in pkgs:
     except Exception:
         continue
     datas += d; binaries += b; hidden += h
-hidden += ["app", "design", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths", "squeeze", "comments", "health",
+hidden += ["app", "cglive", "design", "engine", "streamer", "scheduler", "store", "media", "ndi_io", "paths", "squeeze", "comments", "health",
            "capture", "cg", "system", "audio_out", "psutil", "cgfx", "cgedit", "composer", "recorder",
            "loudness", "gpu", "textlooks", "audiofx", "framequeue", "report", "importer", "updater", "version",
            "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon", "certs",
