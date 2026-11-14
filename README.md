@@ -121,6 +121,15 @@ library and shows in the **CG Library** tab, where **+ Manual** adds it with all
 **Export .cgp** saves the file anywhere (to use on another PC: Import CG (.cgp) in the CG Library tab).
 A `.cgp` is a zip holding the settings and the CG file.
 
+**Designer** (button at the top of CG Composer) makes CGs from text, boxes, circles and pictures on one
+canvas: start from a template (lower third, presenter name, breaking news, wedding title, event title,
+sponsor logo, cricket / football scoreboard, team lineup, player profile, match result, full screen) or
+a blank page, drag, size and rotate layers on the picture, set fonts, colours, gradients, outlines and
+opacity, and order them in the layer list (Ctrl+Z undo, Ctrl+D copy, arrows nudge, Delete). Give a text
+layer a **Field** name (name, title, score...) and the operator types it in Playout: CG Library > **+ Manual**,
+then **Edit** on the design; **Update** puts the new text on air at once. The preview is drawn by Playout's
+own engine, so it is exactly what goes on air. Pictures and logos used by a design travel inside its `.cgp`.
+
 ## Squeeze Feed (L-ad)
 
 The program shrinks into the green area of an overlay video (an "L" advert around the live picture).

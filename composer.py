@@ -1,5 +1,9 @@
 """CG Composer: a separate window for preparing CGs.
 
+Designer (/designer, web/designer.html): lower thirds, titles, scoreboards and other CGs made from text,
+shapes and pictures on one canvas, from starter templates; saved as a .cgp design that Playout plays as a
+text CG whose fields (names, scores) the operator types on air (see design.py).
+
 Open a PNG / JPEG / MOV / MP4 (also on a green or blue screen), key it, crop, zoom, rotate and
 place it, then save it as a .cgp file. "Save to Playout" puts the .cgp straight into the Playout
 CG library (Documents\\Playout\\cg); "Export .cgp" saves it anywhere, e.g. to copy to another PC.
@@ -16,7 +20,9 @@ import time
 
 from flask import Flask, jsonify, request, send_from_directory
 
+import design
 import paths
+import textcg
 import winicon
 from cg import CG_EXT, list_cg
 from cgedit import PRESET_EXT, make_blueprint, read_cgp, write_cgp
@@ -39,6 +45,8 @@ def _settings():
 
 
 FOLDER, WIDTH, HEIGHT, PLAYOUT_PORT = _settings()
+textcg.set_font_dirs(FOLDER)      # fonts dropped into the CG folder
+design.set_image_dirs(FOLDER)     # picture layers of Designer designs
 
 
 def program_frame():
@@ -68,6 +76,11 @@ app.register_blueprint(make_blueprint(lambda: FOLDER, lambda: (WIDTH, HEIGHT), p
 @app.get("/")
 def index():
     return send_from_directory(os.path.join(BUNDLE, "web"), "cgedit.html")
+
+
+@app.get("/designer")
+def designer():
+    return send_from_directory(os.path.join(BUNDLE, "web"), "designer.html")
 
 
 @app.get("/img/<any('logo-playout.png', 'logo-composer.png'):name>")

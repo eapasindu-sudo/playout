@@ -1,5 +1,6 @@
 """Text CGs typed on screen: lower third (name / title), scrolling ticker, clock / date, countdown,
-plain text, and live comments (YouTube / Facebook, see comments.py).
+plain text, live comments (YouTube / Facebook, see comments.py), and layered designs from CG Composer
+(style "design", see design.py).
 
 A text CG is a manual CG config with "kind": "text":
     style        "lower3" | "ticker" | "clock" | "countdown" | "text" | "comment"
@@ -250,6 +251,10 @@ def render_static(cfg, out_w, out_h, now=None, left=None):
     style = cfg.get("style") or "text"
     if style == "comment":
         return render_comment(cfg, out_w)
+    if style == "design":                   # a layered design from CG Composer: placed where it was drawn
+        import design
+        img, cfg["x"], cfg["y"] = design.render(cfg, out_w, out_h)
+        return img
     size = int(_num(cfg.get("size"), 44))
     font = get_font(_fontname(cfg), size, cfg.get("bold", True))
     color = _rgb(cfg.get("color"), (255, 255, 255)) + (255,)
@@ -576,6 +581,8 @@ def preview(cfg, out_w, out_h):
     if (cfg.get("style") or "") == "ticker":
         layer._pos = 0.0
     r = layer.tick()
+    if (cfg.get("style") or "") == "design":     # the caller places the picture where the design put it
+        cfg["x"], cfg["y"] = layer.cfg.get("x", 0), layer.cfg.get("y", 0)
     if r is None:
         return None, layer.error
     return r[0].copy(), layer.error
