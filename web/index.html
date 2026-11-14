@@ -997,6 +997,23 @@
 </dialog>
 
 <!-- Text CG -->
+<dialog id="dDesign" style="width:min(1100px, 97vw)">
+  <header><span>CG Composer design</span> <button class="sm sl-toggle" onclick="Singlish.toggle()">අ Singlish</button><button class="sm" style="margin-left:6px" onclick="dDesign.close()">Close</button></header>
+  <div class="body" style="display:grid; grid-template-columns: minmax(0, 1fr) 360px; gap:14px">
+    <div><img class="tcg-prev" id="dgPrev" alt="preview"><div class="hint" id="dgErr" style="margin-top:4px"></div>
+      <div style="display:flex; gap:6px; margin-top:6px"><label><input type="checkbox" id="dgOnPgm" onchange="dgRender()"> Show over the program</label></div></div>
+    <div class="form" style="grid-template-columns: 90px 1fr">
+      <span>Name</span><input id="dgName" placeholder="name in the CG list">
+      <div id="dgFields" style="display:contents"></div>
+      <span>In / out</span><span style="display:flex; gap:6px; align-items:center"><select id="dgAnim" onchange="dgRender()"><option value="fade">Fade</option><option value="wipe">Wipe</option><option value="slide">Slide</option><option value="up">Up</option></select>
+        <input id="dgFade" type="number" min="0" max="100" style="width:60px"> frames</span>
+      <span>Show</span><label><input type="checkbox" id="dgLive"> Only on live (hide while a commercial plays)</label>
+      <span></span><span class="hint">Change the look, layers and fields in CG Composer &gt; Designer. Update puts new text on air at once.</span>
+    </div>
+  </div>
+  <div class="foot"><button onclick="dgDelete()">Delete</button><span style="flex:1"></span>
+    <button onclick="dgSave(false)" title="Save and keep this open (new text goes on air at once)">Update</button><button class="blue" onclick="dgSave(true)">Save</button></div>
+</dialog>
 <dialog id="dText" style="width:min(1100px, 97vw)">
   <header><span id="tcTitle">Text CG</span> <button class="sm sl-toggle" onclick="Singlish.toggle()">අ Singlish</button><button class="sm" style="margin-left:6px" onclick="dText.close()">Close</button></header>
   <div class="body" style="display:grid; grid-template-columns: minmax(0, 1fr) 360px; gap:14px">
@@ -2150,7 +2167,11 @@ async function loadCGFiles() {
   return cgFiles;
 }
 function renderCGFiles() {
-  $('cgFiles').innerHTML = cgPresets.map((p, i) => p.cfg.squeeze ? '' : `<div class="cgrow">
+  $('cgFiles').innerHTML = cgPresets.map((p, i) => p.cfg.squeeze ? '' : p.kind === 'design' ? `<div class="cgrow">
+    <img class="cgthumb" loading="lazy" src="/api/design/preview/${encodeURIComponent(p.name)}">
+    <div style="min-width:0"><div class="nm">${esc(p.name)}</div>
+      <div class="st">CG Composer design${designFields(p.cfg).length ? ' - fields: ' + esc(designFields(p.cfg).map(f => f.label).join(', ')) : ''}</div></div>
+    <div class="bt lockable"><button class="sm" onclick="addPreset(${i})">+ Manual</button><button class="sm" onclick="delPreset(${i})">Delete</button></div></div>` : `<div class="cgrow">
     <img class="cgthumb" loading="lazy" src="/api/cg/preview/${encodeURIComponent(p.file)}">
     <div style="min-width:0"><div class="nm">${esc(p.name)}</div>
       <div class="st">CG Composer preset - ${esc(p.file)}${p.cfg.key && p.cfg.key !== 'none' ? ' - ' + p.cfg.key + ' key' : ''}</div></div>
@@ -2199,7 +2220,7 @@ async function pollCG() {
     const live = st === 'on' || st === 'in';
     const stEl = el.querySelector('[data-f=st]');
     const stTxt = (st === 'on' ? 'ON AIR' : st === 'in' ? 'fading in' : st === 'out' ? 'fading out' : 'off') +
-      (c.live_only ? ' - live only' : '') + (c.auto_hour ? ` - auto ${c.auto_hour}x an hour${c.auto_live ? ' on live' : ''}` : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
+      (c.live_only ? ' - live only' : '') + (c.auto_hour ? ` - auto ${c.auto_hour}x an hour${c.auto_live ? ' on live' : ''}` : '') + (c.kind === 'web' ? ' - ' + ((r.manual_errors || {})[c.id] ? 'PROBLEM: ' + r.manual_errors[c.id] : webHost(c.url)) : c.kind === 'text' ? ' - ' + (c.style === 'design' ? designFields(c).map(f => f.value).filter(Boolean).join(' / ') : c.style === 'lower3' ? c.line1 || '' : c.style === 'ticker' ? (c.text || c.text_file || '').split('\n')[0] : c.style === 'clock' ? 'clock' : c.style === 'countdown' ? (c.cd_mode === 'to' ? 'until ' + (c.cd_to || '?') : secsText(c.cd_secs)) : c.text || '').slice(0, 40) : ` - ${c.x}, ${c.y}, ${c.zoom}%`);
     if (stEl.textContent !== stTxt) stEl.textContent = stTxt;
     el.querySelector('.in').classList.toggle('red', live);
   }
@@ -2209,7 +2230,7 @@ async function pollCG() {
 function renderManual() {
   $('cgList').innerHTML = cgManual.map(c => `<div class="cgrow" id="mc_${c.id}">
     ${c.kind === 'web' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#6bc1ff">WEB</div>`
-      : c.kind === 'text' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#ffb36b">${{lower3:'NAME', ticker:'TICKER', clock:'CLOCK', countdown:'COUNT', text:'TEXT'}[c.style] || 'TEXT'}</div>`
+      : c.kind === 'text' ? `<div class="cgthumb" style="display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:#ffb36b">${{lower3:'NAME', ticker:'TICKER', clock:'CLOCK', countdown:'COUNT', text:'TEXT', design:'DESIGN'}[c.style] || 'TEXT'}</div>`
       : `<img class="cgthumb" src="/api/cg/preview/${encodeURIComponent(c.file)}">`}
     <div style="min-width:0"><div class="nm">${esc(c.name || c.file || 'Scoreboard')}</div><div class="st" data-f="st"></div></div>
     <div class="bt"><button class="sm in" onclick="cgTake('${c.id}', 'in')">IN</button><button class="sm" onclick="cgTake('${c.id}', 'out')">OUT</button>
@@ -2403,9 +2424,54 @@ const saveManual = () => api('/api/cg/manual', cgManual).then(() => { cgShown = 
 function addManualCG(file) { openCG('manual', file ? {file} : null, cfg => { cgManual.push(cfg); saveManual(); }); }
 function editManualCG(id) {
   const i = cgManual.findIndex(c => c.id === id); if (i < 0) return;
+  if (cgManual[i].kind === 'text' && cgManual[i].style === 'design') return openDesignCG(cgManual[i]);
   if (cgManual[i].kind === 'text') return openTextCG(cgManual[i]);
   if (cgManual[i].kind === 'web') return openWebCG(cgManual[i]);
   openCG('manual', cgManual[i], cfg => { cgManual[i] = {...cfg, id}; saveManual(); }, () => { cgTake(id, 'out'); cgManual.splice(i, 1); saveManual(); });
+}
+
+// CG Composer design: the operator types its fields (names, titles, scores), also while it is on air
+function designFields(c) {
+  const out = [], seen = new Set();
+  for (const L of ((c.design || {}).layers || [])) {
+    if (L.type !== 'text' || !L.field || seen.has(L.field)) continue;
+    seen.add(L.field);
+    out.push({field: L.field, label: L.name || L.field, value: (c.fields || {})[L.field] ?? L.text ?? '', multi: String(L.text || '').includes('\n')});
+  }
+  return out;
+}
+let dgEdit = null, dgTimer = 0;
+function openDesignCG(c) {
+  dgEdit = c;
+  $('dgName').value = c.name || ''; $('dgAnim').value = c.anim || 'fade'; $('dgFade').value = c.fade ?? 12; $('dgLive').checked = !!c.live_only;
+  const f = designFields(c);
+  $('dgFields').innerHTML = f.length ? f.map(x => `<span>${esc(x.label)}</span>` + (x.multi
+      ? `<textarea class="sl" data-f="${esc(x.field)}" rows="4" style="font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:6px" oninput="dgLater()">${esc(x.value)}</textarea>`
+      : `<input class="sl" data-f="${esc(x.field)}" value="${esc(x.value)}" oninput="dgLater()">`)).join('')
+    : '<span></span><span class="hint">This design has no fields. Give text layers a Field name in CG Composer > Designer to type them here.</span>';
+  dDesign.showModal(); dgRender();
+}
+function dgCfg() {
+  const fields = {...(dgEdit.fields || {})};
+  document.querySelectorAll('#dgFields [data-f]').forEach(el => fields[el.dataset.f] = el.value);
+  return {...dgEdit, name: $('dgName').value.trim() || dgEdit.name || 'Design', fields, anim: $('dgAnim').value,
+          fade: Math.max(0, +$('dgFade').value || 0), live_only: $('dgLive').checked};
+}
+function dgLater() { clearTimeout(dgTimer); dgTimer = setTimeout(dgRender, 250); }
+async function dgRender() {
+  const r = await fetch('/api/textcg/render', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cfg:dgCfg(), bg:$('dgOnPgm').checked ? 'program' : 'checker', w:960})});
+  const b = await r.blob(); const old = $('dgPrev').src; $('dgPrev').src = URL.createObjectURL(b); if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+  $('dgErr').textContent = r.headers.get('X-Error') || '';
+}
+function dgSave(close) {
+  const c = dgCfg(), i = cgManual.findIndex(x => x.id === dgEdit.id);
+  if (i >= 0) cgManual[i] = c; dgEdit = c;
+  saveManual(); if (close) dDesign.close(); else $('msg').textContent = 'Design updated' + ((cgStatus?.manual_on || {})[c.id] ? ' on air' : '');
+}
+async function dgDelete() {
+  if (!dgEdit || !await ask('Delete this design from the manual CGs? (It stays in the CG library.)')) return;
+  const i = cgManual.findIndex(x => x.id === dgEdit.id); if (i >= 0) { cgTake(dgEdit.id, 'out'); cgManual.splice(i, 1); saveManual(); }
+  dDesign.close();
 }
 
 // Web overlay (scoreboard link)

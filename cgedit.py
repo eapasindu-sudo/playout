@@ -54,8 +54,57 @@ def clean_cfg(cfg):
     return {k: cfg[k] for k in KEEP if k in cfg}
 
 
+DESIGN_KEEP = ("name", "kind", "style", "design", "fields", "anim", "fade", "live_only", "delay", "duration",
+               "auto_hour", "auto_live", "auto_secs")
+
+
+def is_design(cfg):
+    return (cfg or {}).get("style") == "design"
+
+
+def clean_design(cfg):
+    out = {k: cfg[k] for k in DESIGN_KEEP if k in cfg}
+    out["kind"], out["style"] = "text", "design"
+    return out
+
+
+def write_design_cgp(dest, folder, cfg):
+    """A CG Composer design as a .cgp: its settings and every picture its layers use."""
+    cfg = clean_design(cfg)
+    pics = set()
+    for L in (cfg.get("design") or {}).get("layers") or []:
+        src = os.path.basename(str(L.get("src") or "")) if L.get("type") == "image" else ""
+        if src and os.path.isfile(os.path.join(folder, src)):
+            pics.add(src)
+    tmp = dest + ".tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("cg.json", json.dumps({"version": 2, "kind": "design", "cfg": cfg}, indent=1))
+        for n in sorted(pics):
+            z.write(os.path.join(folder, n), "media/" + n)
+    os.replace(tmp, dest)
+
+
+def _unpack(z, member, name, folder):
+    """A file from the .cgp into folder (renamed if a different file has that name) -> its name there."""
+    data = z.read(member)
+    target = os.path.join(folder, name)
+    if os.path.isfile(target) and os.path.getsize(target) != len(data):
+        base, ext = os.path.splitext(name)
+        i = 2
+        while os.path.isfile(os.path.join(folder, f"{base}_{i}{ext}")):
+            i += 1
+        name = f"{base}_{i}{ext}"
+        target = os.path.join(folder, name)
+    if not os.path.isfile(target):
+        with open(target, "wb") as f:
+            f.write(data)
+    return name
+
+
 def write_cgp(dest, folder, cfg):
     """Save a .cgp (settings + the media file) to dest."""
+    if is_design(cfg):
+        return write_design_cgp(dest, folder, cfg)
     name = cfg.get("file") or ""
     src = os.path.join(folder, name)
     if not os.path.isfile(src):
@@ -69,6 +118,14 @@ def read_cgp(path_or_file, folder):
     """Open a .cgp: puts its media into folder (renamed if a different file has that name) -> cfg."""
     with zipfile.ZipFile(path_or_file) as z:
         meta = json.loads(z.read("cg.json"))
+        if meta.get("kind") == "design":
+            cfg = clean_design(meta.get("cfg") or {})
+            have = set(z.namelist())
+            for L in (cfg.get("design") or {}).get("layers") or []:
+                src = safe_name(os.path.basename(str(L.get("src") or ""))) if L.get("type") == "image" else ""
+                if src and "media/" + src in have:
+                    L["src"] = _unpack(z, "media/" + src, src, folder)
+            return cfg
         name = safe_name(meta.get("file") or "")
         if not name or not cg_kind(name):
             raise ValueError("not a CG preset")
@@ -94,7 +151,8 @@ def update_preset(path, changes):
     with zipfile.ZipFile(path) as z:
         meta = json.loads(z.read("cg.json"))
         files = {n: z.read(n) for n in z.namelist() if n != "cg.json"}
-    meta["cfg"] = clean_cfg({**(meta.get("cfg") or {}), **changes})
+    merged = {**(meta.get("cfg") or {}), **changes}
+    meta["cfg"] = clean_design(merged) if meta.get("kind") == "design" else clean_cfg(merged)
     tmp = path + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
         z.writestr("cg.json", json.dumps(meta, indent=1))
@@ -111,7 +169,8 @@ def list_presets(folder):
             try:
                 with zipfile.ZipFile(os.path.join(folder, n)) as z:
                     meta = json.loads(z.read("cg.json"))
-                out.append({"name": n, "file": meta.get("file"), "cfg": meta.get("cfg") or {}})
+                out.append({"name": n, "file": meta.get("file"), "kind": meta.get("kind") or "media",
+                            "cfg": meta.get("cfg") or {}})
             except Exception:
                 continue
     return out
@@ -230,6 +289,9 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
                 return jsonify(error=f"Not a CG preset: {e}"), 400
             with open(os.path.join(folder, name), "wb") as out:
                 out.write(data)
+            if is_design(cfg):
+                return jsonify(error="This .cgp is a Designer design. Open it in CG Composer > Designer "
+                                     "(in Playout: CG Library, + Manual).", design=name), 400
             return jsonify(cfg=cfg)
         if os.path.splitext(name)[1].lower() in CG_EXT:
             f.save(os.path.join(folder, name))
@@ -260,5 +322,126 @@ def make_blueprint(folder_fn, size_fn, background_fn=None):
         dest = os.path.join(folder_fn(), name + PRESET_EXT)
         write_cgp(dest, folder_fn(), cfg)
         return jsonify(saved=os.path.basename(dest), path=dest)
+
+    # ---- Designer (layered designs: text, shapes, pictures; see design.py) ----
+    @bp.get("/api/design/templates")
+    def design_templates():
+        import design
+        return jsonify(templates=design.template_list())
+
+    @bp.get("/api/design/template/<key>")
+    def design_template(key):
+        import design
+        name, d = design.template(key)
+        return jsonify(name=name, design=d)
+
+    @bp.get("/api/design/fonts")
+    def design_fonts():
+        import textcg
+        return jsonify(fonts=textcg.list_fonts())
+
+    @bp.get("/api/design/pictures")
+    def design_pictures():
+        """Pictures in the CG folder that a picture layer can use."""
+        folder = folder_fn()
+        names = [n for n in sorted(os.listdir(folder), key=str.lower)
+                 if cg_kind(n) == "image" and os.path.isfile(os.path.join(folder, n))]
+        return jsonify(pictures=names)
+
+    @bp.get("/api/design/picture/<path:name>")
+    def design_picture(name):
+        p = os.path.join(folder_fn(), safe_name(name))
+        if cg_kind(p) != "image" or not os.path.isfile(p):
+            abort(404)
+        return send_file(p, max_age=0)
+
+    @bp.post("/api/design/render")
+    def design_render():
+        """The design as it goes on air (PNG at w pixels wide): bg "checker", "program" or "none" (see-through)."""
+        import design
+        b = request.get_json(silent=True) or {}
+        c = b.get("cfg") or {}
+        W, H = size_fn()
+        try:
+            im = design.render_full(c, W, H)
+            err = ""
+        except Exception as e:
+            im, err = Image.new("RGBA", (W, H), (0, 0, 0, 0)), str(e)
+        bg = b.get("bg") or "checker"
+        if bg != "none":
+            frame = background_fn() if (bg == "program" and background_fn) else None
+            base = np.array(frame, copy=True).reshape(H, W, 4) if frame is not None else checker(W, H, 24)
+            back = Image.fromarray(np.ascontiguousarray(base[..., [2, 1, 0, 3]]), "RGBA")
+            back.putalpha(255)
+            back.alpha_composite(im)
+            im = back
+        out_w = max(160, min(W, int(b.get("w") or 960)))
+        im = im.resize((out_w, round(H * out_w / W)), Image.BILINEAR)
+        buf = io.BytesIO()
+        im.save(buf, "PNG", compress_level=1)
+        r = Response(buf.getvalue(), mimetype="image/png")
+        r.headers["X-Error"] = err
+        r.headers["Cache-Control"] = "no-store"
+        return r
+
+    @bp.post("/api/design/save")
+    def design_save():
+        """Save a design as <name>.cgp in the CG folder (the Playout CG library)."""
+        c = request.get_json(silent=True) or {}
+        name = safe_name(c.get("name") or "") or "Design"
+        dest = os.path.join(folder_fn(), name + PRESET_EXT)
+        write_design_cgp(dest, folder_fn(), c)
+        return jsonify(saved=os.path.basename(dest), path=dest)
+
+    @bp.post("/api/design/open")
+    def design_open():
+        """A .cgp design from the CG library (name) or uploaded (file) -> its cfg; pictures go into the CG folder."""
+        import tempfile
+        f = request.files.get("file")
+        try:
+            if f is not None:
+                with tempfile.TemporaryDirectory() as d:
+                    p = os.path.join(d, "in.cgp")
+                    f.save(p)
+                    c = read_cgp(p, folder_fn())
+            else:
+                p = os.path.join(folder_fn(), safe_name((request.get_json(silent=True) or {}).get("name") or ""))
+                if not os.path.isfile(p):
+                    abort(404)
+                c = read_cgp(p, folder_fn())
+        except zipfile.BadZipFile:
+            return jsonify(error="not a .cgp file"), 400
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        if not is_design(c):
+            return jsonify(error="This .cgp is a picture / video CG, not a design. Open it in the Picture CG editor."), 400
+        return jsonify(cfg=c)
+
+    @bp.get("/api/design/preview/<path:name>")
+    def design_preview(name):
+        """Small picture of a design in the CG library (PNG, see-through)."""
+        import design
+        p = os.path.join(folder_fn(), safe_name(name))
+        try:
+            with zipfile.ZipFile(p) as z:
+                meta = json.loads(z.read("cg.json"))
+        except Exception:
+            abort(404)
+        if meta.get("kind") != "design":
+            abort(404)
+        W, H = size_fn()
+        im = design.render_full(meta.get("cfg") or {}, W, H)
+        box = im.getchannel("A").getbbox()
+        im = im.crop(box) if box else im
+        im.thumbnail((320, 180), Image.BILINEAR)
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        r = Response(buf.getvalue(), mimetype="image/png")
+        r.headers["Cache-Control"] = "no-store"
+        return r
+
+    @bp.get("/api/design/library")
+    def design_library():
+        return jsonify(designs=[p["name"] for p in list_presets(folder_fn()) if p.get("kind") == "design"])
 
     return bp

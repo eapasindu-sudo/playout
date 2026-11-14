@@ -55,6 +55,7 @@ from watchfolder import WatchFolder
 import importer
 import report
 import textcg
+import design
 
 import paths
 import diag
@@ -150,6 +151,7 @@ planner = DayPlanner(engine, store, recorder)
 updater = Updater()
 engine.ffmpeg = streamer.ffmpeg
 textcg.set_font_dirs(cfg["cg_dir"])
+design.set_image_dirs(cfg["cg_dir"])      # picture layers of CG Composer designs
 alerts = Alerts()
 watcher = Watcher(alerts, engine, streamer, recorder, [cfg["media_dir"], recorder.folder])
 bookings = Bookings(cfg["data_dir"])

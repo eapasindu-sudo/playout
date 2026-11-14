@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CG Composer - Designer</title>
+<style>
+  :root { --bg:#0c0d0f; --panel:#1a1c1f; --panel2:#232529; --line:#33363b; --text:#e9eaec; --dim:#8d9299;
+          --green:#2fbf3a; --red:#e0261b; --orange:#ff8a1c; --blue:#3b82f6; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:13px/1.35 "Segoe UI", system-ui, sans-serif; display:flex; flex-direction:column; user-select:none; overflow:hidden; }
+  button { font:inherit; color:var(--text); background:linear-gradient(#45484e, #2f3236); border:1px solid #0006; border-radius:3px;
+           padding:5px 10px; cursor:pointer; box-shadow: inset 0 1px 0 #ffffff1a; white-space:nowrap; }
+  button:hover { filter:brightness(1.2); } button:disabled { opacity:.45; cursor:default; filter:none; }
+  button.blue { background:linear-gradient(#4b8ff7, #2462c9); } button.red { background:linear-gradient(#f0362a, #b5170e); }
+  button.green { background:linear-gradient(#36c843, #1f8f29); } button.orange { background:linear-gradient(#ff9d3d, #d86c06); }
+  button.sm { padding:2px 7px; font-size:11px; } button.sel { box-shadow: inset 0 -3px 0 var(--orange), inset 0 1px 0 #ffffff1a; }
+  input, select, textarea { font:inherit; color:var(--text); background:#0b0c0e; border:1px solid var(--line); border-radius:3px; padding:4px 6px; }
+  textarea { resize:vertical; min-height:46px; width:100%; }
+  input[type=number] { width:70px; text-align:right; } input[type=color] { width:38px; height:26px; padding:1px; }
+  input[type=checkbox] { accent-color:var(--orange); }
+  .bar { display:flex; gap:8px; align-items:center; padding:7px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .brand { display:flex; flex-direction:column; line-height:1.05; margin-right:6px; }
+  .brand b { font-size:15px; letter-spacing:.06em; } .brand span { font-size:9px; letter-spacing:.22em; color:var(--orange); }
+  .main { flex:1; display:grid; grid-template-columns: 220px minmax(0,1fr) 320px; min-height:0; }
+  .left, .rightp { background:#0f1012; display:flex; flex-direction:column; min-height:0; }
+  .left { border-right:1px solid var(--line); } .rightp { border-left:1px solid var(--line); }
+  .sect { font-size:10px; letter-spacing:.14em; color:var(--dim); padding:9px 10px 5px; text-transform:uppercase; display:flex; align-items:center; gap:6px; }
+  .scroll { overflow:auto; min-height:0; }
+  .tpl { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:0 8px 8px; }
+  .tpl div { cursor:pointer; border:1px solid var(--line); border-radius:4px; overflow:hidden; background:#16181b; }
+  .tpl div:hover { border-color:var(--orange); }
+  .tpl img { width:100%; aspect-ratio:16/9; display:block; background:#2a3a2a; }
+  .tpl span { display:block; font-size:10px; padding:3px 5px; color:#cfd2d6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .adds { display:grid; grid-template-columns:1fr 1fr; gap:5px; padding:0 8px 8px; }
+  .pics { display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; padding:0 8px 10px; }
+  .pics img { width:100%; aspect-ratio:1; object-fit:contain; background:#1d2024; border:1px solid var(--line); border-radius:3px; cursor:pointer; }
+  .pics img:hover { border-color:var(--orange); }
+  .center { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .pv { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#16181b; padding:14px; position:relative; }
+  .stage { position:relative; max-width:100%; max-height:100%; aspect-ratio:16/9; width:100%; box-shadow:0 0 0 1px #000, 0 6px 30px #0008; }
+  .stage img { width:100%; height:100%; display:block; pointer-events:none; }
+  .ov { position:absolute; inset:0; overflow:hidden; cursor:default; }
+  .lb { position:absolute; outline:1px dashed #ffffff30; }
+  .lb.sel { outline:1px solid var(--orange); }
+  .lb.lock { cursor:not-allowed; }
+  .h { position:absolute; width:10px; height:10px; background:#fff; border:1px solid var(--orange); border-radius:2px; margin:-5px 0 0 -5px; }
+  .h.rot { border-radius:50%; background:var(--orange); }
+  .guide { position:absolute; background:#ff2fb3; pointer-events:none; display:none; }
+  .pvbar { display:flex; gap:8px; align-items:center; padding:6px 12px; background:var(--panel); border-top:1px solid var(--line); }
+  .fields { background:var(--panel); border-top:1px solid var(--line); padding:8px 12px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; max-height:150px; overflow:auto; }
+  .fields label { display:flex; flex-direction:column; gap:2px; font-size:11px; color:var(--dim); }
+  .fields input { width:190px; }
+  .props { padding:0 10px 10px; display:grid; grid-template-columns: 70px 1fr; gap:6px 8px; align-items:center; }
+  .props .l { color:#cfd2d6; text-align:right; font-size:12px; }
+  .props > input, .props > select, .props > textarea { width:100%; min-width:0; }
+  .props .row select { max-width:120px; }
+  .row { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+  .layers { border-top:1px solid var(--line); flex:1; min-height:140px; display:flex; flex-direction:column; }
+  .ll { overflow:auto; flex:1; }
+  .li { display:flex; align-items:center; gap:6px; padding:5px 8px; border-bottom:1px solid #1e2023; cursor:pointer; }
+  .li:hover { background:#17191c; } .li.sel { background:#3a2a14; }
+  .li .ic { width:18px; text-align:center; color:var(--dim); font-size:11px; }
+  .li .nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .li .fl { font-size:10px; color:var(--orange); }
+  .li button { background:none; border:0; box-shadow:none; padding:0 3px; color:var(--dim); }
+  .hint { color:var(--dim); font-size:11px; }
+  .busy { color:var(--dim); font-size:11px; min-width:80px; }
+  .err { color:#ff6b5f; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:16px; min-width:360px; }
+  dialog::backdrop { background:#000a; }
+  .dl { max-height:340px; overflow:auto; border:1px solid var(--line); border-radius:4px; margin:10px 0; }
+  .dl div { padding:7px 10px; border-bottom:1px solid #222; cursor:pointer; } .dl div:hover { background:#2a2c30; }
+  .empty { padding:30px 10px; text-align:center; color:var(--dim); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <img src="/img/logo-composer.png" alt="" style="height:30px" onerror="this.style.display='none'">
+  <div class="brand"><b>ENDORA CG COMPOSER</b><span>PROFESSIONAL BROADCAST GRAPHICS</span></div>
+  <button onclick="location.href='/'" title="Key, crop and place a PNG / MOV / MP4 CG">Picture CG</button>
+  <button class="sel">Designer</button>
+  <span style="width:8px"></span>
+  <input id="dName" placeholder="Design name" style="width:200px" oninput="meta(); ">
+  <button onclick="undo()" title="Undo (Ctrl+Z)">&#8630;</button><button onclick="redo()" title="Redo (Ctrl+Y)">&#8631;</button>
+  <span class="busy" id="busy"></span>
+  <span style="flex:1"></span>
+  <button onclick="newDesign()">New</button>
+  <button onclick="openDialog()">Open</button>
+  <button class="green" onclick="saveToPlayout()" title="Save as .cgp into the Playout CG library (Ctrl+S)">Save to Playout</button>
+  <button onclick="exportCgp()" title="Save a .cgp file anywhere (to copy to another PC)">Export .cgp</button>
+</div>
+<div class="main">
+  <div class="left">
+    <div class="sect">Add</div>
+    <div class="adds">
+      <button onclick="addLayer('text')">T&nbsp; Text</button>
+      <button onclick="addLayer('rect')">&#9645; Box</button>
+      <button onclick="addLayer('ellipse')">&#9711; Circle</button>
+      <button onclick="addLayer('image')">&#128444; Picture</button>
+    </div>
+    <div class="sect">Templates</div>
+    <div class="scroll" style="flex:1">
+      <div class="tpl" id="tpl"></div>
+      <div class="sect">Pictures <span style="flex:1"></span><button class="sm" onclick="$('upPic').click()">Upload</button></div>
+      <div class="pics" id="pics"></div>
+    </div>
+  </div>
+  <div class="center">
+    <div class="pv" id="pv">
+      <div class="stage" id="stage">
+        <img id="img" alt="">
+        <div class="ov" id="ov"></div>
+        <div class="guide" id="gx"></div><div class="guide" id="gy"></div>
+      </div>
+    </div>
+    <div class="pvbar">
+      <span class="hint">Background</span>
+      <select id="bg" onchange="render()"><option value="checker">Checkerboard</option><option value="program">Playout output</option></select>
+      <span class="hint" style="margin-left:10px">Comes in / goes out</span>
+      <select id="anim" onchange="meta()"><option value="fade">Fade</option><option value="wipe">Wipe</option><option value="slide">Slide</option><option value="up">Up</option></select>
+      <input id="fade" type="number" min="0" max="100" style="width:56px" title="Frames in / out (0 = cut)" oninput="meta()"><span class="hint">frames</span>
+      <span style="flex:1"></span>
+      <span class="hint" id="pos"></span>
+    </div>
+    <div class="fields" id="fields"></div>
+  </div>
+  <div class="rightp">
+    <div class="sect">Properties</div>
+    <div class="scroll" style="max-height:58%">
+      <div class="props" id="props"></div>
+    </div>
+    <div class="layers">
+      <div class="sect">Layers <span style="flex:1"></span>
+        <button class="sm" onclick="moveLayer(1)" title="Bring forward">&#9650;</button>
+        <button class="sm" onclick="moveLayer(-1)" title="Send back">&#9660;</button>
+        <button class="sm" onclick="dupLayer()" title="Duplicate (Ctrl+D)">Copy</button>
+        <button class="sm red" onclick="delLayer()" title="Delete (Del)">Delete</button>
+      </div>
+      <div class="ll" id="ll"></div>
+    </div>
+  </div>
+</div>
+<input type="file" id="upPic" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga" style="display:none" onchange="uploadPics(this)">
+<input type="file" id="upCgp" accept=".cgp" style="display:none" onchange="openFile(this)">
+<dialog id="dOpen">
+  <b>Open a design</b>
+  <div class="dl" id="openList"></div>
+  <div style="display:flex; gap:8px; justify-content:flex-end">
+    <button onclick="$('upCgp').click()">From a .cgp file...</button>
+    <button onclick="$('dOpen').close()">Cancel</button>
+  </div>
+</dialog>
+<dialog id="dMsg"><div id="msgText" style="white-space:pre-wrap; max-width:460px"></div>
+  <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px" id="msgBtns"></div></dialog>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let D = null;          // the design cfg: {name, kind, style, design:{w,h,layers}, fields, anim, fade}
+let sel = null;        // selected layer id
+let FONTS = ['Arial'], PICS = [];
+let hist = [], fut = [], savedAt = '';
+const KEY = 'designerDraft';
+
+// ---------------------------------------------------------------- messages
+function msg(text, buttons = [['OK', null]]) {
+  return new Promise(res => {
+    $('msgText').textContent = text;
+    $('msgBtns').innerHTML = '';
+    for (const [label, val, cls] of buttons) {
+      const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls;
+      b.onclick = () => { $('dMsg').close(); res(val); }; $('msgBtns').appendChild(b);
+    }
+    $('dMsg').showModal();
+  });
+}
+const ask = t => msg(t, [['Cancel', false], ['OK', true, 'blue']]);
+
+// ---------------------------------------------------------------- design state
+const layers = () => D.design.layers;
+const cur = () => layers().find(l => l.id === sel) || null;
+function newId() { let i = 1; while (layers().some(l => l.id === 'l' + i)) i++; return 'l' + i; }
+function snapshot() { return JSON.stringify(D); }
+function push() { hist.push(snapshot()); if (hist.length > 100) hist.shift(); fut = []; }
+function undo() { if (!hist.length) return; fut.push(snapshot()); D = JSON.parse(hist.pop()); after(true); }
+function redo() { if (!fut.length) return; hist.push(snapshot()); D = JSON.parse(fut.pop()); after(true); }
+function changed() { draft(); render(); drawBoxes(); listLayers(); fieldsPanel(); }
+function after(all) { if (!cur()) sel = null; $('dName').value = D.name || ''; $('anim').value = D.anim || 'fade'; $('fade').value = D.fade ?? 12;
+  props(); changed(); }
+function draft() { try { localStorage[KEY] = snapshot(); } catch (e) {} }
+function meta() { D.name = $('dName').value; D.anim = $('anim').value; D.fade = Math.max(0, +$('fade').value || 0); draft(); }
+
+function blank(name, design) {
+  return {name, kind:'text', style:'design', design, fields:{}, anim:'fade', fade:12};
+}
+async function useTemplate(key) {
+  if (D && layers().length && !await ask('Start a new design from this template? (The design on screen is kept in Undo.)')) return;
+  const r = await (await fetch('/api/design/template/' + key)).json();
+  if (D) push();
+  D = blank(r.name, r.design); D.fields = {};
+  sel = null; after(true);
+}
+function newDesign() { useTemplate('blank'); }
+
+// ---------------------------------------------------------------- layers
+const DEFAULTS = {
+  text: {name:'Text', w:700, h:90, text:'Your text', field:'', font:'Arial', size:56, bold:true, color:'#ffffff', align:'left', fit:true, upper:false, shadow:false, stroke:'', stroke_w:0},
+  rect: {name:'Box', w:600, h:120, fill:'#0b1a3a', fill2:'', grad:'', radius:0, stroke:'', stroke_w:0},
+  ellipse: {name:'Circle', w:200, h:200, fill:'#ff8a1c', fill2:'', grad:'', stroke:'', stroke_w:0},
+  image: {name:'Picture', w:400, h:300, src:'', mode:'contain'},
+};
+function addLayer(type, extra = {}) {
+  push();
+  const d = DEFAULTS[type];
+  const L = {id:newId(), type, rotate:0, opacity:100, ...JSON.parse(JSON.stringify(d)), ...extra};
+  L.x = extra.x ?? Math.round((D.design.w - L.w) / 2); L.y = extra.y ?? Math.round((D.design.h - L.h) / 2);
+  let n = 1; const base = L.name; while (layers().some(l => l.name === L.name)) L.name = base + ' ' + (++n);
+  layers().push(L); sel = L.id; props(); changed();
+  if (type === 'image' && !L.src) msg('Pick a picture: click one under Pictures on the left (or Upload one first), or choose it in Properties.');
+}
+function dupLayer() {
+  const L = cur(); if (!L) return; push();
+  const c = {...JSON.parse(JSON.stringify(L)), id:newId(), name:L.name + ' copy', x:L.x + 20, y:L.y + 20};
+  layers().splice(layers().indexOf(L) + 1, 0, c); sel = c.id; props(); changed();
+}
+function delLayer() {
+  const L = cur(); if (!L) return; push();
+  layers().splice(layers().indexOf(L), 1); sel = null; props(); changed();
+}
+function moveLayer(dir) {
+  const L = cur(); if (!L) return; const a = layers(), i = a.indexOf(L), j = i + dir;
+  if (j < 0 || j >= a.length) return; push(); a.splice(i, 1); a.splice(j, 0, L); changed();
+}
+function setProp(k, v, live) {
+  const L = cur(); if (!L) return;
+  if (!live) push();
+  L[k] = v;
+  if (k === 'field' && v) { D.fields[v] ??= L.text || ''; }
+  changed();
+}
+let liveTimer = 0, livePushed = false;
+function liveProp(k, v) {     // typing / sliders: one undo step per burst
+  if (!livePushed) { push(); livePushed = true; }
+  clearTimeout(liveTimer); liveTimer = setTimeout(() => livePushed = false, 800);
+  setProp(k, v, true);
+}
+
+// ---------------------------------------------------------------- properties panel
+function props() {
+  const L = cur(), p = $('props');
+  if (!L) { p.innerHTML = '<div class="hint" style="grid-column:1/3; padding:8px 0">Click a layer on the canvas or in the list, or add one on the left.</div>'; return; }
+  const n = (k, a = {}) => `<input type="number" value="${Math.round(+L[k] || 0)}" ${a.min !== undefined ? 'min=' + a.min : ''} ${a.max !== undefined ? 'max=' + a.max : ''} oninput="liveProp('${k}', +this.value)">`;
+  const c = k => `<input type="color" value="${L[k] || '#000000'}" oninput="liveProp('${k}', this.value)">`;
+  const cb = (k, label) => `<label><input type="checkbox" ${L[k] ? 'checked' : ''} onchange="setProp('${k}', this.checked)"> ${label}</label>`;
+  const opt = (k, list) => `<select onchange="setProp('${k}', this.value)">${list.map(([v, t]) => `<option value="${v}" ${String(L[k] ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+  let h = `<span class="l">Name</span><input value="${esc(L.name)}" oninput="liveProp('name', this.value)">
+    <span class="l">Place</span><span class="row">X ${n('x')} Y ${n('y')}</span>
+    <span class="l">Size</span><span class="row">W ${n('w', {min:1})} H ${n('h', {min:1})}</span>
+    <span class="l">Rotate</span><span class="row">${n('rotate', {min:-360, max:360})}&deg;<button class="sm" onclick="setProp('rotate', 0)">0</button></span>
+    <span class="l">Opacity</span><span class="row"><input type="range" min="0" max="100" value="${L.opacity ?? 100}" style="width:130px" oninput="liveProp('opacity', +this.value)"> ${L.opacity ?? 100}%</span>
+    <span class="l">Show</span><span class="row">${cb('hidden', 'Hidden')} ${cb('locked', 'Locked')}</span>`;
+  if (L.type === 'text') {
+    h += `<span class="l">Text</span><textarea oninput="liveProp('text', this.value)">${esc(L.text)}</textarea>
+      <span class="l">Field</span><span class="row"><input value="${esc(L.field || '')}" placeholder="e.g. name" style="width:110px" onchange="setProp('field', this.value.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_'))">
+        <span class="hint">typed in Playout on air</span></span>
+      <span class="l">Font</span><select onchange="setProp('font', this.value)">${[...new Set([L.font, ...FONTS])].map(f => `<option ${f === L.font ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>
+      <span class="l">Size</span><span class="row">${n('size', {min:6, max:600})} ${cb('bold', 'Bold')} ${cb('upper', 'CAPS')}</span>
+      <span class="l">Colour</span><span class="row">${c('color')} ${opt('align', [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']])}</span>
+      <span class="l">Outline</span><span class="row">${c('stroke')} ${n('stroke_w', {min:0, max:40})} px ${cb('shadow', 'Shadow')}</span>
+      <span class="l"></span>${cb('fit', 'Shrink to fit the box')}`;
+  } else if (L.type === 'rect' || L.type === 'ellipse') {
+    h += `<span class="l">Fill</span><span class="row">${L.fill ? c('fill') : ''}<label><input type="checkbox" ${L.fill ? '' : 'checked'} onchange="setProp('fill', this.checked ? '' : '#0b1a3a'); props()"> None</label></span>
+      <span class="l">Gradient</span><span class="row">${opt('grad', [['', 'Off'], ['v', 'Top to bottom'], ['h', 'Left to right']])} ${L.grad ? c('fill2') : ''}</span>
+      ${L.type === 'rect' ? `<span class="l">Corners</span><span class="row">${n('radius', {min:0, max:500})} px round</span>` : ''}
+      <span class="l">Outline</span><span class="row">${c('stroke')} ${n('stroke_w', {min:0, max:60})} px</span>`;
+  } else if (L.type === 'image') {
+    h += `<span class="l">Picture</span><select onchange="setProp('src', this.value)"><option value="">(none)</option>${[...new Set([L.src, ...PICS].filter(Boolean))].map(f => `<option ${f === L.src ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>
+      <span class="l">Fit</span>${opt('mode', [['contain', 'Whole picture in the box'], ['cover', 'Fill the box (cut edges)'], ['stretch', 'Stretch to the box']])}
+      <span class="l"></span><button class="sm" onclick="natural()">Picture's own shape</button>`;
+  }
+  p.innerHTML = h;
+  // a picked colour change in the gradient / fill rebuilds the panel only on change
+  if (L.type !== 'text') p.querySelectorAll('select').forEach(s => s.addEventListener('change', () => setTimeout(props, 0)));
+}
+function natural() {
+  const L = cur(); if (!L || !L.src) return;
+  const im = new Image(); im.onload = () => { push(); L.h = Math.round(L.w * im.naturalHeight / im.naturalWidth); props(); changed(); };
+  im.src = '/api/design/picture/' + encodeURIComponent(L.src);
+}
+
+// ---------------------------------------------------------------- layer list
+const ICON = {text:'T', rect:'&#9645;', ellipse:'&#9711;', image:'&#128444;'};
+function listLayers() {
+  const a = layers();
+  $('ll').innerHTML = a.length ? [...a].reverse().map(L => `<div class="li ${L.id === sel ? 'sel' : ''}" onclick="pick('${L.id}')">
+      <span class="ic">${ICON[L.type] || '?'}</span><span class="nm" style="${L.hidden ? 'opacity:.4' : ''}">${esc(L.name)}</span>
+      ${L.field ? `<span class="fl">{${esc(L.field)}}</span>` : ''}
+      <button title="Show / hide" onclick="event.stopPropagation(); pick('${L.id}'); setProp('hidden', !cur().hidden); props()">${L.hidden ? '&#9711;' : '&#9673;'}</button>
+      <button title="Lock" onclick="event.stopPropagation(); pick('${L.id}'); setProp('locked', !cur().locked); props()">${L.locked ? '&#128274;' : '&#128275;'}</button></div>`).join('')
+    : '<div class="empty">No layers yet</div>';
+}
+function pick(id) { sel = id; props(); drawBoxes(); listLayers(); }
+
+// ---------------------------------------------------------------- fields (what the operator types in Playout)
+function fieldsPanel() {
+  const seen = new Set(), list = [];
+  for (const L of layers()) if (L.type === 'text' && L.field && !seen.has(L.field)) { seen.add(L.field); list.push(L); }
+  for (const k of Object.keys(D.fields)) if (!seen.has(k)) delete D.fields[k];
+  if (!list.length) { $('fields').innerHTML = '<span class="hint">Fields: give a text layer a <b>Field</b> name (Properties) and the operator can type it in Playout while it is on air (names, titles, scores). The text here is what it starts with.</span>'; return; }
+  const active = document.activeElement?.dataset?.f;
+  $('fields').innerHTML = '<span class="hint" style="width:100%">Fields (typed in Playout on air; this is what they start with)</span>' +
+    list.map(L => `<label>${esc(L.name)}<input data-f="${esc(L.field)}" value="${esc(D.fields[L.field] ?? L.text)}" oninput="fieldInput(this)"></label>`).join('');
+  if (active) { const el = document.querySelector(`[data-f="${CSS.escape(active)}"]`); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
+}
+function fieldInput(el) {
+  if (!livePushed) { push(); livePushed = true; }
+  clearTimeout(liveTimer); liveTimer = setTimeout(() => livePushed = false, 800);
+  D.fields[el.dataset.f] = el.value; draft(); render();
+}
+
+// ---------------------------------------------------------------- preview (the real on-air picture, drawn by Playout's engine)
+let rTimer = 0, rendering = false, again = false;
+function render() { clearTimeout(rTimer); rTimer = setTimeout(doRender, 60); }
+async function doRender() {
+  if (!D) return;
+  if (rendering) { again = true; return; }
+  rendering = true; $('busy').textContent = 'drawing...';
+  try {
+    const w = Math.min(1920, Math.round($('stage').clientWidth * (window.devicePixelRatio || 1)));
+    const r = await fetch('/api/design/render', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cfg:D, bg:$('bg').value, w})});
+    const url = URL.createObjectURL(await r.blob());
+    const old = $('img').src; $('img').src = url; if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+    const e = r.headers.get('X-Error'); $('busy').innerHTML = e ? `<span class="err">${esc(e)}</span>` : '';
+  } catch (e) { $('busy').innerHTML = '<span class="err">cannot draw</span>'; }
+  rendering = false;
+  if (again) { again = false; doRender(); }
+}
+
+// ---------------------------------------------------------------- canvas: boxes, move, size, rotate
+function fitStage() {
+  const pv = $('pv'), st = $('stage'), ar = D ? D.design.w / D.design.h : 16 / 9;
+  const W = pv.clientWidth - 28, H = pv.clientHeight - 28;
+  const w = Math.min(W, H * ar);
+  st.style.width = w + 'px'; st.style.height = (w / ar) + 'px'; st.style.aspectRatio = 'auto';
+}
+const scale = () => $('stage').clientWidth / D.design.w;
+function drawBoxes() {
+  if (!D) return;
+  const s = scale(), ov = $('ov');
+  ov.innerHTML = layers().map(L => {
+    if (L.hidden) return '';
+    const isSel = L.id === sel;
+    const hs = isSel && !L.locked ? ['nw', 'ne', 'sw', 'se'].map(c => `<div class="h" data-h="${c}" style="left:${c[1] === 'w' ? 0 : 100}%; top:${c[0] === 'n' ? 0 : 100}%; cursor:${c === 'nw' || c === 'se' ? 'nwse' : 'nesw'}-resize"></div>`).join('') +
+      `<div class="h rot" data-h="rot" style="left:50%; top:-22px; cursor:grab" title="Rotate (Shift: 15 degree steps)"></div>` : '';
+    return `<div class="lb ${isSel ? 'sel' : ''} ${L.locked ? 'lock' : ''}" data-id="${L.id}" style="left:${L.x * s}px; top:${L.y * s}px; width:${L.w * s}px; height:${L.h * s}px;
+      transform:rotate(${+L.rotate || 0}deg); cursor:${L.locked ? 'not-allowed' : 'move'}">${hs}</div>`;
+  }).join('');
+  const L = cur();
+  $('pos').textContent = L ? `${L.name}: ${Math.round(L.x)}, ${Math.round(L.y)}  ${Math.round(L.w)} x ${Math.round(L.h)}${L.rotate ? '  ' + Math.round(L.rotate) + '°' : ''}` : `${D.design.w} x ${D.design.h}`;
+}
+function guides(gx, gy) {
+  const s = scale();
+  $('gx').style.cssText = gx === null ? 'display:none' : `display:block; left:${gx * s}px; top:0; width:1px; height:100%`;
+  $('gy').style.cssText = gy === null ? 'display:none' : `display:block; top:${gy * s}px; left:0; height:1px; width:100%`;
+}
+let drag = null;
+$('ov').addEventListener('pointerdown', e => {
+  if (!D) return;
+  const hEl = e.target.closest('.h'), box = e.target.closest('.lb');
+  if (!box) { sel = null; props(); drawBoxes(); listLayers(); return; }
+  const L = layers().find(l => l.id === box.dataset.id); if (!L) return;
+  if (L.id !== sel) { pick(L.id); }
+  if (L.locked) return;
+  e.preventDefault();
+  push();
+  const r = $('stage').getBoundingClientRect(), s = scale();
+  drag = {L, mode: hEl ? hEl.dataset.h : 'move', x0:e.clientX, y0:e.clientY, o:{x:L.x, y:L.y, w:L.w, h:L.h, rotate:+L.rotate || 0},
+          cx:r.left + (L.x + L.w / 2) * s, cy:r.top + (L.y + L.h / 2) * s, moved:false};
+  $('ov').setPointerCapture(e.pointerId);
+  // the box being moved is drawn again on the canvas as it goes (the picture follows a moment later)
+});
+$('ov').addEventListener('pointermove', e => {
+  if (!drag) return;
+  const s = scale(), L = drag.L, o = drag.o;
+  const dx = (e.clientX - drag.x0) / s, dy = (e.clientY - drag.y0) / s;
+  if (Math.abs(dx) + Math.abs(dy) > 0.5) drag.moved = true;
+  let gx = null, gy = null;
+  if (drag.mode === 'move') {
+    let x = o.x + dx, y = o.y + dy;
+    if (!e.altKey) {     // snap to the middle and the edges of the picture
+      const W = D.design.w, H = D.design.h, t = 10 / s;
+      const sx = [[W / 2 - L.w / 2, W / 2], [0, 0], [W - L.w, W]], sy = [[H / 2 - L.h / 2, H / 2], [0, 0], [H - L.h, H]];
+      for (const [v, g] of sx) if (Math.abs(x - v) < t) { x = v; gx = g; break; }
+      for (const [v, g] of sy) if (Math.abs(y - v) < t) { y = v; gy = g; break; }
+    }
+    L.x = Math.round(x); L.y = Math.round(y);
+  } else if (drag.mode === 'rot') {
+    let a = Math.atan2(e.clientY - drag.cy, e.clientX - drag.cx) * 180 / Math.PI + 90;
+    if (e.shiftKey) a = Math.round(a / 15) * 15;
+    a = ((Math.round(a) % 360) + 360) % 360; L.rotate = a > 180 ? a - 360 : a;
+  } else {
+    // corner sizing (in the layer's own direction when it is rotated)
+    const rad = o.rotate * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+    const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
+    const sxn = drag.mode[1] === 'w' ? -1 : 1, syn = drag.mode[0] === 'n' ? -1 : 1;
+    let w = Math.max(4, o.w + sxn * lx), h = Math.max(4, o.h + syn * ly);
+    if (e.shiftKey) { const k = Math.max(w / o.w, h / o.h); w = o.w * k; h = o.h * k; }
+    // keep the opposite corner where it was
+    const ax = -sxn * o.w / 2, ay = -syn * o.h / 2;                           // fixed corner, old box centre
+    const fx = o.x + o.w / 2 + ax * cos - ay * sin, fy = o.y + o.h / 2 + ax * sin + ay * cos;
+    const bx = -sxn * w / 2, by = -syn * h / 2;
+    const ncx = fx - (bx * cos - by * sin), ncy = fy - (bx * sin + by * cos);
+    L.w = Math.round(w); L.h = Math.round(h); L.x = Math.round(ncx - w / 2); L.y = Math.round(ncy - h / 2);
+    if (L.type === 'text' && e.ctrlKey) L.size = Math.max(6, Math.round((L.size || 48) * h / o.h));
+  }
+  guides(gx, gy); drawBoxes(); throttledRender();
+});
+let lastR = 0;
+function throttledRender() { const t = Date.now(); if (t - lastR > 110) { lastR = t; doRender(); } else render(); }
+$('ov').addEventListener('pointerup', () => {
+  if (!drag) return;
+  if (!drag.moved) hist.pop();      // a click, not a change
+  drag = null; guides(null, null); props(); changed();
+});
+$('ov').addEventListener('dblclick', e => {
+  const box = e.target.closest('.lb'); if (!box) return;
+  const L = layers().find(l => l.id === box.dataset.id);
+  if (L && L.type === 'text') { pick(L.id); const t = $('props').querySelector('textarea'); if (t) { t.focus(); t.select(); } }
+});
+
+// ---------------------------------------------------------------- keyboard
+document.addEventListener('keydown', e => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveToPlayout(); return; }
+  if (typing) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); dupLayer(); return; }
+  const L = cur(); if (!L) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); delLayer(); return; }
+  if (e.key === 'Escape') { pick(null); return; }
+  const step = e.shiftKey ? 10 : 1, mv = {ArrowLeft:[-step, 0], ArrowRight:[step, 0], ArrowUp:[0, -step], ArrowDown:[0, step]}[e.key];
+  if (mv && !L.locked) { e.preventDefault(); if (!e.repeat) push(); L.x += mv[0]; L.y += mv[1]; props(); changed(); }
+});
+
+// ---------------------------------------------------------------- templates and pictures
+async function loadTemplates() {
+  const r = await (await fetch('/api/design/templates')).json();
+  $('tpl').innerHTML = r.templates.map(t => `<div onclick="useTemplate('${t.key}')" title="${esc(t.name)}"><img data-k="${t.key}" alt=""><span>${esc(t.name)}</span></div>`).join('');
+  for (const t of r.templates) {      // small pictures of each template, one after another
+    const d = await (await fetch('/api/design/template/' + t.key)).json();
+    const p = await fetch('/api/design/render', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cfg:{design:d.design, fields:{}}, bg:'none', w:240})});
+    const img = document.querySelector(`[data-k="${t.key}"]`); if (img) img.src = URL.createObjectURL(await p.blob());
+  }
+}
+async function loadPics() {
+  try { PICS = (await (await fetch('/api/design/pictures')).json()).pictures; } catch (e) { PICS = []; }
+  $('pics').innerHTML = PICS.length ? PICS.map(n => `<img src="/api/design/picture/${encodeURIComponent(n)}" title="${esc(n)}" loading="lazy" onclick="usePic(this.title)">`).join('')
+    : '<div class="hint" style="grid-column:1/4">No pictures yet. Upload logos and photos (PNG keeps its transparency).</div>';
+  props();
+}
+function usePic(name) {
+  const L = cur();
+  if (L && L.type === 'image') { setProp('src', name); props(); return; }
+  const im = new Image();
+  im.onload = () => { let w = im.naturalWidth, h = im.naturalHeight; const k = Math.min(1, 600 / w, 400 / h); addLayer('image', {src:name, name:name.replace(/\.[^.]+$/, ''), w:Math.round(w * k), h:Math.round(h * k)}); };
+  im.onerror = () => addLayer('image', {src:name});
+  im.src = '/api/design/picture/' + encodeURIComponent(name);
+}
+async function uploadPics(input) {
+  const fd = new FormData(); for (const f of input.files) fd.append('files', f); input.value = '';
+  $('busy').textContent = 'uploading...';
+  await fetch('/api/cg/files', {method:'POST', body:fd});
+  $('busy').textContent = ''; await loadPics();
+}
+
+// ---------------------------------------------------------------- save / open
+function cfgOut() {
+  meta();
+  const c = JSON.parse(JSON.stringify(D));
+  c.name = (c.name || '').trim() || 'Design';
+  return c;
+}
+async function saveToPlayout() {
+  const c = cfgOut();
+  if (!layers().length) { msg('Nothing to save yet: add a text, box or picture, or start from a template.'); return; }
+  const lib = await (await fetch('/api/design/library')).json();
+  if (lib.designs.some(n => n.toLowerCase() === (c.name + '.cgp').toLowerCase()) && savedAt !== c.name &&
+      !await ask(`"${c.name}" is already in the Playout CG library. Replace it?`)) return;
+  const r = await (await fetch('/api/design/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(c)})).json();
+  if (r.error) { msg(r.error); return; }
+  savedAt = c.name;
+  $('busy').textContent = 'saved ' + r.saved;
+  msg(`Saved "${r.saved}" to the Playout CG library.\n\nIn Playout: CG > CG Library, press + Manual. Its fields (names, scores) are typed there with Edit, also while it is on air.`);
+}
+async function exportCgp() {
+  const c = cfgOut();
+  if (window.pywebview?.api?.export_cgp) { const r = await window.pywebview.api.export_cgp(c); if (r) msg('Saved ' + r); return; }
+  msg('Export works in the CG Composer window. Here, use Save to Playout and copy the .cgp from the CG folder.');
+}
+async function openDialog() {
+  const lib = await (await fetch('/api/design/library')).json();
+  $('openList').innerHTML = lib.designs.length ? lib.designs.map(n => `<div onclick="openByName('${esc(n).replace(/'/g, '&#39;')}')">${esc(n.replace(/\.cgp$/i, ''))}</div>`).join('')
+    : '<div class="empty" style="cursor:default">No designs in the Playout CG library yet.</div>';
+  $('dOpen').showModal();
+}
+async function openByName(name) {
+  $('dOpen').close();
+  const r = await (await fetch('/api/design/open', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})})).json();
+  loaded(r);
+}
+async function openFile(input) {
+  const f = input.files[0]; if (!f) return; input.value = ''; $('dOpen').close();
+  const fd = new FormData(); fd.append('file', f);
+  const r = await (await fetch('/api/design/open', {method:'POST', body:fd})).json();
+  loaded(r);
+}
+function loaded(r) {
+  if (r.error) { msg(r.error); return; }
+  if (D) push();
+  D = {...blank('Design', {w:1920, h:1080, layers:[]}), ...r.cfg};
+  D.fields = D.fields || {};
+  D.design.layers.forEach((L, i) => L.id = L.id || 'l' + (i + 1));
+  savedAt = D.name; sel = null; fitStage(); after(true); loadPics();
+}
+
+// ---------------------------------------------------------------- start
+window.addEventListener('resize', () => { if (D) { fitStage(); drawBoxes(); render(); } });
+window.addEventListener('beforeunload', draft);
+(async () => {
+  try { FONTS = (await (await fetch('/api/design/fonts')).json()).fonts; } catch (e) {}
+  const want = decodeURIComponent((location.hash.match(/open=([^&]+)/) || [])[1] || '');
+  let start = null;
+  try { start = JSON.parse(localStorage[KEY] || 'null'); } catch (e) {}
+  if (want) { history.replaceState(null, '', '/designer'); await openByName(want); }
+  else if (start && start.design) { D = start; after(true); $('busy').textContent = 'last design brought back'; }
+  else { const r = await (await fetch('/api/design/template/lower3')).json(); D = blank(r.name, r.design); after(true); }
+  fitStage(); drawBoxes(); render();
+  loadPics(); loadTemplates();
+})();
+</script>
+</body>
+</html>
