@@ -265,6 +265,28 @@ def live_outputs():
     return jsonify(live().state())
 
 
+@app.post("/api/live/timer")
+def live_timer():
+    b = request.get_json(force=True, silent=True) or {}
+    err = live().timer(b.get("op") or "toggle", b.get("id"), b.get("secs"))
+    return (jsonify(error=err), 400) if err else jsonify(ok=True)
+
+
+@app.post("/api/live/data")
+def live_data():
+    """An item's data link: fields filled from a JSON address every few seconds (live scores)."""
+    b = request.get_json(force=True, silent=True) or {}
+    err = live().set_data(b.get("id"), b.get("data"))
+    return (jsonify(error=err), 400) if err else jsonify(ok=True)
+
+
+@app.post("/api/live/atem")
+def live_atem():
+    b = request.get_json(force=True, silent=True) or {}
+    live().set_atem(b.get("on"), b.get("key"))
+    return jsonify(ok=True)
+
+
 @app.post("/api/live/transition")
 def live_transition():
     b = request.get_json(force=True, silent=True) or {}
@@ -306,7 +328,8 @@ def live_package_put():
 def trigger(action, arg=None):
     """One URL per button, for Stream Deck (Companion "HTTP request"), vMix scripts, a phone browser:
     take, clear, next, prev, cue-next, cue-prev, item/<n> (takes item n), cue/<n>,
-    field/<name>?value=... (a field of the design on air, e.g. a score), playlist/<n>."""
+    field/<name>?value=... (a field of the design on air, e.g. a score), playlist/<n>,
+    timer/start, timer/stop, timer/toggle, timer/reset (?secs=300 sets a new countdown length)."""
     L = live()
     n = int(arg) if arg and arg.isdigit() else None
     if action == "take":
@@ -327,6 +350,9 @@ def trigger(action, arg=None):
         err = L.by_number(n, take=False)
     elif action == "field" and arg:
         err = L.set_field(arg, request.values.get("value", ""))
+    elif action == "timer" and arg in ("start", "stop", "toggle", "reset"):
+        secs = request.values.get("secs")
+        err = L.timer(arg, None, float(secs) if secs not in (None, "") else None)
     elif action == "playlist" and n:
         pls = L.state()["playlists"]
         err = "" if 1 <= n <= len(pls) else f"no playlist {n}"

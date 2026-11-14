@@ -487,6 +487,13 @@ TEMPLATES = {
         _tx("Subtitle", 160, 560, 1600, 100, "Subtitle text", "subtitle", size=56, bold=False, color="#d6dae0",
             align="center"),
     ]),
+    "countdown": ("Countdown timer", [
+        _L("rect", "Box", 1500, 60, 360, 150, fill="#101317", radius=14, opacity=90),
+        _L("rect", "Accent", 1500, 60, 360, 8, fill=ORANGE),
+        _tx("Label", 1520, 76, 320, 40, "STARTS IN", "label", size=28, color="#c9ccd1", align="center"),
+        _tx("Clock", 1520, 112, 320, 90, "05:00", "", size=80, align="center",
+            timer={"mode": "down", "secs": 300, "format": "mm:ss"}),
+    ]),
     "blank": ("Blank", []),
 }
 

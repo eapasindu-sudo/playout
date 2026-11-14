@@ -116,6 +116,10 @@
       <button onclick="act('clear')">CLEAR<small>Esc</small></button>
       <button onclick="act('next')" title="Take the next one (PgDn)">NEXT &#9654;<small>PgDn</small></button>
     </div>
+    <div class="ctl" id="liveClock" style="display:none;align-items:center;gap:8px">
+      <span class="hint">ON AIR CLOCK</span><span id="lclk" style="font:700 22px/1 Consolas, monospace;color:var(--red)"></span>
+      <button id="lclkGo" onclick="timer(S.live,'toggle')"></button><button onclick="timer(S.live,'reset')">&#8634; Reset</button>
+    </div>
     <div class="fields" id="fields"></div>
   </div>
   <div class="rightp">
@@ -133,6 +137,11 @@
         <select id="fsScreen"><option value="-1">Last screen</option><option value="0">Screen 1</option><option value="1">Screen 2</option><option value="2">Screen 3</option></select>
         <button onclick="fullscreen()">Full screen</button><button class="sm" onclick="pywebview.api.close_outputs()">Close</button>
       </div>
+    </div>
+    <div class="sect">ATEM</div>
+    <div class="box">
+      <div class="r"><label title="Composer's full-screen / SDI output goes into the ATEM as a downstream key's fill and key"><input type="checkbox" id="atOn" onchange="atem({on:this.checked})"> Take / Clear puts the ATEM key on / off</label></div>
+      <div class="r"><select id="atKey" onchange="atem({key:+this.value})"><option value="0">DSK 1</option><option value="1">DSK 2</option></select><span class="hint" id="atMsg"></span></div>
     </div>
     <div class="sect">OBS / vMix Browser Source</div>
     <div class="box">
@@ -152,7 +161,9 @@
       <b>PgUp / PgDn</b><span>Take the one before / after</span>
       <b>F1 - F12</b><span>Take item 1 - 12</span>
       <b>Ctrl+1 - 9</b><span>Show playlist 1 - 9</span>
+      <b>T</b><span>Start / stop the clock on air</span>
     </div></div>
+    <div style="margin-top:auto;padding:12px;text-align:center;font-size:10px;letter-spacing:.25em;color:var(--dim)">POWERED BY <b style="color:var(--orange)">ENDORA</b></div>
   </div>
 </div>
 
@@ -185,7 +196,7 @@ const thumb = (it, w) => `/api/live/preview/${it.id}.png?w=${w}&r=${it.rev || 0}
 
 async function load() {
   const prev = S;
-  S = await fetch('/api/live/state').then(r => r.json());
+  S = await fetch('/api/live/state').then(r => r.json()); S.got = Date.now() / 1000;
   if (!prev && S.recovered) say('Composer was closed while on air: that item is on Preview, ready to take again.');
   render();
 }
@@ -214,6 +225,7 @@ function render() {
   if ($('pvImg').dataset.src !== src) { $('pvImg').dataset.src = src; if (src) $('pvImg').src = src; else $('pvImg').removeAttribute('src'); }
   $('pvImg').style.display = src ? '' : 'none';
   fieldsPanel(cued || live);
+  $('atOn').checked = !!S.atem.on; $('atKey').value = S.atem.key || 0; $('atMsg').textContent = S.atem.on ? (S.atem.msg || 'through the ATEM Switcher app') : '';
   $('pOn').checked = S.playout.on; $('pInfo').textContent = S.playout.on ? S.playout.msg : '';
   if (document.activeElement !== $('trDur')) { $('trType').value = S.trans.type || ''; $('trDur').value = S.trans.dur ?? 0.5; }
   $('trDur').disabled = ['', 'cut'].includes($('trType').value);
@@ -224,22 +236,63 @@ function render() {
   const hosts = ['127.0.0.1', ...(S.ips || [])], base = h => `http://${h}:${S.port}`;
   $('ovUrl').innerHTML = hosts.map(h => esc(base(h) + '/overlay')).join('<br>');
   const lan = base((S.ips || [])[0] || '127.0.0.1');
-  $('trig').innerHTML = ['take', 'clear', 'next', 'prev', 'cue-next', 'item/1', 'field/score1?value=2']
+  $('trig').innerHTML = ['take', 'clear', 'next', 'prev', 'cue-next', 'item/1', 'field/score1?value=2', 'timer/toggle', 'timer/reset?secs=300']
     .map(t => `<div class="url" onclick="copy(this)">${esc(lan + '/trigger/' + t)}</div>`).join('');
   $('fsRow').style.display = window.pywebview ? '' : 'none';
 }
 
+const timersOf = it => ((it.design || {}).layers || []).filter(L => L.type === 'text' && L.timer);
+function elapsed(it) { const t = it.timer || {}; let e = +t.elapsed || 0; if (t.running) e += S.now - (+t.t0 || S.now) + (Date.now() / 1000 - S.got); return Math.max(0, e); }
+function clockText(v, fmt) {
+  v = v > 0 ? Math.ceil(v - 1e-3) : 0; const h = Math.floor(v / 3600), m = Math.floor(v / 60) % 60, x = v % 60, p = n => String(n).padStart(2, '0');
+  return fmt === 'hh:mm:ss' || h ? `${p(h)}:${p(m)}:${p(x)}` : fmt === 'ss' ? String(v) : `${p(Math.floor(v / 60))}:${p(x)}`;
+}
+function clockNow(it) { const T = timersOf(it)[0]; if (!T) return ''; const e = elapsed(it), tm = T.timer;
+  return clockText(tm.mode === 'up' ? e : Math.max(0, (+tm.secs || 0) - e), tm.format || 'mm:ss'); }
+setInterval(() => {
+  if (!S) return;
+  const el = $('clk'), it = el && find(el.dataset.id); if (it) el.textContent = clockNow(it);
+  const lv = S.live && find(S.live), has = lv && timersOf(lv).length;
+  $('liveClock').style.display = has ? '' : 'none';
+  if (has) { $('lclk').textContent = clockNow(lv); $('lclkGo').innerHTML = lv.timer?.running ? '&#10074;&#10074; Stop' : '&#9654; Start'; $('lclkGo').className = lv.timer?.running ? '' : 'green'; }
+}, 200);
+
 function fieldsPanel(it) {
   const box = $('fields');
-  const fs = it ? fieldsOf(it) : [];
-  const key = it ? it.id + ':' + fs.map(f => f[0]).join(',') : '';
-  if (box.dataset.key === key && box.contains(document.activeElement)) return;   // the operator is typing
+  const fs = it ? fieldsOf(it) : [], tms = it ? timersOf(it) : [];
+  const key = it ? JSON.stringify([it.id, fs.map(f => f[0]), it.timer?.running, tms.map(L => L.timer.secs), it.data, S.data_errors?.[it.id], it.id === S.live]) : '';
+  if (box.dataset.key === key || (box.dataset.key?.startsWith('["' + (it && it.id)) && box.contains(document.activeElement))) return;   // the operator is typing
   box.dataset.key = key;
-  if (!it || !fs.length) { box.innerHTML = `<span class="hint">${it ? 'This design has no fields.' : 'Click an item to cue it: its fields (names, scores) show here.'}</span>`; return; }
-  const onAir = it.id === S.live;
-  box.innerHTML = `<b style="width:100%;font-size:12px">${esc(it.name || 'Design')} ${onAir ? '<span style="color:var(--red)">ON AIR</span>' : ''}</b>` +
-    fs.map(([f, label, def]) => `<label>${esc(label)}<input data-f="${esc(f)}" value="${esc((it.fields || {})[f] ?? def)}" onkeydown="if(event.key==='Enter'){event.preventDefault();saveFields('${it.id}')}"></label>`).join('') +
-    `<button class="${onAir ? 'red' : 'blue'}" onclick="saveFields('${it.id}')">${onAir ? 'Update on air' : 'Save'}</button><span class="hint">Enter saves</span>`;
+  if (!it || (!fs.length && !tms.length)) { box.innerHTML = `<span class="hint">${it ? 'This design has no fields.' : 'Click an item to cue it: its fields (names, scores) show here.'}</span>`; return; }
+  const onAir = it.id === S.live, d = it.data || {};
+  let h = `<b style="width:100%;font-size:12px">${esc(it.name || 'Design')} ${onAir ? '<span style="color:var(--red)">ON AIR</span>' : ''}</b>`;
+  if (tms.length) {
+    const T = tms[0].timer, run = it.timer?.running;
+    h += `<div style="width:100%;display:flex;gap:8px;align-items:center">
+      <span id="clk" data-id="${it.id}" style="font:700 26px/1 Consolas, monospace;min-width:110px">${esc(clockNow(it))}</span>
+      <button class="${run ? '' : 'green'}" onclick="timer('${it.id}','toggle')">${run ? '&#10074;&#10074; Stop' : '&#9654; Start'}</button>
+      <button onclick="timer('${it.id}','reset')">&#8634; Reset</button>
+      ${T.mode !== 'up' ? `<span class="hint">length</span><input id="tLen" type="number" min="0" style="width:70px" value="${Math.round(+T.secs || 0)}" onkeydown="if(event.key==='Enter')timer('${it.id}','reset',+this.value)"><span class="hint">s (Enter sets and resets)</span>` : ''}</div>`;
+  }
+  if (fs.length) {
+    h += fs.map(([f, label, def]) => `<label>${esc(label)}<input data-f="${esc(f)}" value="${esc((it.fields || {})[f] ?? def)}" onkeydown="if(event.key==='Enter'){event.preventDefault();saveFields('${it.id}')}"></label>`).join('') +
+      `<button class="${onAir ? 'red' : 'blue'}" onclick="saveFields('${it.id}')">${onAir ? 'Update on air' : 'Save'}</button><span class="hint">Enter saves</span>
+      <details style="width:100%" ${d.url ? 'open' : ''}><summary class="hint" style="cursor:pointer">Live data link (scores from a JSON address)</summary>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:6px">
+          <label style="flex:1;min-width:260px">JSON address<input id="dUrl" style="width:100%" placeholder="http://.../score.json" value="${esc(d.url || '')}"></label>
+          <label>Every (s)<input id="dEvery" type="number" min="1" style="width:60px" value="${d.every || 5}"></label>
+          ${fs.map(([f, label]) => `<label>${esc(label)} &larr;<input data-p="${esc(f)}" style="width:150px" placeholder="e.g. home.score" value="${esc((d.map || {})[f] || '')}"></label>`).join('')}
+          <button onclick="saveData('${it.id}')">Save link</button>
+          ${S.data_errors?.[it.id] ? `<span class="err">${esc(S.data_errors[it.id])}</span>` : d.url ? '<span class="ok">Reading while on air or cued</span>' : ''}
+        </div></details>`;
+  }
+  box.innerHTML = h;
+}
+async function timer(id, op, secs) { try { await post('/api/live/timer', {id, op, secs}); } catch (e) { say(e.message, true); } load(); }
+async function saveData(id) {
+  const map = {}; $('fields').querySelectorAll('input[data-p]').forEach(i => map[i.dataset.p] = i.value);
+  try { await post('/api/live/data', {id, data:{url:$('dUrl').value, every:+$('dEvery').value, map}}); say('Data link saved'); } catch (e) { say(e.message, true); }
+  document.activeElement.blur(); load();
 }
 
 async function saveFields(id) {
@@ -258,6 +311,7 @@ async function plOp(op, pid, name, order) { await post('/api/live/playlist', {op
 function plRename() { const n = prompt('Playlist name', pl().name); if (n) plOp('rename', null, n); }
 function plDelete() { if (S.playlists.length < 2) return say('The last playlist stays.', true); if (confirm(`Delete "${pl().name}" and its items?`)) plOp('delete'); }
 async function itemOp(op, id) { if (op === 'delete' && !confirm('Remove this item from the playlist?')) return; try { await post('/api/live/item', {op, id}); } catch (e) { say(e.message, true); } load(); }
+async function atem(b) { await post('/api/live/atem', b); load(); }
 async function trans() { await post('/api/live/transition', {type:$('trType').value, dur:+$('trDur').value}); load(); }
 async function outputs(b) { S = await post('/api/live/outputs', b).catch(e => (say(e.message, true), S)); load(); }
 function editDesign(id) { const it = find(id); if (!it) return;
@@ -319,6 +373,7 @@ addEventListener('keydown', e => {
   else if (k === 'PageDown') act('next');
   else if (k === 'PageUp') act('prev');
   else if (/^F([1-9]|1[0-2])$/.test(k)) { const it = pl().items[+k.slice(1) - 1]; if (it) take(it.id); }
+  else if (k === 't' || k === 'T') timer(S.live || S.cued, 'toggle')
   else if (e.ctrlKey && /^[1-9]$/.test(k)) { const p = S.playlists[+k - 1]; if (p) plOp('select', p.id); }
   else return;
   e.preventDefault();

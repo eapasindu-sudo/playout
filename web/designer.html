@@ -241,6 +241,14 @@ function setProp(k, v, live) {
   if (k === 'field' && v) { D.fields[v] ??= L.text || ''; }
   changed();
 }
+function setTimer(mode) {
+  const L = cur(); if (!L) return;
+  push();
+  if (!mode) delete L.timer;
+  else { L.timer = {secs:300, format:'mm:ss', ...(L.timer || {}), mode}; L.field = ''; L.text = mode === 'down' ? '05:00' : '00:00'; }
+  changed(); props();
+}
+function setTimerProp(k, v) { const L = cur(); if (!L || !L.timer) return; liveProp('timer', {...L.timer, [k]: v}); }
 function setAnim(ph, k, v) {
   const L = cur(); if (!L) return;
   const a = {...(L['anim_' + ph] || {})};
@@ -278,7 +286,14 @@ function props() {
       <span class="l">Size</span><span class="row">${n('size', {min:6, max:600})} ${cb('bold', 'Bold')} ${cb('upper', 'CAPS')}</span>
       <span class="l">Colour</span><span class="row">${c('color')} ${opt('align', [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']])}</span>
       <span class="l">Outline</span><span class="row">${c('stroke')} ${n('stroke_w', {min:0, max:40})} px ${cb('shadow', 'Shadow')}</span>
-      <span class="l"></span>${cb('fit', 'Shrink to fit the box')}`;
+      <span class="l"></span>${cb('fit', 'Shrink to fit the box')}
+      <span class="l">Clock</span><span class="row"><select onchange="setTimer(this.value)">
+        <option value="" ${!L.timer ? 'selected' : ''}>Off (text)</option>
+        <option value="down" ${L.timer?.mode === 'down' ? 'selected' : ''}>Countdown</option>
+        <option value="up" ${L.timer?.mode === 'up' ? 'selected' : ''}>Count up</option></select>
+        ${L.timer ? `<input type="number" min="0" step="1" style="width:64px" value="${Math.round(L.timer.secs ?? 300)}" title="Length in seconds (countdown)" oninput="setTimerProp('secs', Math.max(0, +this.value || 0))"><span class="hint">s</span>
+        <select onchange="setTimerProp('format', this.value)">${['mm:ss', 'hh:mm:ss', 'ss'].map(f => `<option ${L.timer.format === f ? 'selected' : ''}>${f}</option>`).join('')}</select>` : ''}</span>
+      ${L.timer ? '<span class="l"></span><span class="hint">Start / stop / reset it in Live (or /trigger/timer/start)</span>' : ''}`;
   } else if (L.type === 'rect' || L.type === 'ellipse') {
     h += `<span class="l">Fill</span><span class="row">${L.fill ? c('fill') : ''}<label><input type="checkbox" ${L.fill ? '' : 'checked'} onchange="setProp('fill', this.checked ? '' : '#0b1a3a'); props()"> None</label></span>
       <span class="l">Gradient</span><span class="row">${opt('grad', [['', 'Off'], ['v', 'Top to bottom'], ['h', 'Left to right']])} ${L.grad ? c('fill2') : ''}</span>
