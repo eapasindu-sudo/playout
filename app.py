@@ -46,6 +46,10 @@ from loudness import Loudness
 from updater import Updater
 from version import VERSION
 from alerts import Alerts, Watcher
+from onair import OffAirGuard
+from adproof import AdProof
+import automation
+import feeds
 from atem_link import AtemLink
 from vmix_link import VmixLink
 from backup import Backup
@@ -167,6 +171,15 @@ comments = Comments(cgm, lambda: store.data.get("comments") or {}, lambda c: sto
 health = Health(engine, streamer, recorder, sysmon, alerts, lambda: comments.viewers)
 health.atem = atem
 planner.active = lambda: backup.role != "backup"     # a backup PC takes its playlist from the main PC
+offair_guard = OffAirGuard(engine, alerts)                  # black / frozen / silent program alarm
+health.guard = offair_guard
+offair_guard.active = lambda: backup.role != "backup"
+inserts = automation.DailyInserts(engine, store)     # clips put into the playlist at the same time each day
+inserts.active = planner.active
+proof = AdProof(engine, os.path.join(cfg["log_dir"], "proof"), streamer.ffmpeg)   # ad proof clips
+engine.proof = proof
+_UPNEXT = {}
+textcg.FIELDS = lambda: _UPNEXT                     # {now} / {next} in text CGs ("Coming up next")
 THUMBS = os.path.join(cfg["data_dir"], "thumbs")
 RUN_FLAG = os.path.join(cfg["data_dir"], "running.flag")   # left behind = last run did not close normally
 app = Flask(__name__, static_folder=None)
@@ -283,7 +296,7 @@ OPEN_PATHS = ("/login", "/api/login", "/api/login_info", "/img/logo-playout.png"
 LOCAL_OPEN = ("/output", "/api/output.mjpg", "/api/native_output", "/api/screens", "/api/fullscreen", "/api/preview.jpg",
               "/atem", "/api/atem", "/api/atem/open")   # + the ATEM & Cameras window   # + CG Composer   # full screen output window
 ADMIN_ONLY = ("/api/vmix/settings", "/api/restart", "/api/settings", "/api/users", "/api/bookings", "/api/schedule", "/api/update", "/api/watch",
-              "/api/sdi", "/api/alerts", "/api/backup", "/api/ndi/output", "/api/atem/settings")
+              "/api/sdi", "/api/alerts", "/api/backup", "/api/ndi/output", "/api/atem/settings", "/api/automation")
 
 
 def users():
@@ -575,7 +588,7 @@ def settings_api():
             k = b["backup"] or {}
             store.set(backup=backup.configure(k.get("role"), k.get("main_url"), k.get("key"),
                                               k.get("takeover_after"), k.get("take_streams"), k.get("mirror")))
-        alerts.station = store.data.get("station_name", "")
+        alerts.station = proof.station = store.data.get("station_name", "")
     s = sec()
     return jsonify(
         failover=engine.failover, audio=loudness.settings(), station_name=store.data.get("station_name", ""),
@@ -708,6 +721,7 @@ def output_page():
 def state():
     snap = engine.snapshot()
     snap["locked"] = bool(store.data.get("locked"))
+    snap["offair"] = offair_guard.status()
     return jsonify(snap)
 
 
@@ -1656,6 +1670,180 @@ def trigger_item(name):
     return f"No playlist item called {name}", 404
 
 
+# ---- on-air safety, automation, breaking news, ad rules --------------------------------
+def _automation_info():
+    return {"offair": dict(offair_guard.settings, status=offair_guard.status()), "filler": engine.filler,
+            "inserts": store.data.get("daily_inserts") or [], "slate": dict(engine.slate, on=engine.slate_on),
+            "breaking": dict(_breaking_cfg(), on=bool(engine.breaking)), "ad_proof": proof.info(),
+            "ad_rules": {"separate": bool((store.data.get("ad_rules") or {}).get("separate", True))}}
+
+
+def _breaking_cfg():
+    b = store.data.get("breaking") or {}
+    return {"source": b.get("source", ""), "name": b.get("name") or "BREAKING NEWS", "cgs": b.get("cgs") or [],
+            "stinger": bool(b.get("stinger", True)), "resume": bool(b.get("resume", True))}
+
+
+@app.route("/api/automation", methods=["GET", "POST"])
+def automation_api():
+    """Off-air alarm, gap filler, daily inserts, emergency slate, breaking news, ad proof, ad rules."""
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        if "offair" in b:
+            store.set(offair=offair_guard.configure(b["offair"]))
+        if "filler" in b:
+            engine.filler = automation.clean_filler(b["filler"])
+            store.set(filler=engine.filler)
+        if "inserts" in b:
+            store.set(daily_inserts=automation.clean_inserts(b["inserts"]))
+        if "slate" in b:
+            sl = b["slate"] or {}
+            store.set(slate=engine.set_slate(sl.get("file"), sl.get("text"), sl.get("sub")))
+        if "breaking" in b:
+            k = b["breaking"] or {}
+            store.set(breaking={"source": str(k.get("source") or ""), "name": str(k.get("name") or "BREAKING NEWS")[:60],
+                                "cgs": [str(x) for x in (k.get("cgs") or [])][:10],
+                                "stinger": bool(k.get("stinger", True)), "resume": bool(k.get("resume", True))})
+        if "ad_proof" in b:
+            store.set(ad_proof=proof.configure(b["ad_proof"]))
+        if "ad_rules" in b:
+            store.set(ad_rules={"separate": bool((b["ad_rules"] or {}).get("separate", True))})
+    return jsonify(_automation_info())
+
+
+@app.post("/api/automation/insert_now")
+def insert_now():
+    """Daily insert: put it into the playlist now (Test button)."""
+    b = request.get_json(silent=True) or {}
+    e = next((x for x in store.data.get("daily_inserts") or [] if x["id"] == b.get("id")), None)
+    if e is None:
+        return jsonify(ok=False, error="Save the insert first"), 404
+    return jsonify(ok=inserts.insert(dict(e, exact=False)))
+
+
+def breaking(on):
+    c = _breaking_cfg()
+    if on:
+        engine.breaking_on(c["source"], c["name"], c["stinger"])
+        for cid in c["cgs"]:
+            cgm.take_in(cid)
+    else:
+        for cid in c["cgs"]:
+            cgm.take_out(cid)
+        engine.breaking_off(c["resume"])
+    return bool(engine.breaking)
+
+
+@app.post("/api/breaking/<any('on', 'off'):state>")
+def breaking_api(state):
+    return jsonify(on=breaking(state == "on"))
+
+
+@app.post("/api/slate/<any('on', 'off'):state>")
+def slate_api(state):
+    engine.slate_take(state == "on")
+    return jsonify(on=engine.slate_on)
+
+
+@app.get("/trigger/breaking/<any('on', 'off', 'toggle'):state>")
+def trigger_breaking(state):
+    """Stream Deck / Companion: /trigger/breaking/on, /off, /toggle"""
+    breaking(not engine.breaking if state == "toggle" else state == "on")
+    return "OK"
+
+
+@app.get("/trigger/slate/<any('on', 'off', 'toggle'):state>")
+def trigger_slate(state):
+    engine.slate_take(not engine.slate_on if state == "toggle" else state == "on")
+    return "OK"
+
+
+@app.get("/api/schedule/check")
+def schedule_check():
+    """The day's playlist (Day Schedule): clips missing from the media folder or past their end date."""
+    try:
+        day = dt.date.fromisoformat(request.args.get("day") or "")
+    except ValueError:
+        day = dt.date.today() + dt.timedelta(days=1)
+    name, res = playlist_check(day)
+    return jsonify(day=day.isoformat(), name=name, **res)
+
+
+@app.route("/api/clip_expiry", methods=["GET", "POST"])
+def clip_expiry():
+    """End date per clip file: after that day a commercial is not played any more (campaign over)."""
+    if request.method == "POST":
+        b = request.get_json(silent=True) or {}
+        f = os.path.basename(str(b.get("file") or ""))
+        if f:
+            m = dict(engine.expiry)
+            if automation.parse_day(b.get("date")):
+                m[f] = automation.parse_day(b["date"]).isoformat()
+            else:
+                m.pop(f, None)
+            engine.expiry = automation.clean_expiry(m)
+            store.set(clip_expiry=engine.expiry)
+    return jsonify(engine.expiry)
+
+
+@app.get("/api/playlist/ad_check")
+def ad_check():
+    with engine._lock:
+        items = [dict(x) for x in engine.playlist]
+    return jsonify(conflicts=automation.ad_conflicts(items),
+                   expired=automation.check_items(items, cfg["media_dir"], engine.expiry)["expired"])
+
+
+@app.post("/api/playlist/ad_fix")
+def ad_fix():
+    """Move commercials of the same client apart inside each break (on-air / fixed items stay put)."""
+    with engine._lock:
+        items = [dict(x) for x in engine.playlist]
+        keep = {engine.on_air} | set(engine.played)
+        fixed, left = automation.ad_fix(items, keep)
+        if [x["id"] for x in fixed] != [x["id"] for x in items]:
+            engine.playlist = fixed
+            engine._changed()
+    return jsonify(conflicts=left)
+
+
+@app.get("/api/proof")
+def proof_list():
+    d1, d2 = _range()
+    return jsonify(clips=proof.list(d1, d2, request.args.get("client", "")), info=proof.info())
+
+
+@app.get("/api/proof.zip")
+def proof_zip():
+    d1, d2 = _range()
+    client = request.args.get("client", "")
+    rows = proof.list(d1, d2, client)
+    buf = io.BytesIO()
+    proof.zip_to(buf, rows)
+    buf.seek(0)
+    who = safe_name(client) if client else "all"
+    return send_file(buf, mimetype="application/zip", as_attachment=True,
+                     download_name=f"AdProof_{who}_{d1:%Y-%m-%d}_{d2:%Y-%m-%d}.zip")
+
+
+@app.get("/api/proof/clip/<day>/<path:clip>")
+def proof_clip(day, clip):
+    p = proof.path(day, clip)
+    if not p:
+        abort(404)
+    return send_file(p, mimetype="video/mp4", conditional=True)
+
+
+@app.post("/api/feed/test")
+def feed_test():
+    """Ticker link (RSS / Google Sheet / text page): read it now and show what the ticker will say."""
+    url = ((request.get_json(silent=True) or {}).get("url") or "").strip()
+    if not feeds.is_url(url):
+        return jsonify(ok=False, error="Paste a link that starts with http:// or https://"), 400
+    items, err = feeds.read_now(url)
+    return jsonify(ok=not err, items=items[:15], count=len(items), error=err)
+
+
 # ---- system load -------------------------------------------------------
 @app.route("/api/audio_out", methods=["GET", "POST"])
 def audio_out_api():
@@ -2105,9 +2293,19 @@ def start_backend():
     sysmon.start()
     ao = store.data.get("audio_out") or {}
     audio_out.configure(ao.get("enabled", True), ao.get("device", ""), ao.get("volume", 1.0))
+    offair_guard.configure(store.data.get("offair"))
+    engine.filler = automation.clean_filler(store.data.get("filler"))
+    engine.expiry = automation.clean_expiry(store.data.get("clip_expiry"))
+    sl = store.data.get("slate") or {}
+    engine.set_slate(sl.get("file"), sl.get("text"), sl.get("sub"))
+    proof.configure(store.data.get("ad_proof"))
+    proof.station = store.data.get("station_name", "")
     engine.start()
     scheduler.start()
     planner.start()
+    offair_guard.start()
+    inserts.start()
+    threading.Thread(target=_list_check, daemon=True, name="playlist check").start()
     updater.start_auto()
     watcher.start()
     health.start()
@@ -2162,6 +2360,11 @@ def _air_saver():
             if out != lastout or ((out["streams"] or out["rec"]) and now - stamp > 30):
                 store.set(live_out=dict(out, at=now))      # "at": when it was last seen live
                 lastout, stamp = out, now
+        except Exception:
+            pass
+        try:
+            _UPNEXT.clear()
+            _UPNEXT.update(engine.up_next())       # for "Coming up next" text CGs
         except Exception:
             pass
         try:
@@ -2230,6 +2433,47 @@ def _squeeze_auto():
                     outs[cid] = now + max(1.0, float(c.get("auto_secs") or 10))
         except Exception as e:
             logging.info("squeeze / CG timer: %s", e)
+
+
+def _list_check():
+    """Every 30 minutes: today's and tomorrow's playlists. Clips missing from the media folder or past their
+    end date go to Telegram (event "tomorrow"), so they are put right before they are due on air."""
+    time.sleep(60)
+    while True:
+        try:
+            if planner.active():
+                for label, day in (("Tomorrow", dt.date.today() + dt.timedelta(days=1)), ("Today", dt.date.today())):
+                    name, res = playlist_check(day)
+                    if name and (res["missing"] or res["expired"]):
+                        alerts.send("tomorrow", f"{label}'s playlist '{name}': " + _check_text(res), every=6 * 3600)
+                cur = automation.check_items(engine.playlist, cfg["media_dir"], engine.expiry)
+                if cur["expired"]:
+                    alerts.send("tomorrow", "Playlist on air: end date past, will be skipped: " +
+                                ", ".join(cur["expired"][:6]), every=6 * 3600)
+        except Exception as e:
+            logging.info("playlist check: %s", e)
+        time.sleep(1800)
+
+
+def _check_text(res):
+    parts = []
+    if res["missing"]:
+        parts.append(f"{len(res['missing'])} clip(s) MISSING: " + ", ".join(res["missing"][:6]))
+    if res["expired"]:
+        parts.append(f"{len(res['expired'])} past their end date: " + ", ".join(res["expired"][:6]))
+    return "; ".join(parts)
+
+
+def playlist_check(day):
+    """(name of the day's playlist, check result) - the playlist Day Schedule loads on that day."""
+    name = planner.list_for(day)
+    if not name:
+        return "", {"missing": [], "expired": [], "clips": 0}
+    try:
+        items = store.load_list(name)
+    except Exception as e:
+        return name, {"missing": [], "expired": [], "clips": 0, "error": str(e)}
+    return name, automation.check_items(items, cfg["media_dir"], engine.expiry, day)
 
 
 def _watchdog():

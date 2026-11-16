@@ -24,6 +24,8 @@ EVENTS = {
     "missing": "Playlist clip missing",
     "disk": "Disk almost full",
     "backup": "Backup PC took over / main is back",
+    "offair": "Black screen / frozen picture / no sound on air",
+    "tomorrow": "Today's / tomorrow's playlist: clips missing or past their end date",
 }
 
 

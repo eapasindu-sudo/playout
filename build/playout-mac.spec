@@ -19,7 +19,7 @@ hidden += ["app", "cglive", "hwprofile", "design", "engine", "streamer", "schedu
            "loudness", "gpu", "textlooks", "audiofx", "framequeue", "report", "importer", "updater", "version",
            "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon", "certs",
            "ndi_extra", "atem_link", "atemwin", "webcg", "gpucg", "gpudriver", "diag", "moderngl", "glcontext",
-           "vmix_link"]
+           "vmix_link", "onair", "automation", "adproof", "feeds"]
 datas += [(os.path.join(SPECPATH, n), ".") for n in ("endora-cgcomposer.ico", "endora-playout.ico")]
 binaries += [(f, ".") for f in glob.glob(os.path.join(SPECPATH, "dylibs", "*.dylib"))]   # libfribidi (CI)
 

@@ -518,6 +518,42 @@ PC does not have it. Running from source: put `ATEM-Switcher.exe` (and its `sony
 or start ATEM Switcher yourself: Playout uses any ATEM Switcher answering on port 3000 (`atem_switcher` in
 `config.json` points at another copy).
 
+## Auto & Safety (off-air alarm, gap filler, daily inserts, breaking news, slate, ad proof)
+
+**Functions > Auto & Safety** (admin):
+
+- **Off-air alarm**: Playout watches the program it sends. A **black screen** (10 s), **frozen picture** (15 s) or
+  **no sound** (20 s, below -50 dB) shows a red banner, a bad line on Health, a line in the air log and a Telegram
+  alert ("Black screen / frozen picture / no sound on air"). Set to **skip** and a clip that goes black / freezes /
+  is silent is taken off and the next item plays. Colour bars, a paused clip, the failover filler and the slate
+  never raise it.
+- **Gap filler**: tick filler clips (promos, station IDs). When the playlist runs out before a **fixed-start** item, a
+  filler that fits the time left plays (the fixed item still cuts in at its second); optionally also after the
+  last item of the playlist. Filler clips that played are taken out of the playlist again.
+- **Daily inserts**: the same clip at the same time every day (or on ticked weekdays), e.g. the 7.00 news intro.
+  Two minutes before, it goes into the playlist after the on-air item. **Exact** = it cuts in at that second.
+- **Breaking news**: the **BREAKING** button (next to the stinger) puts a live card on air now, through the
+  stinger, with the CGs ticked here (make a red ticker / label in Manual CG first). Press it again to end it: the
+  clip that was on air carries on where it stopped.
+- **Emergency slate**: the **SLATE** button puts "We'll be right back" (your text, or a picture / clip from the
+  media folder) on air over everything, at once. The clip on air is paused under it and carries on after.
+- **Ad proof clips**: the first seconds of every commercial as it aired, as a small MP4 with the date, time and
+  client on it (`logs\proof\<date>`). **Ad Report > Proof clips** downloads them for a client and dates as a zip.
+
+Also new:
+
+- **End date** on a commercial (Edit): after that day the clip is not played any more, in any playlist (skipped,
+  air log "expired - not played", ENDED badge in the playlist).
+- **Check ads** (playlist header): commercials of the same client back to back, and the button moves them apart
+  inside the break (on-air, played and fixed items stay where they are).
+- **Day Schedule > Check tomorrow**: are all the clips of tomorrow's playlist in the media folder and not past their
+  end date. Playout also checks today's and tomorrow's playlists every 30 minutes and sends a Telegram alert.
+- **Text CG ticker from a link**: in Text file / link paste a news **RSS** feed, a **Google Sheet** link (shared as
+  "anyone with the link", each row one item: Gold 22K | Rs. 185,000) or a text page; it is read every minute.
+- **Coming up next**: write `{next}` (next programme, commercials skipped), `{next_time}` (20:30), `{next_in}`
+  (5 min) or `{now}` in any Text CG, e.g. "Next: {next} at {next_time}". It follows the playlist by itself.
+- Stream Deck / Companion: `/trigger/breaking/on|off|toggle`, `/trigger/slate/on|off|toggle`.
+
 ## Control from vMix scripts / Stream Deck / Companion
 
 Plain GET URLs:

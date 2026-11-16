@@ -16,7 +16,8 @@ hidden += ["app", "cglive", "hwprofile", "design", "engine", "streamer", "schedu
            "capture", "cg", "system", "audio_out", "psutil", "cgfx", "cgedit", "composer", "recorder",
            "loudness", "gpu", "textlooks", "audiofx", "framequeue", "report", "importer", "updater", "version",
            "textcg", "alerts", "booking", "sdi", "watchfolder", "backup", "splash", "winicon", "certs",
-           "ndi_extra", "atem_link", "atemwin", "webcg", "gpucg", "gpudriver", "diag", "moderngl", "glcontext", "vmix_link"]
+           "ndi_extra", "atem_link", "atemwin", "webcg", "gpucg", "gpudriver", "diag", "moderngl", "glcontext", "vmix_link",
+           "onair", "automation", "adproof", "feeds"]
 
 import glob, os
 datas += [(os.path.join(SPECPATH, n), ".") for n in ("endora-cgcomposer.ico", "endora-playout.ico")]   # window icons
