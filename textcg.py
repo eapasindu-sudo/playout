@@ -6,7 +6,10 @@ A text CG is a manual CG config with "kind": "text":
     style        "lower3" | "ticker" | "clock" | "countdown" | "text" | "comment"
     line1, line2 lower third: name and title.  text: the text (new lines allowed)
     text         ticker: the news items, one per line (shown with a separator between)
-    text_file    ticker: read the items from this .txt file instead (re-read every 10 s)
+    text_file    ticker: read the items from this .txt file instead (re-read every 10 s), or from a link:
+                 an RSS / Atom news feed, a Google Sheet (CSV) or a text page (feeds.py, read every minute)
+    {now} {next} {next_time} {next_in}   in any text: what is on air, the next programme (not a commercial),
+                 its start time (HH:MM) and how long until it starts ("5 min"): "Coming up next" CGs
     label        ticker: box at the left ("NEWS", "BREAKING")
     fmt          clock: "%H:%M:%S", "%I:%M %p", "%d %B %Y", ... (Python strftime)
     font, size, bold
@@ -34,7 +37,36 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, features
 
+import feeds
 import textlooks
+
+# fn() -> {"now", "next", "next_time", "next_in"}: set by app.py from the playlist ("Coming up next")
+FIELDS = None
+FIELD_KEYS = ("line1", "line2", "text", "label", "end_text")
+_FIELD_RE = re.compile(r"\{(now|next|next_time|next_in)\}")
+
+
+def has_fields(cfg):
+    return any(_FIELD_RE.search(str(cfg.get(k) or "")) for k in FIELD_KEYS)
+
+
+def field_values():
+    try:
+        return dict(FIELDS()) if FIELDS else {}
+    except Exception:
+        return {}
+
+
+def fill_fields(cfg, values=None):
+    """cfg with {now} / {next} / {next_time} / {next_in} replaced by the playlist's names."""
+    if not has_fields(cfg):
+        return cfg
+    v = field_values() if values is None else values
+    out = dict(cfg)
+    for k in FIELD_KEYS:
+        if out.get(k):
+            out[k] = _FIELD_RE.sub(lambda m: str(v.get(m.group(1), "")), str(out[k]))
+    return out
 
 RAQM = features.check("raqm")      # proper Sinhala / Tamil shaping
 TEXT_KEYS = ("style", "line1", "line2", "text", "text_file", "label", "fmt", "font", "size", "bold", "color",
@@ -251,6 +283,7 @@ def render_static(cfg, out_w, out_h, now=None, left=None):
     style = cfg.get("style") or "text"
     if style == "comment":
         return render_comment(cfg, out_w)
+    cfg = fill_fields(cfg)
     if style == "design":                   # a layered design from CG Composer: placed where it was drawn
         import design
         img, cfg["x"], cfg["y"] = design.render(cfg, out_w, out_h)
@@ -352,6 +385,7 @@ class TextLayer:
         self._x = 0
         self._file_check = 0.0
         self._file_text = None
+        self._fields = None            # {now} / {next}... values the picture was made with
         self._deadline = None          # countdown: when it reaches zero (set as it goes IN)
         self._pt = 0                   # design: frames since it started coming in / going out
         self._anim = None
@@ -369,6 +403,9 @@ class TextLayer:
 
     def _ticker_text(self):
         f = self.cfg.get("text_file")
+        if feeds.is_url(f):
+            self._file_text = feeds.get_text(f.strip())
+            return self._file_text or self.cfg.get("text") or ""
         if f and os.path.isfile(f):
             try:
                 with open(f, encoding="utf-8-sig") as fh:
@@ -395,10 +432,11 @@ class TextLayer:
 
     def _build_ticker(self):
         size = int(_num(self.cfg.get("size"), 40))
-        cfg = {**self.cfg, "_file_text": self._ticker_text()}      # Sinhala in the ticker file picks a Sinhala font too
+        cfg = fill_fields({**self.cfg, "_file_text": self._ticker_text()})      # Sinhala in the ticker file picks a Sinhala font too
         font = get_font(_fontname(cfg), size, cfg.get("bold", True))
         sep = cfg.get("separator") or "   \u25cf   "
-        items = [s.strip() for s in self._ticker_text().splitlines() if s.strip()]
+        raw = fill_fields({"text": self._ticker_text()}).get("text") or ""
+        items = [s.strip() for s in raw.splitlines() if s.strip()]
         text = sep.join(items) + sep if items else " "
         h = int(size * 1.6)
         tw = max(1, _text_w(font, text))
@@ -433,11 +471,12 @@ class TextLayer:
             self._pos = float(self._box_w - self._label_w)   # start off the right edge
 
     def _ticker_frame(self, gpu=False):
-        if time.time() - self._file_check > 10 and self.cfg.get("text_file"):
+        if time.time() - self._file_check > 10 and (self.cfg.get("text_file") or has_fields(self.cfg)):
             self._file_check = time.time()
-            old = self._file_text
+            old, oldf = self._file_text, self._fields
             self._ticker_text()
-            if self._file_text != old:
+            self._fields = field_values() if has_fields(self.cfg) else None
+            if self._file_text != old or self._fields != oldf:
                 self._build_ticker()
         self._x = int(self._pos)
         out = self._gpu_frame() if gpu else self._compose()
@@ -513,6 +552,12 @@ class TextLayer:
             if key != self._clock_key:
                 self._clock_key = key
                 self._img = render_static(self.cfg, self.out_w, self.out_h, now)
+        elif style in ("text", "lower3") and has_fields(self.cfg) and time.time() - self._file_check > 1:
+            self._file_check = time.time()          # "Coming up next": made again when the names change
+            v = field_values()
+            if v != self._fields:
+                self._fields = v
+                self._img = render_static(self.cfg, self.out_w, self.out_h)
         return self._img
 
     # ---- on air ---------------------------------------------------------

@@ -28,6 +28,7 @@ from fractions import Fraction
 
 import numpy as np
 
+import automation
 import gpuengine
 
 from audiofx import MasterAudio
@@ -92,6 +93,35 @@ class MainInput:
         if self.dev is not None:
             self.dev.close()
         self.ndi.close()
+
+
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+
+
+def make_slate(width, height, text, sub="", image=""):
+    """The emergency slate picture (flat BGRA): an image file scaled to the screen, or the text on dark blue."""
+    from PIL import Image, ImageDraw
+    if image and os.path.isfile(image) and os.path.splitext(image)[1].lower() in IMAGE_EXT:
+        try:
+            im = Image.open(image).convert("RGBA").resize((width, height))
+            return np.asarray(im)[..., [2, 1, 0, 3]].copy().reshape(-1)
+        except Exception:
+            pass
+    im = Image.new("RGBA", (width, height), (8, 20, 48, 255))
+    d = ImageDraw.Draw(im)
+    d.rectangle([0, int(height * 0.62), width, int(height * 0.63)], fill=(224, 38, 27, 255))
+    try:
+        import textcg
+        fn = textcg._fontname({"font": "Arial", "text": f"{text} {sub}"})    # Sinhala / Tamil slate text
+        f1 = textcg.get_font(fn, max(24, height // 12), True)
+        f2 = textcg.get_font(fn, max(16, height // 28), False)
+    except Exception:
+        from PIL import ImageFont
+        f1 = f2 = ImageFont.load_default()
+    d.text((width // 2, int(height * 0.48)), text or "", font=f1, fill=(255, 255, 255, 255), anchor="mm")
+    if sub:
+        d.text((width // 2, int(height * 0.70)), sub, font=f2, fill=(200, 210, 230, 255), anchor="mm")
+    return np.asarray(im)[..., [2, 1, 0, 3]].copy().reshape(-1)
 
 
 def new_id():
@@ -222,6 +252,21 @@ class Engine:
         self._fill_audio = None
         self._fill_last = None
         self._fo_checked = False
+        # clip end dates ({file: "YYYY-MM-DD"}): a commercial past its date is skipped (automation.py)
+        self.expiry = {}
+        # gap filler: filler clips before a fixed-start item / after the playlist ends (automation.py)
+        self.filler = automation.clean_filler({})
+        self._filler_last = None
+        self._fdur = {}
+        # emergency slate: a still / clip on air over everything until it is taken off
+        self.slate = {"file": "", "text": "We'll be right back", "sub": "Technical difficulties - please stay with us"}
+        self.slate_on = False
+        self._slate_img = None
+        self._slate_player = None
+        self._slate_paused = False
+        # breaking news: what was on air before it, to carry on afterwards
+        self.breaking = None         # {"item": id, "offset": s, "card": id} while breaking news is on air
+        self.proof = None            # AdProof: records the first seconds of each commercial as aired
         self.heartbeat = time.monotonic()   # output loop alive (watchdog)
         self.loop_errors = 0
         self.late_frames = 0                # frames that took longer than one frame time to make
@@ -752,6 +797,15 @@ class Engine:
             player = self.preload[1]
             self.preload = None
         elif item["type"] == "clip":
+            if item.get("category", "Commercial") == "Commercial" and automation.is_expired(self.expiry, item.get("file")):
+                now = dt.datetime.now()
+                self.asrun.write("clip", item["name"], now, now, item.get("duration"), "expired - not played",
+                                 item.get("client", ""), item.get("file", ""), item.get("category", ""))
+                self.message = f"Not played, its end date is past: {item.get('name')}"
+                self.on_air = item_id
+                if depth < len(self.playlist):
+                    self._item_done(depth + 1)
+                return
             player = self._open(item)
             if player is None:
                 now = dt.datetime.now()
@@ -831,6 +885,11 @@ class Engine:
             return
         nxt = self._next_id()
         self._finish("played")
+        if self.auto and self.filler.get("enabled") and depth < 3:
+            fid = self._gap_filler(nxt)
+            if fid:
+                self._start(fid, depth + 1)
+                return
         if nxt and self.auto:
             self._start(nxt, depth)
         else:
@@ -838,6 +897,208 @@ class Engine:
             self.cued = nxt
             self.message = "Manual: next item cued, live on air" if nxt else "End of playlist - live on air"
             self._changed()
+
+    def _fill_duration(self, f):
+        if f not in self._fdur:
+            self._fdur[f] = probe(os.path.join(self.media_dir, f)) or 0
+            if len(self._fdur) > 500:
+                self._fdur.pop(next(iter(self._fdur)))
+        return self._fdur[f]
+
+    def _gap_filler(self, nxt):
+        """A filler clip put into the playlist before nxt (a fixed-start item that is not due yet) or at the
+        end of the playlist. -> its id, or None. Filler clips that already played are taken out again."""
+        fl = self.filler
+        files = [f for f in fl.get("files") or [] if os.path.isfile(os.path.join(self.media_dir, f))]
+        if not files:
+            return None
+        nitem = self._item(nxt)
+        gap = None
+        if nitem is not None:
+            if not (fl.get("before_fixed") and nitem.get("fixed")):
+                return None
+            try:
+                at = dt.datetime.combine(dt.date.today(), dt.time.fromisoformat(nitem["fixed"]))
+            except ValueError:
+                return None
+            gap = (at - dt.datetime.now()).total_seconds()
+            if gap < float(fl.get("min_gap") or 5):
+                return None
+        elif not fl.get("at_end"):
+            return None
+        f = automation.pick_filler(files, {x: self._fill_duration(x) for x in files}, gap, self._filler_last)
+        if not f:
+            return None
+        self._filler_last = f
+        full = self._fill_duration(f)
+        item = {"id": new_id(), "type": "clip", "file": f, "name": "FILLER: " + os.path.splitext(f)[0], "fixed": "",
+                "file_duration": full, "in": 0.0, "out": 0.0, "duration": full, "gain_db": 0.0, "client": "",
+                "category": "Filler", "squeeze": "", "squeeze_at": 0.0, "squeeze_for": 0.0, "filler": True}
+        old = [it for it in self.playlist if it.get("filler") and it["id"] in self.played and it["id"] != self.on_air]
+        for it in old:
+            self.played.discard(it["id"])
+        items = [it for it in self.playlist if it not in old]
+        pos = next((i for i, it in enumerate(items) if it["id"] == nxt), len(items))
+        items.insert(pos, item)
+        self.playlist = items
+        self._changed()
+        return item["id"]
+
+    # -- emergency slate / breaking news ---------------------------------------
+    def set_slate(self, file=None, text=None, sub=None):
+        with self._lock:
+            if file is not None:
+                self.slate["file"] = os.path.basename(str(file))
+            if text is not None:
+                self.slate["text"] = str(text)[:80]
+            if sub is not None:
+                self.slate["sub"] = str(sub)[:120]
+            self._slate_img = None
+            if self._slate_player is not None:
+                self._slate_player.close()
+                self._slate_player = None
+            return dict(self.slate)
+
+    def slate_take(self, on):
+        """Emergency slate on / off. A clip on air is paused under it and carries on when it is taken off."""
+        with self._lock:
+            on = bool(on)
+            if on == self.slate_on:
+                return
+            self.slate_on = on
+            if on:
+                self._slate_started = dt.datetime.now()
+                self._slate_paused = self.state == "PLAYING" and self.player is not None
+                if self._slate_paused:
+                    self.state = "PAUSED"
+                self.message = "EMERGENCY SLATE ON AIR"
+            else:
+                if self._slate_paused and self.state == "PAUSED":
+                    self.state = "PLAYING"
+                self._slate_paused = False
+                if self._slate_player is not None:
+                    self._slate_player.close()
+                    self._slate_player = None
+                try:
+                    self.asrun.write("slate", "Emergency slate", self._slate_started, dt.datetime.now(), None, "on air")
+                except Exception:
+                    pass
+                self.message = "Slate off - back to the program"
+
+    def _slate_frame(self, n):
+        """(picture, sound) of the slate: its clip (looped), its picture, or the text on a dark screen."""
+        silent = np.zeros((CHANNELS, n), np.float32)
+        f = self.slate.get("file")
+        path = os.path.join(self.media_dir, f) if f else ""
+        if path and os.path.isfile(path) and os.path.splitext(f)[1].lower() not in IMAGE_EXT:
+            p = self._slate_player
+            if p is None or p.finished():
+                if p is not None:
+                    p.close()
+                p = self._slate_player = ClipPlayer(path, self.width, self.height, self.fps)
+            if p.ready():
+                v, a = p.next_frame(n)
+                if v is not None:
+                    self._slate_img = v
+                    return v, a
+            return (self._slate_img if self._slate_img is not None else self.black), silent
+        if self._slate_img is None:
+            self._slate_img = make_slate(self.width, self.height, self.slate.get("text", ""), self.slate.get("sub", ""),
+                                         os.path.join(self.media_dir, f) if f else "")
+        return self._slate_img, silent
+
+    def breaking_on(self, source="", name="BREAKING NEWS", stinger=False):
+        """Breaking news: a live card goes on air now (through the stinger when asked). What was on air is
+        remembered, with how far a clip had played, so breaking_off can carry on from there."""
+        with self._lock:
+            if self.breaking is not None:
+                return self.breaking["card"]
+            was = self._item(self.on_air) if self.state in ("PLAYING", "PAUSED") else None
+            offset = 0.0
+            if was is not None and was.get("type") == "clip" and self.player is not None:
+                offset = self.item_ticks / float(self.fps)
+            card = {"id": new_id(), "type": "live", "name": name or "BREAKING NEWS", "source": source or "",
+                    "duration": None, "fixed": "", "breaking": True}
+            i = self._index(self.on_air)
+            items = list(self.playlist)
+            items.insert((i + 1) if i is not None else 0, card)
+            self.playlist = items
+            self.breaking = {"item": was["id"] if was else None, "offset": offset, "card": card["id"],
+                             "auto": self.auto, "since": dt.datetime.now()}
+            self._changed()
+        if stinger and self.stinger.get("file"):
+            self.stinger_take(card["id"])
+        else:
+            self.play(card["id"])
+        with self._lock:
+            self.message = "BREAKING NEWS on air"
+        return card["id"]
+
+    def breaking_off(self, resume=True):
+        """End breaking news: the clip that was on air carries on where it was (or the next item plays)."""
+        with self._lock:
+            b = self.breaking
+            if b is None:
+                return False
+            self.breaking = None
+            card_on = self.on_air == b["card"]
+            nxt = None
+            i = self._index(b["card"])
+            if i is not None and i + 1 < len(self.playlist):
+                nxt = self.playlist[i + 1]["id"]
+            if card_on:
+                self._finish("played")
+            self.playlist = [it for it in self.playlist if it["id"] != b["card"]]
+            self.played.discard(b["card"])
+            self._changed()
+            if not card_on:
+                return True          # the operator already moved on: leave what is on air
+            if resume and b.get("item") and self._item(b["item"]) is not None:
+                if self.resume(b["item"], b.get("offset") or 0.0, "Back after breaking news"):
+                    return True
+            if nxt and self.auto:
+                self._start(nxt)
+            else:
+                self._stop_to_live()
+                self.cued = nxt
+                self._changed()
+            self.message = "Breaking news ended"
+            return True
+
+    def up_next(self):
+        """Names for "Coming up next" CGs: {now, next, next_time, next_in} (next = the next clip / live card
+        that is not a commercial or filler)."""
+        with self._lock:
+            now = dt.datetime.now()
+            cur = self._item(self.on_air) if self.state in ("PLAYING", "PAUSED") else None
+            i = self._index(self.on_air) if cur else self._index(self.cued)
+            pos = self.item_ticks / float(self.fps) if cur else 0.0
+            t = now.timestamp()
+            if cur and cur.get("duration"):
+                t += max(0.0, cur["duration"] - pos)
+            elif cur:
+                t = None
+            nxt = None
+            start = (i + 1) if (cur and i is not None) else (i or 0)
+            for it in self.playlist[start:]:
+                if it.get("fixed"):
+                    try:
+                        t = dt.datetime.combine(now.date(), dt.time.fromisoformat(it["fixed"])).timestamp()
+                    except ValueError:
+                        pass
+                if it.get("category", "Commercial") not in ("Commercial", "Filler") or it.get("type") == "live":
+                    if not it.get("breaking"):
+                        nxt = it
+                        break
+                t = t + it["duration"] if (t is not None and it.get("duration")) else None
+            out = {"now": (cur or {}).get("name", "LIVE") if cur else "LIVE", "next": "", "next_time": "", "next_in": ""}
+            if nxt:
+                out["next"] = nxt.get("name", "")
+                if t is not None:
+                    out["next_time"] = dt.datetime.fromtimestamp(t).strftime("%H:%M")
+                    mins = max(0, int(round((t - now.timestamp()) / 60)))
+                    out["next_in"] = "now" if mins == 0 else f"{mins} min"
+            return out
 
     def _stop_to_live(self):
         if self.player:
@@ -1015,13 +1276,21 @@ class Engine:
         elif not self._fo_checked:
             self._failover(True, n)       # live not on air: nothing to cover
         self._main_wanted = source in ("LIVE", "FILLER")
+        slate = self.slate_on
+        if slate:
+            try:
+                video, audio = self._slate_frame(n)
+            except Exception as e:
+                video, audio = self.black, np.zeros((CHANNELS, n), np.float32)
+                self.message = f"Slate: {e}"
+            source = "SLATE"
         if isinstance(video, Uyvy) and nat is None:
             video = to_bgra(video, self.width, self.height)
         self.clean_frame = video          # program before CGs (squeeze preview)
         # the GPU engine (gpuengine.py) mixes the CGs itself: here only the list of what goes over the program
         layers = None
         led_src = video
-        if self.cg is not None:
+        if self.cg is not None and not slate:          # nothing over the emergency slate
             try:
                 if nat is not None or "led" in self.extra:
                     uy = video if isinstance(video, Uyvy) else None
@@ -1123,6 +1392,11 @@ class Engine:
             except Exception:
                 pass
         self._notify_air()
+        if self.proof is not None:
+            try:
+                self.proof.push(video, source)
+            except Exception:
+                pass
         if self.streamer is not None:
             self.streamer.push(video, audio)
         if self.audio_out is not None:
@@ -1217,6 +1491,8 @@ class Engine:
                 row = dict(it)
                 row["status"] = ""
                 row["played"] = it["id"] in self.played
+                row["expired"] = (it.get("type") == "clip" and it.get("category", "Commercial") == "Commercial"
+                                  and automation.is_expired(self.expiry, it.get("file")))
                 row["start"] = row["end"] = None
                 if i == on_idx:
                     row["status"] = "ON AIR"
@@ -1274,6 +1550,8 @@ class Engine:
                 "ndi_pacing": self.output.stats() if self.output is not None else None,
                 "ndi_extra": sorted(self.extra),
                 "ndi_key": dict(self.ndi_key),
+                "slate": dict(self.slate, on=self.slate_on),
+                "breaking": bool(self.breaking),
                 "fps": fps,
                 "width": self.width,
                 "height": self.height,

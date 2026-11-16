@@ -20,6 +20,7 @@ class Health:
         self.engine, self.streamer, self.recorder, self.sysmon = engine, streamer, recorder, sysmon
         self.alerts = alerts
         self.atem = None                # AtemLink (ATEM & Cameras)
+        self.guard = None               # OffAirGuard: black / frozen / silent program
         self.viewers = viewers          # fn() -> {"YouTube": 123, "Facebook": 45}
         self.out_fps = None
         self._k = None
@@ -105,6 +106,15 @@ class Health:
                          f"(Settings > Output format, e.g. 1080p 25) so sound and picture stay smooth")
             add("Program output", lvl, text)
         e = self.engine
+        g = self.guard
+        if g is not None and g.settings.get("enabled"):
+            st = g.status()
+            if getattr(e, "slate_on", False):
+                add("Program picture", "warn", "Emergency slate on air")
+            elif st["problems"]:
+                add("Program picture", "bad", st["text"] + " on air")
+            else:
+                add("Program picture", "ok", "Picture and sound OK (black / freeze / silence watched)")
         if getattr(e, "failover_active", False):
             add("Live input", "bad", "LOST - filler on air")
         elif e.live.connected and getattr(e.live, "is_device", False):
@@ -258,7 +268,7 @@ class Health:
         return {"level": level, "items": items, "time": time.time()}
 
     # these have their own alerts already
-    OWN_ALERTS = ("Live input", "Recording", "Disk")
+    OWN_ALERTS = ("Live input", "Recording", "Disk", "Program picture")
 
     def _alert(self, rep):
         bad = [f"{i['name']}: {i['text']}" for i in rep["items"] if i["level"] == "bad" and i["name"] not in self.OWN_ALERTS]

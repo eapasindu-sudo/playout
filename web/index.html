@@ -204,6 +204,11 @@
   .banner.show { display:flex; }
   #foWarn { background:var(--red); color:#fff; animation: blink 1s steps(2) infinite; }
   #upWarn { background:#10305e; color:#cfe2ff; font-weight:600; font-size:13px; }
+  #oaWarn { background:#7a1010; color:#fff; animation: blink 1s steps(2) infinite; }
+  #slWarn, #bnWarn { background:#b45309; color:#fff; }
+  #bBreak.on { background:var(--red); color:#fff; animation: blink 1s steps(2) infinite; }
+  #bSlate.on { background:#b45309; color:#fff; }
+  .autotbl input[type=time] { width:130px; }
   .fn button { white-space:normal; line-height:1.2; }
   .trim { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   .trim img { width:100%; aspect-ratio:16/9; background:#000; object-fit:contain; display:block; border:1px solid #333; }
@@ -288,6 +293,9 @@
         <button id="bSting" onclick="T('stinger')" title="Play the stinger and change to the next item at its cut point">Stinger &#9654;</button>
         <button id="bAutoSt" onclick="setStinger({auto: !STG.auto})" title="Use the stinger for every change between items">Auto Stinger</button>
         <button class="sm" onclick="openStinger()" title="Stinger setup">&#9881;</button>
+        <span style="width:10px"></span>
+        <button id="bBreak" onclick="breakingNews()" title="BREAKING NEWS: live on air now (with the stinger and the breaking CGs set in Auto &amp; Safety). Press again to go back to the playlist where it was">BREAKING</button>
+        <button id="bSlate" onclick="slateToggle()" title="Emergency slate: a 'we'll be right back' screen over everything, now. The clip on air is paused under it">SLATE</button>
         <span style="flex:1"></span>
         <button id="bLoop" onclick="setMode({loop: !S.loop})">Loop &#10227;</button>
         <button id="bAuto" onclick="setMode({auto: true})">Automatic</button>
@@ -296,6 +304,9 @@
       </div>
       <div class="fbwarn" id="fbWarn"></div>
       <div class="banner" id="bkWarn"></div>
+      <div class="banner" id="oaWarn">&#9888; <span id="oaText"></span><span style="flex:1"></span><button class="sm" onclick="T('next')">Next item</button><button class="sm" onclick="T('live')">Take live</button></div>
+      <div class="banner" id="slWarn">&#9888; EMERGENCY SLATE ON AIR<span style="flex:1"></span><button class="sm" onclick="slateToggle()">Take the slate off</button></div>
+      <div class="banner" id="bnWarn">BREAKING NEWS ON AIR<span style="flex:1"></span><button class="sm" onclick="breakingNews()">End breaking news</button></div>
       <div class="banner" id="foWarn">&#9888; LIVE INPUT LOST: filler on air (failover). It goes back to live by itself when the input returns.</div>
       <div class="banner" id="upWarn"><span id="upText"></span><span style="flex:1"></span><button class="sm" onclick="upAsk()">Update</button><button class="sm" onclick="upHide=UPD.latest; $('upWarn').classList.remove('show')">Later</button></div>
       <div class="msg" id="msg"></div>
@@ -308,6 +319,7 @@
         <span class="legend"><span><i style="background:var(--red)"></i>On air</span><span><i style="background:var(--green)"></i>Next</span><span><i style="background:var(--blue)"></i>Cued</span><span><i style="background:#a855f7"></i>Live card</span><span><i style="background:#555"></i>Played</span></span>
         <span style="flex:1"></span>
         <span class="lockable" style="display:flex; gap:6px">
+          <button class="sm" onclick="adCheck()" title="Commercials of the same client back to back, and commercials past their end date">Check ads</button>
           <button class="sm" onclick="openPM()">Save / Load</button>
           <button class="sm" onclick="clearPlaylist()">Clear</button>
         </span>
@@ -377,6 +389,7 @@
         <button class="lockable" onclick="openNdi()" title="NDI sources on the network, Playout's NDI outputs, key an NDI source over the program">NDI</button>
         <button onclick="openReport()" title="Commercials aired per client, as PDF / Excel">Ad Report</button>
         <button class="lockable adminonly" onclick="openSchedule()" title="Playlist for each day, scheduled recordings">Day Schedule</button>
+        <button class="lockable adminonly" onclick="openAuto()" title="Off-air alarm (black / frozen / silent), gap filler, daily inserts, breaking news, emergency slate, ad proof clips">Auto &amp; Safety</button>
         <button onclick="openHealth()" title="Stream, output, live input, recording, CPU and disk: what is OK and what needs a look">Health</button>
         <button onclick="openRemote()" title="Control Playout from a phone or tablet">Phone Remote</button>
         <button class="lockable adminonly" onclick="openBooking()" title="Spots booked per client against spots aired, invoices">Ad Booking</button>
@@ -688,6 +701,8 @@
       <span>Client</span><input id="edClient" list="clientList" placeholder="advertiser, for the ad report">
       <span>Fixed start</span><span style="display:flex; gap:6px"><input id="edFixed" type="time" step="1"><button class="sm" onclick="$('edFixed').value=''">Clear</button>
         <span class="hint" style="align-self:center">"Exact time": goes on air at that time even if something else is playing.</span></span>
+      <span>End date</span><span style="display:flex; gap:6px; align-items:center"><input id="edExp" type="date"><button class="sm" onclick="$('edExp').value=''">Clear</button>
+        <span class="hint">Commercial: after this day the clip is not played any more (campaign over), in every playlist. Empty = no end.</span></span>
       <span>Volume</span><span style="display:flex; gap:8px; align-items:center"><input class="num" id="edGain" type="number" step="0.5" min="-20" max="12"> dB <span class="hint" id="edLufs"></span></span>
       <span>Clip check</span><span class="hint" id="edCheck" style="white-space:pre-line"></span>
     </div>
@@ -803,6 +818,7 @@
   </div>
   <div class="foot">
     <span class="hint" style="margin-right:auto">Client name comes from Edit on each commercial (or the Client column of an imported Excel playlist).</span>
+    <button onclick="proofZip()" title="The proof clips (first seconds of each commercial as it aired, with date and time) for these days / this client, as a zip">Proof clips</button>
     <button onclick="repFile('csv')">CSV</button><button onclick="repFile('xlsx')">Excel</button><button class="blue" onclick="repFile('pdf')">PDF</button>
   </div>
 </dialog>
@@ -815,7 +831,9 @@
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
       <label><input type="checkbox" id="dlOn"> Load the day's playlist by itself at</label><input type="time" id="dlTime">
       <span class="hint" id="dlToday"></span><button class="sm" onclick="loadToday()">Load today's now</button>
+      <button class="sm" onclick="checkDay(1)" title="Are all the clips of tomorrow's playlist in the media folder, and not past their end date?">Check tomorrow</button>
     </div>
+    <div class="hint" id="dlCheck" style="margin-top:6px; white-space:pre-line"></div>
     <table class="tblin" style="margin-top:8px"><tr id="dlWeek"></tr></table>
     <div style="margin-top:8px"><b style="font-size:12px">Special dates</b> <span class="hint">(a date overrides the weekday)</span></div>
     <table class="tblin" id="dlDates"></table>
@@ -828,6 +846,65 @@
     <div class="hint" style="margin-top:6px">Records the program output with the quality chosen under Recording. No days ticked = every day. A date = that day only.</div>
   </div>
   <div class="foot"><button class="blue" onclick="saveSchedule()">Save</button></div>
+</dialog>
+
+
+<!-- On-air safety and automation -->
+<dialog id="dAuto" style="width:min(980px, 97vw)">
+  <header>Auto &amp; Safety <button class="sm" onclick="dAuto.close()">Close</button></header>
+  <div class="body">
+    <div class="setsec">Off-air alarm (black screen / frozen picture / no sound)</div>
+    <div class="form">
+      <span>Alarm</span><label><input type="checkbox" id="oaOn"> Watch the program that goes out and raise an alarm (screen, Health, air log, Telegram)</label>
+      <span>Black screen</span><span><input class="num" id="oaBlack" type="number" min="0" max="600" style="width:70px"> seconds (0 = off)</span>
+      <span>Frozen picture</span><span><input class="num" id="oaFreeze" type="number" min="0" max="600" style="width:70px"> seconds (0 = off)</span>
+      <span>No sound</span><span><input class="num" id="oaSil" type="number" min="0" max="600" style="width:70px"> seconds below
+        <select id="oaDb"><option value="-60">-60 dB</option><option value="-50">-50 dB</option><option value="-40">-40 dB</option></select> (0 = off)</span>
+      <span>Then</span><select id="oaAct"><option value="alert">Alarm only</option><option value="next">Alarm, and a clip that goes black / freezes / is silent is skipped (next item)</option></select>
+      <span></span><span class="hint">Colour bars, a paused clip, the failover filler and the slate are never an alarm. A clip that is a still picture on purpose (a slide with music) can look frozen: set Frozen picture to 0 or longer than such clips.</span>
+    </div>
+
+    <div class="setsec">Gap filler</div>
+    <div class="form">
+      <span>Filler</span><label><input type="checkbox" id="flOn"> Play filler clips (promos, station IDs) in the gaps</label>
+      <span>When</span><span><label><input type="checkbox" id="flFixed"> Before a fixed-start item (the playlist ran out early)</label><br>
+        <label><input type="checkbox" id="flEnd"> After the last item of the playlist (instead of live / bars)</label></span>
+      <span>Smallest gap</span><span><input class="num" id="flGap" type="number" min="1" max="600" style="width:70px"> seconds</span>
+      <span>Filler clips</span><div id="flFiles" style="max-height:150px; overflow:auto; border:1px solid var(--line); padding:6px; display:flex; flex-direction:column; gap:3px"></div>
+      <span></span><span class="hint">Before a fixed item a clip that fits the time left is chosen; the fixed item still cuts in at its second. Filler clips that played are taken out of the playlist again.</span>
+    </div>
+
+    <div class="setsec">Daily inserts (same clip at the same time every day)</div>
+    <table class="tblin autotbl" id="inT"></table>
+    <div style="display:flex; gap:6px; margin-top:6px; align-items:center"><button class="sm" onclick="addInsert()">+ Add insert</button>
+      <span class="hint">Two minutes before its time the clip goes into the playlist after the on-air item. Exact = it cuts in at that second (like Fixed start); otherwise it plays when the on-air item ends. No days ticked = every day.</span></div>
+
+    <div class="setsec">Breaking news button</div>
+    <div class="form">
+      <span>Live from</span><select id="bnSrc"></select>
+      <span>Card name</span><input id="bnName" placeholder="BREAKING NEWS">
+      <span>CGs IN with it</span><div id="bnCgs" class="days"></div>
+      <span>Options</span><span><label><input type="checkbox" id="bnSting"> Through the stinger (when one is set)</label>
+        <label><input type="checkbox" id="bnResume"> When it ends, the clip that was on air carries on where it stopped</label></span>
+      <span></span><span class="hint">Make a red "BREAKING NEWS" ticker / label in Manual CG (+ Text CG) and tick it here. Stream Deck: /trigger/breaking/toggle</span>
+    </div>
+
+    <div class="setsec">Emergency slate</div>
+    <div class="form">
+      <span>Text</span><input id="slText" class="sl" placeholder="We'll be right back">
+      <span>Second line</span><input id="slSub" class="sl" placeholder="Technical difficulties - please stay with us">
+      <span>Or a file</span><select id="slFile"></select>
+      <span></span><span class="hint">A picture or clip from the media folder (a clip loops) instead of the text. Nothing else (CGs, tickers) shows over the slate. Stream Deck: /trigger/slate/toggle</span>
+    </div>
+
+    <div class="setsec">Ad proof clips</div>
+    <div class="form">
+      <span>Proof clips</span><label><input type="checkbox" id="apOn"> Record the start of every commercial as it aired (small MP4 with date, time and client on it)</label>
+      <span>Length</span><select id="apSecs"><option value="5">5 seconds</option><option value="10">10 seconds</option><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="0">The whole commercial</option></select>
+      <span></span><span class="hint" id="apInfo">Download them in Ad Report &gt; Proof clips, for a client and dates, to send with the invoice.</span>
+    </div>
+  </div>
+  <div class="foot"><button class="blue" onclick="saveAuto()">Save</button></div>
 </dialog>
 
 <!-- NDI -->
@@ -1033,7 +1110,8 @@
       <span class="tc-cd">At zero</span><input class="tc-cd sl" id="tcEnd" placeholder="LIVE NOW (empty = goes off by itself)" oninput="tcLater()">
       <span class="tc-cd"></span><span class="tc-cd hint">Text: {t} is the time left, e.g. "Starting in {t}". It starts counting when it goes IN.</span>
       <span class="tc-tk">Label</span><input class="tc-tk sl" id="tcLabel" placeholder="NEWS / BREAKING (optional)" oninput="tcLater()">
-      <span class="tc-tk">Text file</span><input class="tc-tk" id="tcFile" placeholder="optional: C:\news\ticker.txt (read every 10 s)" oninput="tcLater()">
+      <span class="tc-tk">Text file / link</span><span class="tc-tk" style="display:flex; gap:6px"><input id="tcFile" style="flex:1" placeholder="optional: C:\news\ticker.txt, or a news RSS / Google Sheet link" oninput="tcLater()"><button class="sm" onclick="feedTest()">Test</button></span>
+      <span class="tc-tk"></span><span class="tc-tk hint" id="tcFeed">A link is read every minute: an RSS news feed (headlines), a Google Sheet (Share &gt; anyone with the link, or File &gt; Publish to web &gt; CSV: each row is one item, e.g. Gold 22K | Rs. 185,000), or a text page.</span>
       <span class="tc-tk">Speed</span><span class="tc-tk"><input class="num" id="tcSpeed" type="number" min="20" max="600" step="10"> pixels / second</span>
       <span class="tc-ck">Format</span><span class="tc-ck"><select id="tcFmt" onchange="tcRender()">
         <option value="%H:%M:%S">13:45:30</option><option value="%H:%M">13:45</option><option value="%I:%M %p">01:45 PM</option>
@@ -1048,7 +1126,8 @@
       <span>Position</span><span style="display:flex; gap:6px; align-items:center">X <input class="num" id="tcX" type="number" onchange="tcRender()" style="width:80px"> Y <input class="num" id="tcY" type="number" onchange="tcRender()" style="width:80px"></span>
       <span>Width</span><span><input class="num" id="tcW" type="number" min="0" onchange="tcRender()"> px (0 = auto / full width)</span>
       <span>Show</span><span><label><input type="checkbox" id="tcLive"> Only on live (hide during commercials)</label></span>
-      <span></span><span class="hint">Sinhala / Tamil: pick Iskoola Pota or Nirmala UI. Changing the text of a CG that is on air updates it at once.</span>
+      <span></span><span class="hint">Sinhala / Tamil: pick Iskoola Pota or Nirmala UI. Changing the text of a CG that is on air updates it at once.
+        Coming up next: write {next} (next programme, commercials skipped), {next_time} (its start, 20:30), {next_in} (5 min) or {now} in any text, e.g. "Next: {next} at {next_time}". It changes by itself with the playlist.</span>
     </div>
   </div>
   <div class="foot"><button id="tcDel" onclick="tcDelete()">Delete</button><span style="flex:1"></span><button class="blue" onclick="tcSave()">Save</button></div>
@@ -1149,11 +1228,12 @@ async function poll() {
   if (S.live_source !== shownSource) fillSources();
   showMaster();
   meters(S.meters);
-  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for, atem_input, loop}) => ({id, loop: !!loop, type, name, file, duration, fixed, source: source || '', atem_input: atem_input || 0, cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
+  if (S.version !== renderedVersion) { PL = S.playlist.map(({id, type, name, file, duration, fixed, source, cgs, client, gain_db, category, file_duration, in: tin, out: tout, squeeze, squeeze_at, squeeze_for, atem_input, loop, filler, insert, breaking, expired}) => ({id, loop: !!loop, filler, insert, breaking, expired: !!expired, type, name, file, duration, fixed, source: source || '', atem_input: atem_input || 0, cgs: cgs || [], squeeze: squeeze || '', squeeze_at: squeeze_at || 0, squeeze_for: squeeze_for || 0, client: client || '', category: category || 'Commercial', in: tin || 0, out: tout || 0, gain_db: gain_db || 0, file_duration})); renderPlaylist(); renderedVersion = S.version; }
   updateRows();
   $('foWarn').classList.toggle('show', !!S.failover?.active);
   if (S.failover?.active) { tally.textContent = 'FILLER'; tally.className = 'tally pause'; }
   if (S.locked !== locked) applyLock(S.locked);
+  showSafety();
   showNext();
 }
 function srcLabel(k) {
@@ -1208,7 +1288,7 @@ function renderPlaylist() {
           <span class="badge ${it.type === 'live' ? 'b-live' : 'b-clip'}" ${catColor(it)}>${it.type === 'live' ? 'LIVE' : catShort(it)}</span>
           <span class="name">${it.loop ? '&#10227; ' : ''}${esc(it.name)}</span>
         </div>
-        <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.squeeze ? ` <span class="badge" style="background:#15803d" title="Squeeze Feed: ${esc(it.squeeze)}">SQUEEZE</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}${it.type === 'clip' && CHECK[it.file] ? ` <span class="badge" style="background:#b45309; cursor:help" title="${esc(CHECK[it.file].join('\n'))}">&#9888; CHECK</span>` : ''}</div>
+        <div class="path">${it.type === 'clip' ? (it.client ? `<b style="color:#ddd">${esc(it.client)}</b> - ` : '') + 'media\\' + esc(it.file) : esc(srcLabel(it.source))}${it.cgs?.length ? ` <span class="badge b-cg">${it.cgs.length} CG</span>` : ''}${it.squeeze ? ` <span class="badge" style="background:#15803d" title="Squeeze Feed: ${esc(it.squeeze)}">SQUEEZE</span>` : ''}${it.in || it.out ? ` <span class="badge" style="background:#2563eb">TRIM ${clockShort(it.in)}-${it.out ? clockShort(it.out) : 'end'}</span>` : ''}${it.gain_db ? ` <span class="badge" style="background:#555">${it.gain_db > 0 ? '+' : ''}${it.gain_db} dB</span>` : ''}${it.expired ? ` <span class="badge" style="background:#7a1010" title="Its end date is past: it is skipped">ENDED</span>` : ''}${it.type === 'clip' && CHECK[it.file] ? ` <span class="badge" style="background:#b45309; cursor:help" title="${esc(CHECK[it.file].join('\n'))}">&#9888; CHECK</span>` : ''}</div>
         <div class="metrics">
           <div><div class="lbl">Duration</div><div class="v">${it.duration ? tc(it.duration).slice(0, 11) : 'until Next'}</div></div>
           <div><div class="lbl">Start</div><div class="v" data-f="start">--:--:--</div></div>
@@ -1273,6 +1353,8 @@ async function openEdit(id) {
   $('edFull').textContent = it.file_duration ? `- file is ${clockShort(it.file_duration)} long` : '';
   edCGs = JSON.parse(JSON.stringify(it.cgs || [])); renderItemCG(); trimPrev(); loadCGFiles(); fillSqSel('ed', it);
   fillClients();
+  $('edExp').value = '';
+  api('/api/clip_expiry').then(m => { if (editId === id) $('edExp').value = m[it.file] || ''; }).catch(() => {});
   $('edLufs').textContent = ''; $('edCheck').textContent = '';
   api('/api/media').then(list => { const m = list.find(x => x.name === it.file);
     $('edCheck').innerHTML = !m ? '' : m.check == null ? 'checking...' : m.check.length
@@ -1298,6 +1380,7 @@ function saveEdit() {
   it.category = $('edCat').value === '__new' ? (it.category || 'Commercial') : $('edCat').value || 'Commercial';
   it.in = parseClock($('edIn').value); it.out = parseClock($('edOut').value);
   it.cgs = edCGs; Object.assign(it, sqFields('ed'));
+  api('/api/clip_expiry', {file: it.file, date: $('edExp').value || ''}).catch(() => {});
   dEdit.close(); savePlaylist();
 }
 // Squeeze Feed attached to a playlist item
@@ -1684,6 +1767,129 @@ const repFile = kind => getFile(`/api/report.${kind}?` + repQuery());
 // ---------------------------------------------------------------- day schedule
 const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
 let SCH = null;
+// ---- auto & safety: off-air alarm, gap filler, daily inserts, breaking news, slate, ad proof
+let AUTO = null;
+async function openAuto() {
+  AUTO = await api('/api/automation');
+  await loadMedia(); await refreshSources();
+  const o = AUTO.offair;
+  $('oaOn').checked = o.enabled; $('oaBlack').value = o.black_secs; $('oaFreeze').value = o.freeze_secs; $('oaSil').value = o.silence_secs;
+  $('oaDb').value = String(o.silence_db); $('oaAct').value = o.action;
+  const f = AUTO.filler;
+  $('flOn').checked = f.enabled; $('flFixed').checked = f.before_fixed; $('flEnd').checked = f.at_end; $('flGap').value = f.min_gap;
+  $('flFiles').innerHTML = media.map(m => `<label><input type="checkbox" data-fl="${esc(m.name)}" ${f.files.includes(m.name) ? 'checked' : ''}> ${esc(m.name)}</label>`).join('') || '<span class="hint">No clips in the media folder</span>';
+  renderInserts();
+  const b = AUTO.breaking;
+  const srcs = [['', 'Main live input (' + (S.live_source ? srcLabel(S.live_source) : 'not set') + ')'], ...sourceList.map(n => ['ndi:' + n, 'NDI: ' + n]), ...devKeys().map(k => [k, srcLabel(k)])];
+  if (b.source && !srcs.some(x => x[0] === b.source)) srcs.push([b.source, srcLabel(b.source) + ' (offline)']);
+  $('bnSrc').innerHTML = srcs.map(([k, n]) => `<option value="${esc(k)}" ${k === b.source ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  $('bnName').value = b.name; $('bnSting').checked = b.stinger; $('bnResume').checked = b.resume;
+  const cgs = await api('/api/cg/manual').catch(() => ({list: []}));
+  $('bnCgs').innerHTML = (cgs.list || []).map(c => `<label><input type="checkbox" data-bn="${esc(c.id)}" ${b.cgs.includes(c.id) ? 'checked' : ''}> ${esc(c.name || c.file || c.style || c.id)}</label>`).join('<br>') || '<span class="hint">No manual CGs yet</span>';
+  const sl = AUTO.slate;
+  $('slText').value = sl.text || ''; $('slSub').value = sl.sub || '';
+  $('slFile').innerHTML = '<option value="">(none - the text above on a dark screen)</option>' + media.map(m => `<option ${m.name === sl.file ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  const ap = AUTO.ad_proof;
+  $('apOn').checked = ap.enabled; $('apSecs').value = String(ap.secs);
+  $('apInfo').textContent = 'Download them in Ad Report > Proof clips, for a client and dates, to send with the invoice.' + (ap.recorded ? ` ${ap.recorded} recorded since Playout started.` : '') + (ap.error ? ' Problem: ' + ap.error : '');
+  dAuto.showModal();
+}
+function renderInserts() {
+  const opts = pick => media.map(m => `<option ${m.name === pick ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  $('inT').innerHTML = '<tr><th>On</th><th>Time</th><th>Clip</th><th>Name</th><th>Type</th><th>Days</th><th>Exact</th><th></th></tr>' + AUTO.inserts.map((e, i) => `<tr data-i="${i}">
+    <td><input type="checkbox" data-k="enabled" ${e.enabled ? 'checked' : ''}></td><td><input type="time" step="1" data-k="time" value="${esc(e.time)}"></td>
+    <td><select data-k="file" style="max-width:220px">${opts(e.file)}</select></td><td><input data-k="name" value="${esc(e.name)}" style="width:120px"></td>
+    <td><select data-k="category">${[...new Set([...CATS, e.category || 'Program'])].map(c => `<option ${c === (e.category || 'Program') ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></td>
+    <td class="days">${DAYS.map(([k, n]) => `<label><input type="checkbox" data-d="${k}" ${(e.days || []).includes(k) ? 'checked' : ''}>${n}</label>`).join('')}</td>
+    <td><input type="checkbox" data-k="exact" ${e.exact ? 'checked' : ''}></td>
+    <td style="white-space:nowrap"><button class="sm" onclick="insertTest(${i})" title="Put it into the playlist now, after the on-air item">Test</button> <button class="sm" onclick="readInserts(); AUTO.inserts.splice(${i}, 1); renderInserts()">Remove</button></td></tr>`).join('');
+}
+function readInserts() {
+  document.querySelectorAll('#inT tr[data-i]').forEach(tr => {
+    const e = AUTO.inserts[+tr.dataset.i];
+    tr.querySelectorAll('[data-k]').forEach(el => e[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value);
+    e.days = [...tr.querySelectorAll('[data-d]')].filter(x => x.checked).map(x => x.dataset.d);
+  });
+}
+function addInsert() { readInserts(); AUTO.inserts.push({time:'19:00:00', file:media[0]?.name || '', name:'', category:'Program', days:[], exact:true, enabled:true}); renderInserts(); }
+async function insertTest(i) {
+  readInserts(); const e = AUTO.inserts[i];
+  if (!e.id) { say('Save first, then Test.'); return; }
+  const r = await api('/api/automation/insert_now', {id: e.id}).catch(() => ({ok:false}));
+  $('msg').textContent = r.ok ? 'Insert added after the on-air item' : 'Not added: ' + (r.error || 'it is in the playlist already');
+  poll();
+}
+async function saveAuto() {
+  readInserts();
+  if (AUTO.inserts.some(e => !e.time || !e.file)) { say('Each daily insert needs a time and a clip.'); return; }
+  const body = {
+    offair: {enabled:$('oaOn').checked, black_secs:+$('oaBlack').value, freeze_secs:+$('oaFreeze').value, silence_secs:+$('oaSil').value, silence_db:+$('oaDb').value, action:$('oaAct').value},
+    filler: {enabled:$('flOn').checked, before_fixed:$('flFixed').checked, at_end:$('flEnd').checked, min_gap:+$('flGap').value || 5,
+             files:[...document.querySelectorAll('[data-fl]')].filter(x => x.checked).map(x => x.dataset.fl)},
+    inserts: AUTO.inserts,
+    breaking: {source:$('bnSrc').value, name:$('bnName').value.trim(), stinger:$('bnSting').checked, resume:$('bnResume').checked,
+               cgs:[...document.querySelectorAll('[data-bn]')].filter(x => x.checked).map(x => x.dataset.bn)},
+    slate: {text:$('slText').value.trim(), sub:$('slSub').value.trim(), file:$('slFile').value},
+    ad_proof: {enabled:$('apOn').checked, secs:+$('apSecs').value},
+  };
+  if (body.filler.enabled && !body.filler.files.length) { say('Tick the filler clips to use.'); return; }
+  const r = await fetch('/api/automation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (!r.ok) { say(r.status === 403 ? 'Only an admin can change this.' : 'Not saved (error ' + r.status + ')'); return; }
+  AUTO = await r.json(); dAuto.close(); $('msg').textContent = 'Auto & Safety saved';
+}
+async function breakingNews() {
+  if (S.breaking) {
+    if (!await ask('End breaking news and go back to the playlist?', 'End breaking news', 'Cancel')) return;
+    await api('/api/breaking/off', {});
+  } else {
+    if (!await ask('BREAKING NEWS: go live now?', 'GO LIVE', 'Cancel')) return;
+    await api('/api/breaking/on', {});
+  }
+  poll();
+}
+async function slateToggle() {
+  const on = !!S.slate?.on;
+  if (!await ask(on ? 'Take the emergency slate off and go back to the program?' : 'Put the EMERGENCY SLATE on air now? (the clip on air is paused under it)', on ? 'Slate off' : 'SLATE ON AIR', 'Cancel')) return;
+  await api('/api/slate/' + (on ? 'off' : 'on'), {}); poll();
+}
+function showSafety() {
+  const oa = S.offair || {};
+  $('oaWarn').classList.toggle('show', !!(oa.problems && oa.problems.length));
+  txt('oaText', oa.text ? oa.text + ' ON AIR - check the program' : '');
+  $('slWarn').classList.toggle('show', !!S.slate?.on);
+  $('bnWarn').classList.toggle('show', !!S.breaking);
+  $('bBreak').classList.toggle('on', !!S.breaking);
+  $('bSlate').classList.toggle('on', !!S.slate?.on);
+  if (S.slate?.on) { $('tally').textContent = 'SLATE'; $('tally').className = 'tally pause'; }
+}
+async function adCheck() {
+  const r = await api('/api/playlist/ad_check');
+  const lines = r.conflicts.map(c => `#${c.index + 1} ${c.name} right after ${c.other} (${c.why})`);
+  const exp = r.expired.length ? '\n\nPast their end date (will be skipped): ' + r.expired.join(', ') : '';
+  if (!lines.length) { say('Ad order is OK: no client back to back.' + exp); return; }
+  if (!await ask('Same client back to back:\n' + lines.slice(0, 12).join('\n') + exp + '\n\nMove them apart inside each break? (on-air, played and fixed-time items stay where they are)', 'Fix the order', 'Leave it')) return;
+  const f = await api('/api/playlist/ad_fix', {}); await poll();
+  say(f.conflicts.length ? `Done. ${f.conflicts.length} could not be separated (a break with only that client, or a fixed item in it).` : 'Done: no client back to back now.');
+}
+async function checkDay(n) {
+  const d = new Date(); d.setDate(d.getDate() + n);
+  const r = await api('/api/schedule/check?day=' + isoDay(d));
+  const el = $('dlCheck');
+  if (!r.name) { el.textContent = `${r.day}: no playlist set for that day.`; el.style.color = 'var(--orange)'; return; }
+  const bad = r.missing.length || r.expired.length;
+  el.style.color = bad ? 'var(--orange)' : 'var(--green)';
+  el.textContent = `${r.day} (${r.name}): ${r.clips} clips. ` + (r.error ? 'Could not read it: ' + r.error :
+    !bad ? 'All clips are in the media folder.' : (r.missing.length ? `MISSING: ${r.missing.join(', ')}. ` : '') + (r.expired.length ? `Past their end date (skipped): ${r.expired.join(', ')}.` : ''));
+}
+const proofZip = () => getFile('/api/proof.zip?' + repQuery());
+async function feedTest() {
+  const url = $('tcFile').value.trim();
+  if (!/^https?:\/\//i.test(url)) { $('tcFeed').textContent = 'A .txt file is read from this PC every 10 s. For a link, paste one that starts with https://'; return; }
+  $('tcFeed').textContent = 'Reading the link...';
+  const r = await api('/api/feed/test', {url}).catch(e => ({error: String(e)}));
+  $('tcFeed').textContent = r.ok ? `OK, ${r.count} items: ` + r.items.slice(0, 5).join('  |  ') : 'Could not read it: ' + (r.error || 'error');
+  tcRender();
+}
 async function openSchedule() { SCH = await api('/api/schedule'); renderSchedule(); dSch.showModal(); }
 const plOpts = (cur, none = '(none)') => `<option value="">${none}</option>` + SCH.playlists.map(n => `<option ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('') +
   (cur && !SCH.playlists.includes(cur) ? `<option selected>${esc(cur)}</option>` : '');
